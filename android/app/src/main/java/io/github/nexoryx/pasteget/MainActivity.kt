@@ -455,6 +455,7 @@ private fun HomeScreen(
         lastReceived?.let { LastReceivedText(it) }
         AutoCopyCard(autoCopy, autoCopyActions)
         CodesCard(codes, codesActions)
+        SupportCard()
 
         if (computers.isNotEmpty()) {
             Text(stringResource(R.string.paired_computers), style = MaterialTheme.typography.titleSmall)
@@ -703,6 +704,27 @@ private fun LogLine(logs: LogStatus, actions: AutoCopyActions) {
     Text(stringResource(text), style = MaterialTheme.typography.bodySmall)
     if (logs == LogStatus.STARTING) {
         TextButton(onClick = actions.onRetryLogs) { Text(stringResource(R.string.logs_retry)) }
+    }
+}
+
+/** A link to donations, when the build has one (`donate_url`). */
+@Composable
+private fun SupportCard() {
+    val url = stringResource(R.string.donate_url)
+    if (url.isBlank()) return
+    val context = LocalContext.current
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.support_title), style = MaterialTheme.typography.bodyLarge)
+            Text(stringResource(R.string.support_text), style = MaterialTheme.typography.bodySmall)
+            OutlinedButton(onClick = {
+                try {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
+                } catch (e: ActivityNotFoundException) {
+                    // No browser: nothing to open it with.
+                }
+            }) { Text(stringResource(R.string.support_button)) }
+        }
     }
 }
 

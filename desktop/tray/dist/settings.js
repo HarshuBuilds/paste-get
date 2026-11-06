@@ -8,7 +8,11 @@ let notifyChoices = [];
 
 function invoke(command, args) {
   const tauri = window.__TAURI__;
-  if (!tauri) return Promise.reject("this page only works inside paste-get");
+  if (!tauri) {
+    return Promise.reject(
+      window.pastegetText("outsideApp", "this page only works inside paste-get"),
+    );
+  }
   return tauri.core.invoke(command, args);
 }
 
@@ -70,7 +74,13 @@ function captureHotkeys(input) {
     const hotkey = hotkeyOf(event);
     if (hotkey) input.value = hotkey;
     else if (!["Control", "Alt", "Shift", "Meta", "AltGraph"].includes(event.key)) {
-      say("Hotkeys use a letter, a digit or F1 to F24, with Ctrl, Alt or Super.", "bad");
+      say(
+        window.pastegetText(
+          "badKey",
+          "Hotkeys use a letter, a digit or F1 to F24, with Ctrl, Alt or Super.",
+        ),
+        "bad",
+      );
     }
   });
   // Typing is replaced by key capture; pasting a hotkey's text still works.
@@ -87,7 +97,7 @@ document.addEventListener("DOMContentLoaded", () => {
   $("settings").addEventListener("submit", async (event) => {
     event.preventDefault();
     $("save").disabled = true;
-    say("Saving…");
+    say(window.pastegetText("saving", "Saving…"));
     try {
       say(await invoke("save_settings", { form: read() }), "ok");
     } catch (error) {

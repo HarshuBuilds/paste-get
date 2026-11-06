@@ -81,6 +81,9 @@ android {
 
     lint {
         warningsAsErrors = true
+        // "A newer version is available" would fail every build the day a tool is released:
+        // Dependabot proposes the updates instead.
+        disable += setOf("AndroidGradlePluginVersion", "GradleDependency", "NewerVersionAvailable")
     }
 
     testOptions {

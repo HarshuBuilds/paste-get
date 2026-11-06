@@ -13,6 +13,7 @@ use pasteget_core::detect::Link;
 use tokio::sync::mpsc;
 
 use crate::config::NotifyFor;
+use crate::i18n::{french, tr};
 
 /// A clip that was just put on the clipboard.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,10 +28,15 @@ pub struct Received {
 impl Received {
     pub fn summary(&self) -> String {
         if let Some(app) = &self.code_from {
-            return format!("Code from {app} ({}) ✓", self.from);
+            return format!("{} {app} ({}) ✓", tr("Code from", "Code de"), self.from);
         }
-        let kind = if self.image { "Image" } else { "Text" };
-        format!("{kind} from {} ✓", self.from)
+        let kind = match (self.image, french()) {
+            (true, false) => "Image from",
+            (false, false) => "Text from",
+            (true, true) => "Image de",
+            (false, true) => "Texte de",
+        };
+        format!("{kind} {} ✓", self.from)
     }
 
     /// Whether `setting` asks for a notification about this clip. A one-time code always gets
@@ -62,7 +68,11 @@ pub trait Notifier: Send + Sync + fmt::Debug + 'static {
 
 /// "Link from POCO M8 5G: example.com". The host is plain text in the summary, never markup.
 pub fn link_summary(from: &str, link: &Link) -> String {
-    format!("Link from {from}: {}", link.host)
+    if french() {
+        format!("Lien de {from} : {}", link.host)
+    } else {
+        format!("Link from {from}: {}", link.host)
+    }
 }
 
 /// One notification to show.
@@ -90,9 +100,16 @@ const SHOWN_FOR_MS: i32 = 4000;
 #[cfg(all(unix, not(target_os = "macos")))]
 const LINK_SHOWN_FOR_MS: i32 = 8000;
 
-const BODY: &str = "Ready to paste.";
+fn body() -> &'static str {
+    tr("Ready to paste.", "Prêt à coller.")
+}
 const NOTICE_BODY: &str = "paste-get";
-const LINK_BODY: &str = "Copied. Click to open it in your browser.";
+fn link_body() -> &'static str {
+    tr(
+        "Copied. Click to open it in your browser.",
+        "Copié. Clique pour l'ouvrir dans ton navigateur.",
+    )
+}
 
 impl DesktopNotifier {
     /// Starts the notification task. Call from within the Tokio runtime.
@@ -120,7 +137,7 @@ impl DesktopNotifier {
 
 impl Notifier for DesktopNotifier {
     fn received(&self, received: Received) {
-        self.queue(received.summary(), BODY, None);
+        self.queue(received.summary(), body(), None);
     }
 
     fn notice(&self, summary: String) {
@@ -128,7 +145,7 @@ impl Notifier for DesktopNotifier {
     }
 
     fn link(&self, from: String, link: Link) {
-        self.queue(link_summary(&from, &link), LINK_BODY, Some(link.url));
+        self.queue(link_summary(&from, &link), link_body(), Some(link.url));
     }
 }
 
@@ -189,7 +206,12 @@ mod platform {
             let hints = HashMap::from([("transient", Variant::from(true))]);
             let (actions, timeout) = match shown.open {
                 Some(_) => (
-                    vec![DEFAULT_ACTION, "Open", OPEN_ACTION, "Open"],
+                    vec![
+                        DEFAULT_ACTION,
+                        crate::i18n::tr("Open", "Ouvrir"),
+                        OPEN_ACTION,
+                        crate::i18n::tr("Open", "Ouvrir"),
+                    ],
                     LINK_SHOWN_FOR_MS,
                 ),
                 None => (Vec::new(), SHOWN_FOR_MS),
@@ -387,7 +409,7 @@ mod platform {
                 .title(summary)
                 .text1(body)
                 .duration(Duration::Short)
-                .add_button("Open", "open")
+                .add_button(crate::i18n::tr("Open", "Ouvrir"), "open")
                 .on_activated(move |_| {
                     super::super::open_in_browser(&url);
                     Ok(())

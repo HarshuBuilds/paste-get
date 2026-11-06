@@ -1,75 +1,85 @@
 # paste-get
 
-> Screenshot on your phone, `Ctrl+V` on your PC.
+Copy on your phone, paste on your PC. No tap, no cloud.
 
-**paste-get** is an open-source bridge between your Android phone and your computer.
-Copy something or take a screenshot on the phone, and it's already on your PC's clipboard,
-with no button to press. Local-first, end-to-end encrypted, no account, no cloud.
+paste-get keeps the clipboard of your Android phone and your computer in sync over your own
+Wi-Fi. You copy a line on the phone, press `Ctrl+V` on the PC, and it's there. A screenshot
+taken on the phone is in the PC's clipboard less than a second later.
 
-> **Status: pre-alpha.** The protocol core, the desktop daemon and a first Android app work:
-> take a screenshot on the phone and it's on the PC clipboard, with a notification; share text or
-> an image and it lands there too. Text and images copied on the PC land on the phone clipboard,
-> and text copied on the phone goes to the PC by itself, through [Shizuku](https://shizuku.rikka.app/)
-> (with a fallback for when Shizuku isn't running). All of it still needs testing on real phones:
-> see [`docs/TESTING.md`](docs/TESTING.md). The name is a working title.
+It's in beta. It's used daily on a POCO M8 5G and a Samsung with Windows 11, and it runs on
+Linux (KDE Plasma, Hyprland). Bug reports are welcome.
 
-## Planned highlights
+## What it does
 
-- **Screenshot → PC clipboard** in under a second
-- **Text sync in both directions**, automatic on Android 10+ through [Shizuku](https://shizuku.rikka.app/)
-- **Images in both directions**, any size
-- **Skips sensitive copies** (passwords, card numbers)
-- **2FA codes** from phone notifications, pasteable on the PC
-- **OCR**: paste a screenshot as an image *or* as its text
-- **Windows, Linux (X11, KDE Plasma, Hyprland/wlroots) and macOS**
+- **Phone → PC, automatically.** Whatever you copy on the phone lands on the PC. No share
+  sheet, no app to open. Android 10+ blocks background clipboard access; paste-get gets around it
+  without root, through Android's own wireless debugging (or [Shizuku](https://shizuku.rikka.app/)
+  if you already use it).
+- **Screenshots.** Take one on the phone, paste it on the PC, full size.
+- **PC → phone.** Text and images copied on the PC go to the phone's clipboard.
+- **2FA codes.** A code that arrives by SMS or in an app's notification goes to the PC, ready to
+  paste. Only the code is sent, never the message. Off by default.
+- **Links.** Copy a link on the phone and the PC offers to open it.
+- **PC ↔ PC.** Two computers can be paired too (`pasteget join`).
 
-## Try the desktop side
+## Install
+
+Downloads are on the [Releases](https://github.com/Nexoryx-business/paste-get/releases) page.
+
+**Windows 10/11:** run `paste-get_<version>_x64-setup.exe`. Windows SmartScreen may warn that
+the app is unknown, since it isn't code-signed yet: *More info → Run anyway*. paste-get then
+lives in the notification area (under `^` in the taskbar).
+
+**Linux:**
+- AppImage: `chmod +x paste-get_<version>_amd64.AppImage` and run it.
+- Arch: the [`paste-get-git`](packaging/aur/paste-get-git/PKGBUILD) PKGBUILD builds it from source.
+- The tray icon needs a tray: KDE Plasma has one; on Hyprland, use a bar with a tray (Waybar's
+  `tray` module).
+
+**Android 10+:** install `paste-get_<version>_foss.apk`. If Google Play Protect blocks it, that's
+because the 2FA feature reads notifications: Play Store → your profile picture → Play Protect →
+⚙ → turn off *Scan apps with Play Protect*, install, then turn it back on.
+
+## Getting started
+
+1. Start paste-get on the PC. The first time, it shows a QR code.
+2. On the phone, tap **Pair a computer** and scan it. Both must be on the same Wi-Fi.
+3. To send copies automatically, turn on **Send what you copy**, then **Set up without
+   Shizuku** and follow the steps (it needs Developer options, once).
+4. Optional: **Send new screenshots**, **Send 2FA codes**.
+
+On the PC, the tray menu has **Settings…** for the computer's name, notifications and hotkeys.
+
+## Privacy
+
+There is no server and no account. Devices talk directly over the local network with TLS 1.3,
+each one pinned to the other's key at pairing. Clipboard contents are never logged. Clips marked
+sensitive (passwords, codes) stay out of clipboard history. Details and known limits are in
+[`SECURITY.md`](SECURITY.md).
+
+## Building from source
 
 ```sh
-cargo build --release
-./target/release/pasteget daemon        # keep it running
-./target/release/pasteget pair          # shows a pairing QR code
-./target/release/pasteget status
-./target/release/pasteget forget <name> # unpairs a device
-./target/release/pasteget-tray          # or: a tray icon that runs the daemon for you
+cargo build --release        # pasteget (daemon + CLI) and pasteget-tray
+cd android && ./gradlew assembleFossDebug
 ```
 
-On Linux, the tray needs WebKitGTK and libayatana-appindicator (see
-[`CONTRIBUTING.md`](CONTRIBUTING.md)). `pasteget --help` lists every command. [`docs/TESTING.md`](docs/TESTING.md) shows how to test
-with a second, in-memory daemon standing in for the phone.
+The tray needs WebKitGTK and libayatana-appindicator on Linux. [`CONTRIBUTING.md`](CONTRIBUTING.md)
+has the details, and [`docs/TESTING.md`](docs/TESTING.md) shows how to try everything with a
+second, in-memory daemon instead of a phone.
 
 ## Docs
 
-| Document | What's in it |
+| | |
 |---|---|
-| [`docs/AUDIT.md`](docs/AUDIT.md) | Technical audit: how every feature can be built, what's hard, what's impossible |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Milestones and step-by-step plan |
 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | Wire protocol: transport, pairing, messages |
-| [`docs/TESTING.md`](docs/TESTING.md) | Testing on real machines |
-| [`docs/RELEASING.md`](docs/RELEASING.md) | How packages are built and released |
-| [`docs/REVIEW.md`](docs/REVIEW.md) | Guide for the security review of the crypto and protocol code |
-| [`SECURITY.md`](SECURITY.md) | Threat model and how to report a vulnerability |
-| [`docs/devices/xiaomi-hyperos.md`](docs/devices/xiaomi-hyperos.md) | Phone setup for Xiaomi / POCO / Redmi (HyperOS) |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md) | How to build, test and contribute |
-| [`CLAUDE.md`](CLAUDE.md) | Rules for AI-assisted development in this repo |
-
-## Layout
-
-```
-paste-get/
-├─ core/            Rust: protocol, crypto, pairing, sessions (shared by every app)
-├─ proto/           Protobuf message definitions
-├─ desktop/         Rust daemon + `pasteget` CLI (Windows, Linux, macOS)
-│  └─ tray/         Tauri 2 tray app
-├─ ffi/             The phone API, exported to Kotlin with UniFFI
-├─ uniffi-bindgen/  Generates the Kotlin bindings
-├─ android/         Kotlin + Jetpack Compose app
-├─ packaging/       Package builds (Windows installer, AppImage)
-├─ fuzz/            Fuzz targets for every parser of untrusted input
-└─ docs/
-```
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | What's done and what's next |
+| [`docs/TESTING.md`](docs/TESTING.md) | Testing on real devices |
+| [`docs/RELEASING.md`](docs/RELEASING.md) | How the packages are built |
+| [`docs/AUDIT.md`](docs/AUDIT.md) | How each feature works, and what Android allows |
+| [`docs/REVIEW.md`](docs/REVIEW.md) | Security review guide |
+| [`docs/devices/xiaomi-hyperos.md`](docs/devices/xiaomi-hyperos.md) | Setup notes for Xiaomi / POCO / Redmi |
 
 ## License
 
-paste-get is free software, licensed under the
-[GNU General Public License v3.0 or later](LICENSE) (`GPL-3.0-or-later`).
+[GPL-3.0-or-later](LICENSE).

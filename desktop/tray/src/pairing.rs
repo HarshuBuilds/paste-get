@@ -102,7 +102,10 @@ pub async fn run<R: Runtime>(app: AppHandle<R>, endpoint: Endpoint) -> Result<()
     // `on_page_load` takes a `Fn`: the sender sits in a mutex to be taken once.
     let loaded_tx = std::sync::Mutex::new(Some(loaded_tx));
     let window = WebviewWindowBuilder::new(&app, WINDOW, WebviewUrl::App("pair.html".into()))
-        .title("Pair a phone · paste-get")
+        .title(pasteget_desktop::i18n::tr(
+            "Pair a phone · paste-get",
+            "Appairer un téléphone · paste-get",
+        ))
         .inner_size(400.0, 540.0)
         .resizable(false)
         .center()

@@ -141,7 +141,7 @@ pub fn size(len: usize) -> String {
 /// How long ago, roughly: "just now", "5 min", "2 h".
 pub fn ago(secs: u64) -> String {
     match secs {
-        0..60 => "just now".into(),
+        0..60 => crate::i18n::tr("just now", "à l'instant").into(),
         60..3600 => format!("{} min", secs / 60),
         _ => format!("{} h", secs / 3600),
     }

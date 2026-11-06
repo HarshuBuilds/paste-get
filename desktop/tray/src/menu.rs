@@ -4,6 +4,7 @@
 //! turns [`Entry`]s into Tauri menu items and menu clicks back into [`Command`]s.
 
 use pasteget_desktop::control::{DeviceStatusReply, RecentReply, StatusReply};
+use pasteget_desktop::i18n::{french, tr};
 use pasteget_desktop::recent;
 
 pub const PAIR: &str = "pair";
@@ -34,18 +35,22 @@ impl State {
     /// One line, for the tray icon's tooltip.
     pub fn summary(&self) -> String {
         match self {
-            Self::Starting => "Starting…".into(),
-            Self::Down(_) => "Not running".into(),
+            Self::Starting => tr("Starting…", "Démarrage…").into(),
+            Self::Down(_) => tr("Not running", "Arrêté").into(),
             Self::Running { status, .. } => {
                 let connected = status.devices.iter().filter(|d| d.connected).count();
                 if status.paused {
-                    "Paused".into()
+                    tr("Paused", "En pause").into()
                 } else if connected == 1 {
-                    "Syncing with 1 device".into()
+                    tr("Syncing with 1 device", "Synchro avec 1 appareil").into()
                 } else if connected > 1 {
-                    format!("Syncing with {connected} devices")
+                    if french() {
+                        format!("Synchro avec {connected} appareils")
+                    } else {
+                        format!("Syncing with {connected} devices")
+                    }
                 } else {
-                    "No device connected".into()
+                    tr("No device connected", "Aucun appareil connecté").into()
                 }
             }
         }
@@ -112,18 +117,18 @@ pub fn entries(state: &State, start_at_login: Option<bool>) -> Vec<Entry> {
     entries.push(Entry::Separator);
     entries.push(Entry::Action {
         id: SETTINGS.into(),
-        label: "Settings…".into(),
+        label: tr("Settings…", "Réglages…").into(),
     });
     if let Some(checked) = start_at_login {
         entries.push(Entry::Check {
             id: START_AT_LOGIN.into(),
-            label: "Start at login".into(),
+            label: tr("Start at login", "Lancer à l'ouverture de session").into(),
             checked,
         });
     }
     entries.push(Entry::Action {
         id: QUIT.into(),
-        label: "Quit".into(),
+        label: tr("Quit", "Quitter").into(),
     });
     entries
 }
@@ -142,27 +147,29 @@ fn daemon_entries(state: &State) -> Vec<Entry> {
                 Entry::Separator,
             ];
             if status.devices.is_empty() {
-                entries.push(Entry::Info("No paired device yet".into()));
+                entries.push(Entry::Info(
+                    tr("No paired device yet", "Aucun appareil appairé").into(),
+                ));
             } else {
-                entries.push(Entry::Info("Devices".into()));
+                entries.push(Entry::Info(tr("Devices", "Appareils").into()));
                 entries.extend(status.devices.iter().map(device_entry));
             }
             entries.push(Entry::Action {
                 id: PAIR.into(),
-                label: "Pair a phone…".into(),
+                label: tr("Pair a phone…", "Appairer un téléphone…").into(),
             });
             entries.push(Entry::Separator);
             entries.push(Entry::Submenu {
-                label: "Recent".into(),
+                label: tr("Recent", "Récents").into(),
                 entries: if recent.is_empty() {
-                    vec![Entry::Info("Nothing yet".into())]
+                    vec![Entry::Info(tr("Nothing yet", "Rien pour l'instant").into())]
                 } else {
                     recent.iter().map(recent_entry).collect()
                 },
             });
             entries.push(Entry::Check {
                 id: PAUSE.into(),
-                label: "Pause syncing".into(),
+                label: tr("Pause syncing", "Mettre en pause").into(),
                 checked: status.paused,
             });
             entries
@@ -178,15 +185,15 @@ fn device_entry(device: &DeviceStatusReply) -> Entry {
         entries: vec![
             Entry::Info(
                 if device.connected {
-                    "Connected"
+                    tr("Connected", "Connecté")
                 } else {
-                    "Not connected"
+                    tr("Not connected", "Non connecté")
                 }
                 .into(),
             ),
             Entry::Action {
                 id: format!("{FORGET_PREFIX}{}", device.id),
-                label: "Forget this device".into(),
+                label: tr("Forget this device", "Oublier cet appareil").into(),
             },
         ],
     }
@@ -194,7 +201,10 @@ fn device_entry(device: &DeviceStatusReply) -> Entry {
 
 /// "Text: hello world · POCO M8, 2 min". Clicking it copies the clip again.
 fn recent_entry(clip: &RecentReply) -> Entry {
-    let from = clip.from.as_deref().unwrap_or("this computer");
+    let from = clip
+        .from
+        .as_deref()
+        .unwrap_or(tr("this computer", "cet ordinateur"));
     Entry::Action {
         id: format!("{RECENT_PREFIX}{}", clip.id),
         label: format!(
@@ -217,6 +227,7 @@ mod tests {
     use super::*;
 
     fn status(paused: bool, devices: &[(&str, bool)]) -> StatusReply {
+        pasteget_desktop::i18n::force(pasteget_desktop::i18n::Lang::En);
         StatusReply {
             device_id: "ID".into(),
             device_name: "Desk & Co (Linux)".into(),
@@ -321,6 +332,7 @@ mod tests {
 
     #[test]
     fn a_stopped_daemon_still_offers_quit() {
+        pasteget_desktop::i18n::force(pasteget_desktop::i18n::Lang::En);
         let state = State::Down("could not listen on 0.0.0.0:47290: address in use".into());
 
         let entries = entries(&state, Some(false));

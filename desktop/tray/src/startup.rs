@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use pasteget_desktop::config::{DEFAULT_PROFILE, Profile};
+use pasteget_desktop::i18n::tr;
 use pasteget_desktop::notify::{DesktopNotifier, Notifier};
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
@@ -18,10 +19,16 @@ use tracing_subscriber::fmt::writer::MakeWriterExt;
 const MAX_LOG_BYTES: u64 = 1024 * 1024;
 
 /// Where the tray's icon is, for the notices.
-#[cfg(windows)]
-const ICON_PLACE: &str = "in the notification area, under ^ in the taskbar";
-#[cfg(not(windows))]
-const ICON_PLACE: &str = "in the system tray";
+fn icon_place() -> &'static str {
+    if cfg!(windows) {
+        tr(
+            "in the notification area, under ^ in the taskbar",
+            "dans la zone de notification, sous ^ dans la barre des tâches",
+        )
+    } else {
+        tr("in the system tray", "dans la zone de notification")
+    }
+}
 
 /// Logs to stderr and to a file, which it returns. Never clipboard contents: nothing logs them.
 pub fn init_logs(profile: &str) -> Option<PathBuf> {
@@ -83,11 +90,25 @@ pub fn lock_profile(profile: &Profile) -> Result<Option<File>> {
 }
 
 pub fn already_running_notice() -> String {
-    format!("paste-get is already running: its icon is {ICON_PLACE}")
+    format!(
+        "{} {}",
+        tr(
+            "paste-get is already running: its icon is",
+            "paste-get tourne déjà : son icône est"
+        ),
+        icon_place()
+    )
 }
 
 pub fn running_notice() -> String {
-    format!("paste-get is running: its icon is {ICON_PLACE}")
+    format!(
+        "{} {}",
+        tr(
+            "paste-get is running: its icon is",
+            "paste-get tourne : son icône est"
+        ),
+        icon_place()
+    )
 }
 
 /// For the second tray, which has no daemon of its own: shows `summary`, then waits for the
@@ -102,9 +123,19 @@ pub fn notify_once(summary: String) {
 
 /// The tray couldn't start: say so where the user sees it, not only in the log.
 pub fn show_fatal(error: &str, log: Option<&Path>) {
-    let mut text = format!("paste-get could not start.\n\n{error}");
+    let mut text = format!(
+        "{}\n\n{error}",
+        tr(
+            "paste-get could not start.",
+            "paste-get n'a pas pu démarrer."
+        )
+    );
     if let Some(log) = log {
-        text.push_str(&format!("\n\nDetails: {}", log.display()));
+        text.push_str(&format!(
+            "\n\n{} {}",
+            tr("Details:", "Détails :"),
+            log.display()
+        ));
     }
     #[cfg(windows)]
     message_box(&text);

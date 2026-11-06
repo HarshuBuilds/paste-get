@@ -9,6 +9,7 @@
 use anyhow::{Context, Result};
 use pasteget_desktop::config::{MAX_DEVICE_NAME_CHARS, NotifyFor, Settings};
 use pasteget_desktop::hotkeys::{Hotkey, HotkeySettings};
+use pasteget_desktop::i18n::{french, tr};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindowBuilder};
 
@@ -44,17 +45,33 @@ impl Form {
     pub fn apply(&self, current: &Settings) -> Result<Settings, String> {
         let device_name = self.device_name.trim();
         if device_name.is_empty() {
-            return Err("Give this computer a name: it is shown on your phone.".into());
+            return Err(tr(
+                "Give this computer a name: it is shown on your phone.",
+                "Donne un nom à cet ordinateur : il s'affiche sur ton téléphone.",
+            )
+            .into());
         }
         if device_name.chars().count() > MAX_DEVICE_NAME_CHARS {
-            return Err(format!(
-                "The name is too long: {MAX_DEVICE_NAME_CHARS} characters at most."
-            ));
+            return Err(if french() {
+                format!("Le nom est trop long : {MAX_DEVICE_NAME_CHARS} caractères maximum.")
+            } else {
+                format!("The name is too long: {MAX_DEVICE_NAME_CHARS} characters at most.")
+            });
         }
-        let toggle_pause = hotkey("Pause or resume syncing", &self.toggle_pause)?;
-        let send_clipboard = hotkey("Send the clipboard now", &self.send_clipboard)?;
+        let toggle_pause = hotkey(
+            tr("Pause or resume syncing", "Mettre en pause ou reprendre"),
+            &self.toggle_pause,
+        )?;
+        let send_clipboard = hotkey(
+            tr("Send the clipboard now", "Envoyer le presse-papiers"),
+            &self.send_clipboard,
+        )?;
         if toggle_pause.is_some() && toggle_pause == send_clipboard {
-            return Err("Both actions have the same hotkey: give each its own.".into());
+            return Err(tr(
+                "Both actions have the same hotkey: give each its own.",
+                "Les deux actions ont le même raccourci : donne-leur chacune le sien.",
+            )
+            .into());
         }
         let text = |hotkey: Option<Hotkey>| hotkey.map(|h| h.to_string()).unwrap_or_default();
         Ok(Settings {
@@ -76,19 +93,27 @@ fn hotkey(action: &str, text: &str) -> Result<Option<Hotkey>, String> {
     if text.is_empty() {
         return Ok(None);
     }
-    text.parse()
-        .map(Some)
-        .map_err(|e| format!("“{action}”: {text} can't be a hotkey ({e})."))
+    text.parse().map(Some).map_err(|e| {
+        if french() {
+            format!("« {action} » : {text} ne peut pas être un raccourci ({e}).")
+        } else {
+            format!("“{action}”: {text} can't be a hotkey ({e}).")
+        }
+    })
 }
 
 /// What to tell the user once the form is saved.
 pub fn saved_message(restart_needed: bool, hosting: bool) -> &'static str {
     match (restart_needed, hosting) {
-        (false, _) => "Saved.",
-        (true, true) => "Saved. paste-get restarted to use the new name or hotkeys.",
-        (true, false) => {
-            "Saved. Restart `pasteget daemon` to use the new name or hotkeys: it runs on its own."
-        }
+        (false, _) => tr("Saved.", "Enregistré."),
+        (true, true) => tr(
+            "Saved. paste-get restarted to use the new name or hotkeys.",
+            "Enregistré. paste-get a redémarré pour utiliser le nouveau nom ou les raccourcis.",
+        ),
+        (true, false) => tr(
+            "Saved. Restart `pasteget daemon` to use the new name or hotkeys: it runs on its own.",
+            "Enregistré. Relance `pasteget daemon` pour utiliser le nouveau nom ou les raccourcis : il tourne à part.",
+        ),
     }
 }
 
@@ -100,7 +125,7 @@ pub fn open<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
         return Ok(());
     }
     WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("settings.html".into()))
-        .title("Settings · paste-get")
+        .title(tr("Settings · paste-get", "Réglages · paste-get"))
         .inner_size(460.0, 780.0)
         .min_inner_size(380.0, 480.0)
         .center()
@@ -115,6 +140,7 @@ mod tests {
     use super::*;
 
     fn current() -> Settings {
+        pasteget_desktop::i18n::force(pasteget_desktop::i18n::Lang::En);
         Settings {
             device_name: "HP-AIO (Windows)".into(),
             port: 47_290,
@@ -181,6 +207,7 @@ mod tests {
 
     #[test]
     fn the_message_says_whether_a_restart_happened() {
+        pasteget_desktop::i18n::force(pasteget_desktop::i18n::Lang::En);
         assert_eq!(saved_message(false, true), "Saved.");
         assert!(saved_message(true, true).contains("restarted"));
         assert!(saved_message(true, false).contains("pasteget daemon"));

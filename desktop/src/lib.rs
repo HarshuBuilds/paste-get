@@ -10,5 +10,6 @@ pub mod control;
 pub mod daemon;
 pub mod discovery;
 pub mod hotkeys;
+pub mod i18n;
 pub mod notify;
 pub mod recent;

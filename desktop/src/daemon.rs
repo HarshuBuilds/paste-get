@@ -35,6 +35,7 @@ use crate::clipboard::{ClipboardBackend, ClipboardWatcher, Content, DEFAULT_POLL
 use crate::config::{KnownDevice, KnownDevices, NotifyFor, Profile, Settings};
 use crate::discovery::Advertiser;
 use crate::hotkeys::{self, Action, Hotkeys};
+use crate::i18n::{french, tr};
 use crate::notify::{Notifier, Received};
 use crate::recent::{RecentClip, RecentClips};
 
@@ -479,18 +480,23 @@ impl Shared {
         let summary = match action {
             Action::TogglePause => {
                 if self.set_paused(!self.paused.load(Ordering::Relaxed)) {
-                    "Syncing paused".to_owned()
+                    tr("Syncing paused", "Synchro en pause").to_owned()
                 } else {
-                    "Syncing resumed".to_owned()
+                    tr("Syncing resumed", "Synchro reprise").to_owned()
                 }
             }
             Action::SendClipboard => match self.send_clipboard().await {
-                Ok(0) => "No device is connected".to_owned(),
-                Ok(1) => "Clipboard sent to 1 device".to_owned(),
+                Ok(0) => tr("No device is connected", "Aucun appareil connecté").to_owned(),
+                Ok(1) => tr(
+                    "Clipboard sent to 1 device",
+                    "Presse-papiers envoyé à 1 appareil",
+                )
+                .to_owned(),
+                Ok(n) if french() => format!("Presse-papiers envoyé à {n} appareils"),
                 Ok(n) => format!("Clipboard sent to {n} devices"),
                 Err(e) => {
                     tracing::info!(error = %e, "clipboard not sent");
-                    "Nothing to send".to_owned()
+                    tr("Nothing to send", "Rien à envoyer").to_owned()
                 }
             },
         };
@@ -554,7 +560,11 @@ impl SessionEvents for Shared {
         if let Some(device) = removed {
             tracing::info!(device = %device.name, id = %device.id, "unpaired by the device");
             if let Some(notifier) = &self.notifier {
-                notifier.notice(format!("{} unpaired this computer", device.name));
+                notifier.notice(if french() {
+                    format!("{} a désappairé cet ordinateur", device.name)
+                } else {
+                    format!("{} unpaired this computer", device.name)
+                });
             }
         }
     }

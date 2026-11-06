@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">paste-get</string>
+    <string name="app_name" translatable="false">paste-get</string>
     <string name="share_label">Send to PC</string>
     <string name="tile_label">Send clipboard</string>
     <string name="notification_channel">Connection</string>
@@ -120,6 +120,11 @@
     <string name="unpaired_channel">Unpaired by a computer</string>
     <string name="unpaired_title">%s unpaired this phone</string>
     <string name="unpaired_text">It no longer receives your copies. To use it again, pair again from paste-get.</string>
+    <string name="support_title">Support the project</string>
+    <string name="support_text">paste-get is free, with no ads and no data collection. If it helps you, a small donation keeps it going.</string>
+    <string name="support_button">Donate</string>
+    <!-- Where the Donate buttons lead. Empty hides them. -->
+    <string name="donate_url" translatable="false"></string>
     <string name="copies_channel">Sending copies</string>
     <string name="copies_paused_title">Copies are not sent</string>
     <string name="copies_paused_text">Open paste-get to send what you copy again</string>

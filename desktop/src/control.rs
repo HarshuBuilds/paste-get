@@ -130,7 +130,7 @@ impl RecentReply {
     /// "Text: hello world" or "Image (PNG, 1.2 MB)".
     pub fn describe(&self) -> String {
         match &self.preview {
-            Some(preview) => format!("Text: {preview}"),
+            Some(preview) => format!("{} {preview}", crate::i18n::tr("Text:", "Texte :")),
             None => {
                 let kind = self
                     .mime_type
