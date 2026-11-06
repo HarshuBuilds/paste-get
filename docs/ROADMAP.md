@@ -129,6 +129,8 @@ History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart ac
   and sends only the code, as a secret, to the PC clipboard (`ClipKind.ONE_TIME_CODE` in the
   protocol). Notification access and Android 15's hidden codes are granted in one tap through
   the built-in mode or Shizuku (`TESTING.md`, section 14)
+- [x] A copy made while a paired device is away waits for it and is sent when it connects
+  again: the last one only, in memory, never a sensitive clip (`TESTING.md`, section 15)
 Desktop identity key in the OS keystore when one is available (M2 stores it in a user-only file,
 like SSH keys, because Hyprland setups often run no Secret Service).
 

@@ -148,6 +148,11 @@ impl Daemon {
         let clipboard = ClipboardWatcher::spawn(backend, options.poll_interval, changes_tx)?;
         let (events, _) = broadcast::channel(16);
 
+        // What's copied while a device is away waits for it.
+        let peers = Peers::new();
+        for device in known.iter() {
+            peers.expect(device.id);
+        }
         let shared = Arc::new(Shared {
             guard: Mutex::new(EchoGuard::new(identity.device_id())),
             identity,
@@ -157,7 +162,7 @@ impl Daemon {
             advertised_ips: options.advertised_ips,
             known: Mutex::new(known),
             pairing: AsyncMutex::new(None),
-            peers: Peers::new(),
+            peers,
             clipboard,
             notifier: options.notifier,
             notify_for: Mutex::new(settings.notify),
@@ -305,6 +310,7 @@ impl Daemon {
         if let Some(dialer) = lock(&self.shared.dialers).remove(id) {
             dialer.abort();
         }
+        self.shared.peers.unexpect(id);
         self.shared.peers.disconnect(id);
         tracing::info!(device = %device.name, id = %device.id, "unpaired");
         Ok(device)
@@ -521,6 +527,7 @@ impl Shared {
     }
 
     fn remember(&self, device: KnownDevice) -> Result<()> {
+        self.peers.expect(device.id);
         let mut known = lock(&self.known);
         known.insert(device);
         self.profile.save_known_devices(&known)
@@ -557,6 +564,7 @@ impl SessionEvents for Shared {
             removed
         };
         lock(&self.dialers).remove(&peer);
+        self.peers.unexpect(&peer);
         if let Some(device) = removed {
             tracing::info!(device = %device.name, id = %device.id, "unpaired by the device");
             if let Some(notifier) = &self.notifier {

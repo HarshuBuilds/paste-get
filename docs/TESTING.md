@@ -458,12 +458,28 @@ Android 15 keeps hiding the codes.
 If a code isn't found, report the shape of the message (with the digits changed) so the detector
 can learn it.
 
+## 15. Copies made while a device is off (v0.2)
+
+A copy made while the other side is off or out of range waits, and arrives as soon as it
+connects again. Only the last one waits (text or image), in memory only. Passwords and 2FA codes
+never wait: a code would be stale by then.
+
+| # | Do this | Expected |
+|---|---|---|
+| Q1 | Quit paste-get on the PC (tray → *Quit*). On the phone, copy a line | The phone says it went to 0 computers |
+| Q2 | Start paste-get on the PC again | Within a few seconds the line is in the PC's clipboard; the log says "sending the clip it missed" |
+| Q3 | PC off, copy two lines on the phone one after the other, start the PC | Only the second one arrives |
+| Q4 | Phone's Wi-Fi off, copy something on the PC, turn Wi-Fi back on | The copy is in the phone's clipboard once it reconnects |
+| Q5 | PC off, copy a password from a password manager on the phone (or get a 2FA code), start the PC | Nothing arrives |
+| Q6 | PC off, copy on the phone, force-stop paste-get on the phone, start both | Nothing arrives: the copy was only in memory |
+
 ## Known limitations
 
 - If the PC changes address while the phone is connected, the phone notices only when the old
   connection times out (up to 90 s), then finds it again by mDNS. Phones that can't receive
   mDNS (some guest or office networks block it) still need a new pairing.
-- Screenshots taken while the phone has no connection to a computer are not sent later.
+- Only the last copy made while a device is away waits for it, in memory: it's lost if the
+  sending side restarts first. Passwords and 2FA codes never wait.
 - The phone shows nothing of its own when a clip from the PC arrives (Android 13 and later may
   show their clipboard preview); its home screen says what came last.
 - Only text copied on the phone is sent automatically, not images or files: share those.

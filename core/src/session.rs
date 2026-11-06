@@ -94,6 +94,9 @@ pub struct Delivery {
 #[derive(Debug, Default)]
 pub struct Peers {
     queues: Mutex<HashMap<DeviceId, PeerQueue>>,
+    /// The paired devices, connected or not ([`Peers::expect`]), and the last clip each one
+    /// missed while it was away.
+    waiting: Mutex<HashMap<DeviceId, Option<Clip>>>,
     next_session: AtomicU64,
 }
 
@@ -127,9 +130,30 @@ impl Peers {
         Self::default()
     }
 
+    /// A paired device: when it isn't connected, the last clip it misses waits for it (in memory
+    /// only) and is sent when it comes back. Call it for every paired device, and after pairing.
+    pub fn expect(&self, peer: DeviceId) {
+        lock(&self.waiting).entry(peer).or_insert(None);
+    }
+
+    /// The device was unpaired: nothing waits for it any more.
+    pub fn unexpect(&self, peer: &DeviceId) {
+        lock(&self.waiting).remove(peer);
+    }
+
     /// Queues `clip` for every connected device except `except`. Returns how many.
+    ///
+    /// Paired devices that aren't connected get it when they come back, if it's still the last
+    /// clip by then. Secrets don't wait: a password or a code shouldn't turn up hours later.
     pub fn broadcast(&self, clip: &Clip, except: Option<DeviceId>) -> usize {
         let queues = self.lock();
+        if !clip.sensitive {
+            for (id, missed) in lock(&self.waiting).iter_mut() {
+                if !queues.contains_key(id) && Some(*id) != except && *id != clip.origin {
+                    *missed = Some(clip.clone());
+                }
+            }
+        }
         let mut queued = 0;
         for (id, queue) in queues.iter() {
             if Some(*id) == except {
@@ -171,6 +195,15 @@ impl Peers {
     fn register(&self, peer: DeviceId, sender: mpsc::Sender<Outgoing>) -> (u64, Arc<Notify>) {
         let session = self.next_session.fetch_add(1, Ordering::Relaxed);
         let kick = Arc::new(Notify::new());
+        // What it missed while away goes first.
+        let missed = lock(&self.waiting).get_mut(&peer).and_then(Option::take);
+        if let Some(clip) = missed {
+            tracing::info!(%peer, mime_type = %clip.mime_type, len = clip.data.len(), "sending the clip it missed");
+            let _ = sender.try_send(Outgoing::Clip {
+                clip,
+                queued_at: Instant::now(),
+            });
+        }
         // A newer session replaces an older one that hasn't noticed it's dead yet.
         self.lock().insert(
             peer,
@@ -779,6 +812,54 @@ mod tests {
         assert_eq!(peers.broadcast(&clip, None), 1);
         // The queue holds one clip: a slow device skips the next one instead of blocking.
         assert_eq!(peers.broadcast(&clip, None), 0);
+    }
+
+    #[tokio::test]
+    async fn the_last_clip_waits_for_a_paired_device_that_is_away() {
+        let peers = Peers::new();
+        let origin = Identity::generate().unwrap().device_id();
+        let (pc, stranger) = (
+            Identity::generate().unwrap().device_id(),
+            Identity::generate().unwrap().device_id(),
+        );
+        peers.expect(pc);
+
+        // While the PC is off: only the last copy waits, secrets don't.
+        assert_eq!(peers.broadcast(&Clip::text("first", origin), None), 0);
+        assert_eq!(peers.broadcast(&Clip::text("last", origin), None), 0);
+        let mut secret = Clip::text("hunter2", origin);
+        secret.sensitive = true;
+        peers.broadcast(&secret, None);
+
+        let (sender, mut received) = mpsc::channel(4);
+        peers.register(pc, sender);
+        let Some(Outgoing::Clip { clip, .. }) = received.try_recv().ok() else {
+            panic!("the waiting clip was not sent");
+        };
+        assert_eq!(clip.data, b"last");
+        assert!(received.try_recv().is_err());
+
+        // Sent once; a device that isn't paired gets nothing.
+        let (again, mut nothing) = mpsc::channel(4);
+        peers.register(pc, again);
+        assert!(nothing.try_recv().is_err());
+        let (other, mut none) = mpsc::channel(4);
+        peers.register(stranger, other);
+        assert!(none.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn an_unpaired_device_stops_waiting() {
+        let peers = Peers::new();
+        let origin = Identity::generate().unwrap().device_id();
+        let pc = Identity::generate().unwrap().device_id();
+        peers.expect(pc);
+        peers.unexpect(&pc);
+        peers.broadcast(&Clip::text("later", origin), None);
+
+        let (sender, mut received) = mpsc::channel(4);
+        peers.register(pc, sender);
+        assert!(received.try_recv().is_err());
     }
 
     #[tokio::test]

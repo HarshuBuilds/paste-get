@@ -140,6 +140,11 @@ impl PhoneClient {
         fs::create_dir_all(&data_dir)?;
         let identity = load_or_create_identity(&data_dir)?;
         let computers = load_computers(&data_dir)?;
+        // What's copied while a computer is off waits for it.
+        let peers = Peers::new();
+        for id in computers.iter().filter_map(|c| c.device_id.parse().ok()) {
+            peers.expect(id);
+        }
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .thread_name("pasteget")
@@ -153,7 +158,7 @@ impl PhoneClient {
                 device_name: sanitize_device_name(&device_name),
                 data_dir,
                 computers: Mutex::new(computers),
-                peers: Peers::new(),
+                peers,
                 listener: Mutex::new(None),
             }),
             dialers: Mutex::new(HashMap::new()),
@@ -188,6 +193,7 @@ impl PhoneClient {
             computers.push(computer.clone());
             save_computers(&self.state.data_dir, &computers)?;
         }
+        self.state.peers.expect(paired.device_id);
         // Connect right away if the client is running.
         if self.is_running() {
             self.start_dialer(&computer);
@@ -206,10 +212,11 @@ impl PhoneClient {
             }
             save_computers(&self.state.data_dir, &computers)?;
         }
-        if let Ok(id) = device_id.parse::<DeviceId>()
-            && let Some(dialer) = lock(&self.dialers).remove(&id)
-        {
-            dialer.task.abort();
+        if let Ok(id) = device_id.parse::<DeviceId>() {
+            self.state.peers.unexpect(&id);
+            if let Some(dialer) = lock(&self.dialers).remove(&id) {
+                dialer.task.abort();
+            }
         }
         Ok(())
     }
@@ -393,6 +400,7 @@ impl SessionEvents for State {
             if removed.is_some() {
                 let _ = save_computers(&self.data_dir, &computers);
             }
+            self.peers.unexpect(&peer);
             removed
         };
         if let (Some(computer), Some(listener)) = (removed, self.listener()) {

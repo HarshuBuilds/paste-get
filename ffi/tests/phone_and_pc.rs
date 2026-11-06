@@ -284,6 +284,41 @@ fn a_phone_unpaired_on_the_pc_forgets_it_and_says_so() {
     assert_eq!(name, pc.runtime.block_on(pc.daemon.status()).device_name);
 }
 
+/// What's copied while the PC is off reaches it when it's back: the last copy only.
+#[test]
+fn a_copy_made_while_the_pc_is_off_waits_for_it() {
+    let pc = start_pc();
+    let phone = connected_phone(&pc, "POCO");
+    let computer = phone.client.paired_computers()[0].clone();
+
+    let Pc {
+        runtime,
+        daemon,
+        _home: home,
+        ..
+    } = pc;
+    drop(daemon);
+    drop(runtime);
+    wait_until("the phone to notice", || {
+        phone.client.connected_count() == 0
+    });
+    assert_eq!(phone.client.copied_text("too old".into(), false), Some(0));
+    assert_eq!(
+        phone.client.copied_text("copied while off".into(), false),
+        Some(0)
+    );
+
+    let pc = start_pc_in(home);
+    assert!(phone.client.computer_found(
+        computer.device_id,
+        vec!["127.0.0.1".into()],
+        pc.daemon.local_addr().port(),
+    ));
+    wait_until("the waiting copy on the PC", || {
+        pc.clipboard.get() == Some(Raw::Text("copied while off".into()))
+    });
+}
+
 #[test]
 fn a_computer_found_at_a_new_address_is_reconnected() {
     let pc = start_pc();
