@@ -82,8 +82,10 @@ Each line is a claim to check. "→" points at where it's enforced.
 11. Invite parsing rejects what `PROTOCOL.md` §5.1 says to reject (length, version, duplicates,
     missing keys) and can't panic. → `PairingInvite::from_str`, fuzz target `pairing_invite`.
     Only an invite's addresses on the local network are dialed (private, link-local, IPv6
-    unique local; not `100.64/10`), and on the phone never loopback, before any connection.
-    → `pairing::Dial`, `on_local_network`, `pair_with_any_address`, `ffi/src/lib.rs` `pair`
+    unique local; not `100.64/10`), and on the phone never loopback, before any connection. The
+    phone also drops, before TLS, a connection that reached one of its own other addresses
+    (its source address is the one dialed). → `pairing::Dial`, `on_local_network`,
+    `pair_with_any_address`, `connected_to_itself`, `ffi/src/lib.rs` `pair`
 12. Device names from peers are sanitized before display or storage, also when a paired
     device's `Hello` renames it. → `sanitize_device_name`, `KnownDevices::rename`,
     `ffi/src/lib.rs` `renamed`

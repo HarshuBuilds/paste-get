@@ -256,10 +256,12 @@ Rules for readers:
   `192.168.0.0/16`), link-local (`169.254.0.0/16`, `fe80::/10`) and IPv6 unique local
   (`fc00::/7`); IPv4-mapped IPv6 addresses count as their IPv4 address. Never public addresses,
   `100.64.0.0/10` (carrier networks, VPNs such as Tailscale), multicast, broadcast or
-  unspecified ones. A phone never dials its own loopback either: what listens there is another
-  app. A computer may (`pasteget join` with another profile on the same machine). The others are
-  reported as not tried. An invite can come from a link that any web page or app opens: this
-  keeps it from making the device connect across the Internet.
+  unspecified ones. A phone never pairs through an address of its own either: what listens there
+  is another app. It doesn't dial loopback, and closes, before TLS, a connection whose source
+  address is the address it dialed: that is how a connection to one of its own addresses (Wi-Fi,
+  hotspot, VPN) looks. A computer may (`pasteget join` with another profile on the same machine).
+  The others are reported as not tried. An invite can come from a link that any web page or app
+  opens: this keeps it from making the device connect across the Internet.
 
 ### 5.2 Exchange
 
@@ -298,7 +300,8 @@ A device that isn't paired and connects while no window is open gets the `Refusa
   secrets. To close it, it has to send 1000 within the 5 minutes; the PC then needs a new code.
 - **A link can't send the phone across the Internet**: only addresses on the local network are
   dialed (section 5.1), so a pairing link on a web page can't make the phone pair with a server
-  of the attacker's, and one opened by another app can't make it pair with that app.
+  of the attacker's. Nor through the phone's own addresses, so one opened by another app can't
+  make it pair with that app.
 - **Not protected**: someone who photographs the QR code and pairs before the owner does within
   the 5 minutes. The PC shows which device just paired, and can unpair it (section 2.3).
 

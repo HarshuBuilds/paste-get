@@ -15,7 +15,7 @@
 //!
 //! A QR code can also arrive as a `pasteget://pair` link, which any web page or message can open.
 //! So only the addresses of a code that are on the local network are dialed ([`Dial`]): a code
-//! never makes a device connect across the Internet.
+//! never makes a device connect across the Internet, nor a phone pair with another app on it.
 
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
@@ -204,15 +204,17 @@ pub fn on_local_network(ip: IpAddr) -> bool {
     }
 }
 
-/// Which addresses of a pairing code [`pair_with_any_address`] dials: those on the local network
-/// ([`on_local_network`]), and loopback ones only where they make sense.
+/// Which addresses of a pairing code [`pair_with_any_address`] pairs through: those on the local
+/// network ([`on_local_network`]), and this device's own ones only where they make sense.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dial {
-    /// Also this device's loopback addresses: a computer may pair with another paste-get running
-    /// on it (another profile).
+    /// Also this device's own addresses: a computer may pair with another paste-get running on
+    /// it (another profile).
     LocalNetwork,
-    /// Not loopback: on a phone, what listens there is another app, which pairing would let read
-    /// every copy.
+    /// Not this device's own addresses: on a phone, what listens there is another app, which
+    /// pairing would let read every copy. Loopback ones aren't dialed; a connection that turns
+    /// out to reach this device through another of its addresses (its Wi-Fi or hotspot address,
+    /// say) is closed before anything is sent.
     OtherDevicesOnly,
 }
 
@@ -303,7 +305,7 @@ impl PairingWindow {
 pub enum AttemptError {
     /// Not dialed: the address isn't on the local network ([`Dial`]).
     NotLocal,
-    /// Not dialed: the address is this device's own ([`Dial::OtherDevicesOnly`]).
+    /// Not paired through: the address is this device's own ([`Dial::OtherDevicesOnly`]).
     ThisDevice,
     /// Nothing answered within [`HANDSHAKE_TIMEOUT`].
     TimedOut,
@@ -412,14 +414,7 @@ pub async fn pair_with_any_address(
     let mut attempts: FuturesUnordered<_> = allowed
         .into_iter()
         .map(|(index, address)| async move {
-            let attempt = async {
-                let socket = TcpStream::connect(address)
-                    .await
-                    .map_err(AttemptError::Connect)?;
-                pair_with(socket, identity, invite, device_name)
-                    .await
-                    .map_err(AttemptError::Pairing)
-            };
+            let attempt = pair_through(address, dial, identity, invite, device_name);
             let result = timeout(HANDSHAKE_TIMEOUT, attempt)
                 .await
                 .unwrap_or(Err(AttemptError::TimedOut));
@@ -437,6 +432,34 @@ pub async fn pair_with_any_address(
     Err(NoAddressWorked {
         attempts: failed.into_iter().map(|(_, a, e)| (a, e)).collect(),
     })
+}
+
+/// Connects to `address`, one that `dial` allows, and pairs through it.
+async fn pair_through(
+    address: SocketAddr,
+    dial: Dial,
+    identity: &Identity,
+    invite: &PairingInvite,
+    device_name: &str,
+) -> Result<PairedDevice, AttemptError> {
+    let socket = TcpStream::connect(address)
+        .await
+        .map_err(AttemptError::Connect)?;
+    if dial == Dial::OtherDevicesOnly
+        && connected_to_itself(&socket).map_err(AttemptError::Connect)?
+    {
+        return Err(AttemptError::ThisDevice);
+    }
+    pair_with(socket, identity, invite, device_name)
+        .await
+        .map_err(AttemptError::Pairing)
+}
+
+/// Whether `socket` reached this device: a connection to one of its own addresses (its Wi-Fi
+/// address, say) comes from that same address.
+fn connected_to_itself(socket: &TcpStream) -> std::io::Result<bool> {
+    let (local, peer) = (socket.local_addr()?, socket.peer_addr()?);
+    Ok(local.ip().to_canonical() == peer.ip().to_canonical())
 }
 
 /// New-device side: connects to the device from `invite` over `io` and pairs.
@@ -979,6 +1002,45 @@ mod tests {
         }
         assert!(Dial::OtherDevicesOnly.allows(address("192.168.1.20:47290")));
         assert!(!Dial::LocalNetwork.allows(address("203.0.113.9:47290")));
+    }
+
+    /// An app on a phone can listen on all of its addresses and open a pairing link with one of
+    /// them: the phone doesn't pair through its Wi-Fi address any more than through loopback.
+    #[tokio::test]
+    async fn a_phone_never_pairs_through_an_address_of_its_own() {
+        let own = if_addrs::get_if_addrs()
+            .unwrap()
+            .into_iter()
+            .map(|interface| interface.ip())
+            .find(|ip| ip.is_ipv4() && !ip.is_loopback());
+        let Some(own) = own else {
+            eprintln!("skipped: this machine has no address but loopback");
+            return;
+        };
+        let (app, mut window, invite) = sample_invite();
+        let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).await.unwrap();
+        let address = SocketAddr::new(own, listener.local_addr().unwrap().port());
+        let app_side = tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                // The phone's first try ends before TLS.
+                if let Ok(incoming) = transport::accept(socket, &app).await {
+                    return accept_pairing(incoming, &mut window, "HP-AIO").await;
+                }
+            }
+        });
+        let phone = Identity::generate().unwrap();
+
+        let refused = pair_through(address, Dial::OtherDevicesOnly, &phone, &invite, "POCO").await;
+        assert!(
+            matches!(refused, Err(AttemptError::ThisDevice)),
+            "{refused:?}"
+        );
+
+        // Only that check stopped it: a computer pairs through the same address.
+        let paired = pair_through(address, Dial::LocalNetwork, &phone, &invite, "POCO").await;
+        assert_eq!(paired.unwrap().device_name, "HP-AIO");
+        assert_eq!(app_side.await.unwrap().unwrap().device_name, "POCO");
     }
 
     /// A link from a web page names a server on the Internet: it's refused without being dialed

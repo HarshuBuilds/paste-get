@@ -231,8 +231,9 @@ impl PhoneClient {
     }
 
     /// Pairs with the computer whose QR code was scanned. Tries all the code's addresses on the
-    /// local network at once, never one of this phone (another app listens there), and blocks
-    /// for up to ~10 s. The error names each address and why it failed.
+    /// local network at once, and blocks for up to ~10 s. Never through an address of this phone
+    /// (loopback, its Wi-Fi or hotspot address…): another app listens there. The error names
+    /// each address and why it failed.
     pub fn pair(&self, invite_uri: String) -> Result<PairedComputer, PastegetError> {
         let invite: PairingInvite = invite_uri
             .trim()
