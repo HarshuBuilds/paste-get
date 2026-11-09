@@ -182,7 +182,7 @@ fn phone_pairs_then_shares_text_and_screenshots_with_the_pc() {
     assert_eq!(*listener.connections.lock().unwrap(), [true]);
 
     // Share text: it lands on the PC clipboard.
-    assert_eq!(phone.send_text("Bonjour du téléphone 👋".into()), 1);
+    assert_eq!(phone.send_text("Bonjour du téléphone 👋".into(), false), 1);
     wait_until("the text on the PC clipboard", || {
         pc.clipboard.get() == Some(Raw::Text("Bonjour du téléphone 👋".into()))
     });
@@ -499,6 +499,26 @@ fn a_one_time_code_reaches_the_pc_clipboard_as_a_secret() {
     assert_eq!(phone.client.copied_text("482913".into(), true), None);
 }
 
+/// A password sent by hand (the tile, the notification) stays a secret on the PC.
+#[test]
+fn a_password_sent_by_hand_reaches_the_pc_as_a_secret() {
+    let pc = start_pc();
+    let phone = connected_phone(&pc, "POCO");
+
+    assert_eq!(phone.client.send_text("hunter2".into(), true), 1);
+    wait_until("the password on the PC clipboard", || {
+        pc.clipboard.get() == Some(Raw::Text("hunter2".into()))
+    });
+    // A plain text after it, once there, shows the password was handled: kept out of Recent.
+    assert_eq!(phone.client.send_text("plain".into(), false), 1);
+    wait_until("the plain text on the PC clipboard", || {
+        pc.clipboard.get() == Some(Raw::Text("plain".into()))
+    });
+    let recent = pc.daemon.recent();
+    assert_eq!(recent.len(), 1);
+    assert_eq!(&*recent[0].data, b"plain");
+}
+
 /// Roadmap M6: text of any length copied on the PC reaches the phone whole, in many chunks.
 /// The app puts texts this long on its clipboard as a file link (Binder's 1 MB limit).
 #[test]
@@ -599,5 +619,5 @@ fn bad_input_is_refused() {
         phone.send_image(b"GIF89a".to_vec()),
         Err(PastegetError::UnsupportedImage)
     ));
-    assert_eq!(phone.send_text("nobody listening".into()), 0);
+    assert_eq!(phone.send_text("nobody listening".into(), false), 0);
 }

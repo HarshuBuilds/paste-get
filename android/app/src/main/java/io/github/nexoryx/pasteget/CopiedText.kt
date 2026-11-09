@@ -24,7 +24,11 @@ data class CopiedText(val text: String, val sensitive: Boolean) {
         fun of(clip: ClipData): CopiedText? {
             if (clip.itemCount == 0 || !worthReading(clip.description)) return null
             val text = clip.getItemAt(0).text?.toString()?.takeIf { it.isNotEmpty() } ?: return null
-            return CopiedText(text, clip.description.extras?.getBoolean(EXTRA_IS_SENSITIVE) == true)
+            return CopiedText(text, isSensitive(clip.description))
         }
+
+        /** Marked sensitive by the app that copied it, as password managers do. */
+        fun isSensitive(description: ClipDescription): Boolean =
+            description.extras?.getBoolean(EXTRA_IS_SENSITIVE) == true
     }
 }

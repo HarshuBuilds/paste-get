@@ -20,7 +20,10 @@ object Sender {
     /** How long to wait for a connection when the service was just started. */
     private const val CONNECT_WAIT_MS = 5_000L
 
-    /** Sends the first item of [clip]: its text, or the image it points to. */
+    /**
+     * Sends the first item of [clip]: its text, or the image it points to. Text a password
+     * manager marked sensitive stays so.
+     */
     suspend fun send(context: Context, clip: ClipData?): String {
         val item = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)
             ?: return context.getString(R.string.clipboard_empty)
@@ -28,43 +31,51 @@ object Sender {
         val mimeType = uri?.let { context.contentResolver.getType(it) }
         return when {
             uri != null && mimeType?.startsWith("image/") == true -> sendImage(context, uri)
-            item.text != null -> sendText(context, item.text.toString())
+            item.text != null -> sendText(context, item.text.toString(), CopiedText.isSensitive(clip.description))
             else -> context.getString(R.string.unsupported_content)
         }
     }
 
-    suspend fun sendText(context: Context, text: String): String =
-        deliver(context, ActivityKind.TEXT, text.encodeToByteArray().size) { it.sendText(text) }
+    /** [sensitive]: computers keep it out of their history, and it doesn't wait for them. */
+    suspend fun sendText(context: Context, text: String, sensitive: Boolean = false): String =
+        deliver(context, ActivityKind.TEXT, text.encodeToByteArray().size, sensitive) { it.sendText(text, sensitive) }
 
     suspend fun sendImage(context: Context, uri: Uri): String = try {
         val image = withContext(Dispatchers.IO) { readImage(context, uri) }
-        deliver(context, ActivityKind.IMAGE, image.size) { it.sendImage(image) }
+        deliver(context, ActivityKind.IMAGE, image.size, sensitive = false) { it.sendImage(image) }
     } catch (e: Exception) {
         context.getString(R.string.send_failed, e.message ?: e.javaClass.simpleName)
     }
 
     /** Sends [bytes] of [kind] with [send], and notes it in the activity log. */
-    private suspend fun deliver(context: Context, kind: ActivityKind, bytes: Int, send: (PhoneClient) -> UInt): String {
+    private suspend fun deliver(
+        context: Context,
+        kind: ActivityKind,
+        bytes: Int,
+        sensitive: Boolean,
+        send: (PhoneClient) -> UInt,
+    ): String {
         val client = connectedClient(context)
         val sentTo = try {
             withContext(Dispatchers.IO) { send(client).toInt() }
         } catch (e: PastegetException) {
             return context.getString(R.string.send_failed, e.message)
         }
-        context.pasteGet.activity.sent(kind, bytes, sentTo, automatic = false)
-        if (sentTo > 0) return resultText(context, sentTo, emptyList())
+        context.pasteGet.activity.sent(kind, bytes, sentTo, automatic = false, sensitive = sensitive)
+        if (sentTo > 0) return resultText(context, sentTo, emptyList(), sensitive)
         val paired = withContext(Dispatchers.IO) { client.pairedComputers().map { it.name } }
-        return resultText(context, sentTo, paired)
+        return resultText(context, sentTo, paired, sensitive)
     }
 
     /**
      * What to say once a clip went to [sentTo] connected computers. When none is connected, it
-     * waits for the [paired] ones (by name) and goes as soon as one is back: what's shared by
-     * hand is never sensitive, and only sensitive clips don't wait.
+     * waits for the [paired] ones (by name) and goes as soon as one is back, unless it is
+     * [sensitive]: a password mustn't turn up hours later, so it doesn't wait.
      */
-    fun resultText(context: Context, sentTo: Int, paired: List<String>): String = when {
+    fun resultText(context: Context, sentTo: Int, paired: List<String>, sensitive: Boolean = false): String = when {
         sentTo > 0 -> context.resources.getQuantityString(R.plurals.sent_to, sentTo, sentTo)
         paired.isEmpty() -> context.getString(R.string.notification_no_computer)
+        sensitive -> context.getString(R.string.send_secret_not_sent)
         paired.size == 1 -> context.getString(R.string.send_waits_for, paired.single())
         else -> context.getString(R.string.send_waits)
     }

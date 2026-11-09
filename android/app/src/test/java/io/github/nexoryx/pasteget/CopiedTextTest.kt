@@ -36,6 +36,13 @@ class CopiedTextTest {
     }
 
     @Test
+    fun sendingByHandKeepsTheMark() {
+        assertTrue(CopiedText.isSensitive(text("hunter2", CopiedText.EXTRA_IS_SENSITIVE).description))
+        assertFalse(CopiedText.isSensitive(text("Bonjour").description))
+        assertFalse(CopiedText.isSensitive(ClipData.newPlainText("label", "no extras").description))
+    }
+
+    @Test
     fun clipsFromAComputerAreNotSentBack() {
         val fromPc = text("from the PC", CopiedText.EXTRA_IS_REMOTE_DEVICE)
 

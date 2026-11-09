@@ -22,6 +22,7 @@
     </plurals>
     <string name="send_waits_for">La copie arrivera dès que %s sera de retour</string>
     <string name="send_waits">La copie arrivera dès que tes ordinateurs seront de retour</string>
+    <string name="send_secret_not_sent">Non envoyé : aucun ordinateur n\'est connecté</string>
     <string name="clipboard_empty">Le presse-papiers est vide</string>
     <string name="unsupported_content">Seuls le texte et les images peuvent être envoyés</string>
     <string name="send_failed">Envoi impossible : %s</string>

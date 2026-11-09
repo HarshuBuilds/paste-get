@@ -289,8 +289,12 @@ impl PhoneClient {
     }
 
     /// Sends text to every connected computer. Returns how many.
-    pub fn send_text(&self, text: String) -> u32 {
-        self.send(mime::TEXT, text.into_bytes(), false)
+    ///
+    /// `sensitive` text (a password manager marked it so on the clipboard) is sent marked as
+    /// such, so computers keep it out of history, and it doesn't wait for computers that are
+    /// away.
+    pub fn send_text(&self, text: String, sensitive: bool) -> u32 {
+        self.send(mime::TEXT, text.into_bytes(), sensitive)
     }
 
     /// Sends a PNG or JPEG image, as it is, to every connected computer. Returns how many.

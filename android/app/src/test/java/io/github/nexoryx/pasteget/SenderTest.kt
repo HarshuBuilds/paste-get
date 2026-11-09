@@ -28,6 +28,13 @@ class SenderTest {
     }
 
     @Test
+    fun aSecretDoesntWait() {
+        // A password manager's copy, sent by hand: the computers never get it later.
+        assertEquals("Not sent: no computer is connected", Sender.resultText(app, 0, listOf("HP-AIO"), sensitive = true))
+        assertEquals("Sent to 1 computer", Sender.resultText(app, 1, emptyList(), sensitive = true))
+    }
+
+    @Test
     fun withNonePairedThereIsNothingToWaitFor() {
         assertEquals(app.getString(R.string.notification_no_computer), Sender.resultText(app, 0, emptyList()))
     }
