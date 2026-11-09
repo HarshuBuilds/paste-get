@@ -158,7 +158,7 @@ fn every_connection_has_the_safe_settings() {
 #[test]
 fn sqlite_has_fts5_with_the_trigram_tokenizer() {
     let (_dir, store) = store();
-    // remove_diacritics for trigram needs 3.45, contentless_delete 3.43.
+    // remove_diacritics for trigram needs 3.45.
     assert!(
         rusqlite::version_number() >= 3_045_000,
         "{}",
@@ -172,7 +172,8 @@ fn sqlite_has_fts5_with_the_trigram_tokenizer() {
             |row| row.get(0),
         )
         .unwrap();
-    assert!(sql.contains("contentless_delete=1"), "{sql}");
+    assert!(sql.contains("content=''"), "{sql}");
+    assert!(!sql.contains("contentless_delete"), "{sql}");
     assert!(sql.contains("trigram remove_diacritics 1"), "{sql}");
 
     // The triggers keep the index in step with `item`: any part of a word, accents ignored.
@@ -199,9 +200,22 @@ fn sqlite_has_fts5_with_the_trigram_tokenizer() {
     assert_eq!(found("\"RIFI\""), 1);
     assert_eq!(found("\"cation\""), 1);
     assert_eq!(found("\"nothing\""), 0);
-    // Deleting by id works only on a contentless_delete table.
+    // The indexed text never changes: the delete trigger hands it back to FTS5.
+    assert!(
+        store
+            .conn
+            .execute("UPDATE item SET text_head = 'other'", [])
+            .is_err()
+    );
     store.conn.execute("DELETE FROM item", []).unwrap();
     assert_eq!(found("\"verif\""), 0);
+    store
+        .conn
+        .execute(
+            "INSERT INTO item_fts(item_fts) VALUES ('integrity-check')",
+            [],
+        )
+        .unwrap();
 }
 
 #[test]
@@ -1503,6 +1517,12 @@ fn live_bytes(store: &HistoryStore) -> u64 {
 #[test]
 fn a_deleted_clip_leaves_nothing_behind() {
     let mut test = Test::new();
+    // Copied long before the others, so the index has merged it with later clips: its segment
+    // stays when it is deleted.
+    let old = test.added("Жщюя, an old note");
+    for i in 0..300 {
+        test.added(&format!("filler {i}"));
+    }
     let sentinel = "kqzv-DELETED-SENTINEL-wj7x";
     let short = test.added(&format!("{sentinel} short"));
     let long = test.added(&format!("{sentinel} {}", "long text ".repeat(1000)));
@@ -1510,15 +1530,16 @@ fn a_deleted_clip_leaves_nothing_behind() {
     let image_path = test.store.original_path(image).unwrap().unwrap();
     let kept = test.added("this one stays");
     for i in 0..50 {
-        test.added(&format!("filler {i}"));
+        test.added(&format!("later {i}"));
     }
-    assert_eq!(test.vocabulary(&["kqz", "qzv", "wj7"]).len(), 3);
+    let trigrams = ["kqz", "qzv", "wj7", "жщю", "щюя"];
+    assert_eq!(test.vocabulary(&trigrams).len(), 5);
 
-    assert_eq!(test.store.delete(&[short, long, image]).unwrap(), 3);
+    assert_eq!(test.store.delete(&[old, short, long, image]).unwrap(), 4);
 
     assert!(!test.exists(short) && !test.exists(long) && !test.exists(image));
-    assert!(test.exists(kept));
-    assert!(test.vocabulary(&["kqz", "qzv", "wj7"]).is_empty());
+    assert!(!test.exists(old) && test.exists(kept));
+    assert!(test.vocabulary(&trigrams).is_empty());
     assert!(!image_path.exists());
     assert!(test.search("DELETED").is_empty());
     let count = |table: &str| -> i64 {
@@ -1539,6 +1560,9 @@ fn a_deleted_clip_leaves_nothing_behind() {
     }
     assert!(!contains(&bytes, sentinel));
     assert!(!contains(&bytes, "DELETED-SENTINEL"));
+    // The index keeps trigrams, folded, never the whole text: look for those. Ones that start
+    // with a rare character are stored whole, not as the end of a neighbour.
+    assert!(!contains(&bytes, "жщю") && !contains(&bytes, "щюя"));
 }
 
 #[test]

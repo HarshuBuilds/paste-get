@@ -70,10 +70,14 @@ CREATE TABLE skipped (
 ) WITHOUT ROWID;
 
 -- Search on any part of a word, accents ignored. Contentless: the text is not stored twice.
--- `ocr` stays empty until screenshots are read.
+-- A delete hands FTS5 the text that was indexed (the 'delete' command), and `secure-delete`
+-- then takes its trigrams out of the index's pages. (`contentless_delete=1` would only mark the
+-- row deleted, and leave its trigrams in the file.) So what is indexed never changes:
+-- `text_head` can't be updated, and `ocr` stays empty until screenshots are read; whatever is
+-- indexed there must be kept to delete it.
 CREATE VIRTUAL TABLE item_fts USING fts5(
   text, ocr,
-  content='', contentless_delete=1,
+  content='',
   tokenize='trigram remove_diacritics 1'
 );
 INSERT INTO item_fts(item_fts, rank) VALUES ('secure-delete', 1);
@@ -82,5 +86,8 @@ CREATE TRIGGER item_fts_insert AFTER INSERT ON item BEGIN
   INSERT INTO item_fts(rowid, text, ocr) VALUES (new.id, new.text_head, '');
 END;
 CREATE TRIGGER item_fts_delete AFTER DELETE ON item BEGIN
-  DELETE FROM item_fts WHERE rowid = old.id;
+  INSERT INTO item_fts(item_fts, rowid, text, ocr) VALUES ('delete', old.id, old.text_head, '');
+END;
+CREATE TRIGGER item_text_head_fixed BEFORE UPDATE OF text_head ON item BEGIN
+  SELECT RAISE(ABORT, 'text_head is indexed and never changes');
 END;

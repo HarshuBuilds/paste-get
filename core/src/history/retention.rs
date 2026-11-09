@@ -303,6 +303,17 @@ impl HistoryStore {
     /// and empties the write-ahead log, which still holds the deleted rows.
     fn forget_for_real(&mut self, files: Vec<PathBuf>) -> Result<(), Error> {
         remove_files(files);
+        // Deleted entries leave the index's pages at once, but the emptied pages stay until FTS5
+        // merges them with the next clips' entries. With nothing left, merging costs nothing.
+        let empty: bool =
+            self.conn
+                .query_row("SELECT NOT EXISTS (SELECT 1 FROM item)", [], |row| {
+                    row.get(0)
+                })?;
+        if empty {
+            self.conn
+                .execute("INSERT INTO item_fts (item_fts) VALUES ('optimize')", [])?;
+        }
         incremental_vacuum(&self.conn)?;
         self.conn
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
