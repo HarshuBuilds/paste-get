@@ -145,6 +145,7 @@
     <string name="activity_a_computer">a computer</string>
     <string name="activity_on_clipboard">On the clipboard</string>
     <string name="activity_not_on_clipboard">Couldn\'t go on the clipboard</string>
+    <string name="activity_not_sent">Not sent: no computer was connected</string>
     <string name="sends_title">What paste-get sends</string>
     <string name="feature_open">Open</string>
     <string name="feature_off">Off</string>

@@ -47,7 +47,7 @@ private fun Recent(activity: List<Activity>, computers: List<PairedComputer>, on
             TextButton(onClick = onSeeAll) { Text(stringResource(R.string.see_all)) }
         }
         val names = computers.associate { it.deviceId to it.name }
-        activity.take(RECENT).forEach { ActivityRow(it, names) }
+        activity.take(RECENT).forEach { ActivityRow(it, names, activity.waits(it)) }
     }
 }
 

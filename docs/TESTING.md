@@ -498,9 +498,9 @@ never wait: a code would be stale by then.
 |---|---|---|
 | Q1 | Quit paste-get on the PC (tray → *Quit*). On the phone, copy a line | The phone says it went to 0 computers |
 | Q2 | Start paste-get on the PC again | Within a few seconds the line is in the PC's clipboard; the log says "sending the clip it missed" |
-| Q3 | PC off, copy two lines on the phone one after the other, start the PC | Only the second one arrives |
+| Q3 | PC off, copy two lines on the phone one after the other, look at Home's *Recent*, start the PC | *Recent* says "It will arrive when <PC> is back" under the second line only, "Not sent: no computer was connected" under the first. Only the second one arrives |
 | Q4 | Phone's Wi-Fi off, copy something on the PC, turn Wi-Fi back on | The copy is in the phone's clipboard once it reconnects |
-| Q5 | PC off, copy a password from a password manager on the phone (or get a 2FA code), start the PC | Nothing arrives |
+| Q5 | PC off, copy a password from a password manager on the phone (or get a 2FA code), start the PC | *Recent* (and the 2FA screen's *Last code*) says "Not sent: no computer was connected". Nothing arrives |
 | Q6 | PC off, copy on the phone, force-stop paste-get on the phone, start both | Nothing arrives: the copy was only in memory |
 | Q7 | PC off. On the phone, copy a line, then **Send clipboard now** in the app (or the tile, or Share → Send to PC) | The button works while the PC is offline, and the phone says "It will arrive when <PC> is back". Start the PC: the line arrives |
 

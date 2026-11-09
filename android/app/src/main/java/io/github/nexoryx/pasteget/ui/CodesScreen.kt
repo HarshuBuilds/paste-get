@@ -68,7 +68,8 @@ fun CodesScreen(state: CodesState, actions: CodesActions, names: Map<String, Str
         if (last == null) {
             Text(stringResource(R.string.codes_waiting), style = MaterialTheme.typography.bodyMedium)
         } else {
-            ActivityRow(last, names)
+            // A code is a secret: it never waits for a computer.
+            ActivityRow(last, names, waits = false)
         }
     }
 }

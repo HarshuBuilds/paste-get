@@ -151,6 +151,7 @@
     <string name="activity_a_computer">un ordinateur</string>
     <string name="activity_on_clipboard">Dans le presse-papiers</string>
     <string name="activity_not_on_clipboard">Impossible de le mettre dans le presse-papiers</string>
+    <string name="activity_not_sent">Non envoyé : aucun ordinateur n\'était connecté</string>
     <string name="sends_title">Ce que paste-get envoie</string>
     <string name="feature_open">Ouvrir</string>
     <string name="feature_off">Désactivé</string>

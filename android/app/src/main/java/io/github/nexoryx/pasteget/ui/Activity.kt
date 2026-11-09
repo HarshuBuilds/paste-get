@@ -27,10 +27,10 @@ import java.util.Date
 
 /**
  * One entry of the activity log: what it was and how big, where it went and how fast, and when.
- * [names] gives the computers' names by device ID.
+ * [names] gives the computers' names by device ID; [waits]: see [List.waits].
  */
 @Composable
-fun ActivityRow(entry: Activity, names: Map<String, String>, modifier: Modifier = Modifier) {
+fun ActivityRow(entry: Activity, names: Map<String, String>, waits: Boolean, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     Row(
         // Read as one line by TalkBack.
@@ -42,7 +42,7 @@ fun ActivityRow(entry: Activity, names: Map<String, String>, modifier: Modifier 
         Column(modifier = Modifier.weight(1f)) {
             Text(activityTitle(entry), style = MaterialTheme.typography.bodyLarge)
             Text(
-                activityOutcome(entry, names),
+                activityOutcome(entry, names, waits),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -81,9 +81,12 @@ fun activityTitle(entry: Activity): String {
     return stringResource(format, size)
 }
 
-/** Where it went and how fast ("HP-AIO in 38 ms"), or that it waits, or what became of it here. */
+/**
+ * Where it went and how fast ("HP-AIO in 38 ms"), or that it waits ([waits]) or never went, or
+ * what became of it here.
+ */
 @Composable
-fun activityOutcome(entry: Activity, names: Map<String, String>): String {
+fun activityOutcome(entry: Activity, names: Map<String, String>, waits: Boolean): String {
     if (!entry.sent) {
         return stringResource(if (entry.onClipboard) R.string.activity_on_clipboard else R.string.activity_not_on_clipboard)
     }
@@ -98,12 +101,22 @@ fun activityOutcome(entry: Activity, names: Map<String, String>): String {
             }
         }.joinToString(", ")
     }
-    return if (entry.sentTo > 0) {
-        pluralStringResource(R.plurals.sent_to, entry.sentTo, entry.sentTo)
-    } else {
-        stringResource(R.string.send_waits)
+    return when {
+        entry.sentTo > 0 -> pluralStringResource(R.plurals.sent_to, entry.sentTo, entry.sentTo)
+        waits && names.size == 1 -> stringResource(R.string.send_waits_for, names.values.single())
+        waits && names.isNotEmpty() -> stringResource(R.string.send_waits)
+        else -> stringResource(R.string.activity_not_sent)
     }
 }
+
+/**
+ * Whether [entry], sent while no computer was connected, still waits for them. The core keeps
+ * only the last clip sent for a computer that is away, and never a secret: an older clip, or a
+ * password or a code, never arrives. The receiver is the whole log, newest first.
+ */
+fun List<Activity>.waits(entry: Activity): Boolean =
+    entry.sent && !entry.sensitive && entry.sentTo == 0 && entry.deliveries.isEmpty() &&
+        firstOrNull { it.sent && !it.sensitive }?.id == entry.id
 
 /** How long the last clip [deviceId] acknowledged took, if any did since the app started. */
 fun List<Activity>.lastLatency(deviceId: String): Long? =

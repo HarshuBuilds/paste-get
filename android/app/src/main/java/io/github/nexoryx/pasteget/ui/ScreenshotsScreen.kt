@@ -50,7 +50,7 @@ fun ScreenshotsScreen(state: AppState, actions: AppActions, onBack: () -> Unit) 
 
         state.activity.firstOrNull { it.kind == ActivityKind.SCREENSHOT }?.let { last ->
             SectionTitle(stringResource(R.string.screenshots_last))
-            ActivityRow(last, state.computers.associate { it.deviceId to it.name })
+            ActivityRow(last, state.computers.associate { it.deviceId to it.name }, state.activity.waits(last))
         }
     }
 }

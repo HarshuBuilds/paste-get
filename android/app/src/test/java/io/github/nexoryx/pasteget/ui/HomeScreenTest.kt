@@ -4,10 +4,14 @@ package io.github.nexoryx.pasteget.ui
 
 import android.app.Application
 import android.icu.text.ListFormatter
+import android.text.format.Formatter
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -134,6 +138,25 @@ class HomeScreenTest {
         compose.onNodeWithText(delivered).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(app.getString(R.string.send_waits)).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(app.getString(R.string.activity_on_clipboard)).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun onlyWhatTheComputersWillGetSaysItWaits() {
+        val log = ActivityLog()
+        // With the PC away: a text replaced by a newer screenshot, then a password and a code,
+        // which the core never keeps for later.
+        log.sent(ActivityKind.TEXT, 12, sentTo = 0, automatic = true)
+        log.sent(ActivityKind.SCREENSHOT, 340_000, sentTo = 0, automatic = true)
+        log.sent(ActivityKind.TEXT, 8, sentTo = 0, automatic = true, sensitive = true)
+        log.sent(ActivityKind.CODE, 6, sentTo = 0, automatic = true, sensitive = true, app = "Messages")
+        show(AppFixtures.state(computers = listOf(AppFixtures.hp), activity = log.entries.value))
+
+        // The screenshot only.
+        val screenshot = app.getString(R.string.activity_screenshot, Formatter.formatShortFileSize(app, 340_000))
+        compose.onNode(hasText(screenshot) and hasText(app.getString(R.string.send_waits_for, "HP-AIO")))
+            .performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText(app.getString(R.string.send_waits_for, "HP-AIO")).assertCountEquals(1)
+        compose.onAllNodesWithText(app.getString(R.string.activity_not_sent)).assertCountEquals(3)
     }
 
     @Test
