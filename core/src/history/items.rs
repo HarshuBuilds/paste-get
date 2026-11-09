@@ -27,14 +27,20 @@ impl HistoryStore {
     /// One item, if it exists.
     pub fn item(&self, id: ItemId) -> Result<Option<Item>, Error> {
         let sql = format!("SELECT {ITEM_COLUMNS} FROM item {ITEM_JOINS} WHERE item.id = ?1");
-        self.conn
+        let item = self
+            .conn
             .query_row(&sql, [id.0], |row| Ok(item_from_row(row)))
             .optional()?
-            .transpose()
+            .transpose()?;
+        Ok(item.map(|mut item| {
+            item.preview = item.preview.chars().take(PREVIEW_CHARS).collect();
+            item
+        }))
     }
 }
 
-/// An item from a row of [`ITEM_COLUMNS`], with the start of its text as preview.
+/// An item from a row of [`ITEM_COLUMNS`], with the whole head of its text as preview: callers
+/// cut it.
 pub(super) fn item_from_row(row: &Row<'_>) -> Result<Item, Error> {
     let sha256: Vec<u8> = row.get(1)?;
     let head: Option<String> = row.get(17)?;
@@ -60,9 +66,7 @@ pub(super) fn item_from_row(row: &Row<'_>) -> Result<Item, Error> {
             .get::<_, Option<i64>>(15)?
             .and_then(|n| u32::try_from(n).ok()),
         thumb: Thumb::from_code(row.get(16)?)?,
-        preview: head
-            .map(|head| head.chars().take(PREVIEW_CHARS).collect())
-            .unwrap_or_default(),
+        preview: head.unwrap_or_default(),
         highlights: Vec::new(),
         origin: device_from_row(row, 18)?,
         via: device_from_row(row, 21)?,

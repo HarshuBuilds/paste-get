@@ -20,7 +20,7 @@ make trust decisions. In order of risk:
 | `core/src/clip.rs` | Clip offer/chunks/ack: sizes, offsets, hash check, reassembly | ~510 |
 | `core/src/framing.rs` | Length-prefixed frames, 1 MiB limit | ~190 |
 | `core/src/echo.rs` | Echo-loop guard (not a security boundary, but it hashes untrusted data) | ~120 |
-| `core/src/detect.rs` | Finds a link to open, or a one-time code, in untrusted text; sorts clips into shelves and spots secrets for the history | ~1,100, plus tests |
+| `core/src/detect.rs` | Finds a link to open, or a one-time code, in untrusted text; sorts clips into shelves and spots secrets for the history | ~1,200, plus tests |
 | `core/src/history/record.rs` | The one place that decides what the clipboard history keeps | ~300 |
 | `desktop/src/daemon.rs` | `handle_incoming`: known device → session, unknown → pairing only while a window is open | part |
 | `desktop/src/control.rs` | Local control channel: Unix socket in a 0700 directory, Windows named pipe | ~550 |
@@ -140,7 +140,9 @@ Each line is a claim to check. "→" points at where it's enforced.
     checked (texts over 1 MiB keep their first 4 KiB only). Errors keep SQLite's result code,
     never its message, which can quote a search. → `core/src/history/record.rs`,
     `core/src/detect.rs` (fuzz target `detect`), tests `secrets_are_kept_out_and_only_counted`
-    and `logs_never_hold_contents`
+    and `logs_never_hold_contents`. A search is parsed in Rust and reaches FTS5 only as quoted
+    phrases, so no query can fail or be read as FTS5 syntax. → `core/src/history/query.rs`
+    (fuzz target `history_query`)
 
 ## Known gaps (not bugs to report, but worth an opinion)
 
@@ -152,7 +154,7 @@ Each line is a claim to check. "→" points at where it's enforced.
 
 ```sh
 cargo test --workspace                       # includes two-daemon and phone-API end-to-end tests
-cd fuzz && cargo +nightly fuzz run <target>  # frame_decoder, pairing_invite, clip_receiver, hotkey, adb_wire, detect
+cd fuzz && cargo +nightly fuzz run <target>  # frame_decoder, pairing_invite, clip_receiver, hotkey, adb_wire, detect, history_query
 cargo deny check                             # dependency advisories and licenses
 ```
 

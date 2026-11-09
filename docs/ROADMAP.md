@@ -144,7 +144,10 @@ History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart ac
   - [x] Recording text: dedupe by SHA-256, secrets refused and counted (only numbers reach the
     disk), a 4 KiB head and a deflated body, texts over 1 MiB kept "too large", numbers that
     look like codes kept 15 minutes
-  - [ ] Pages and search: any part of a word, accents ignored, filters
+  - [x] Pages and search: any part of a word, accents ignored both ways (folding checked
+    against SQLite's own), words under 3 characters, `site:`/`from:`/`type:`/`is:pinned`/
+    `after:`/`before:`, filters for the chips, keyset pages, UTF-16 highlights. 20,000 items:
+    13 ms p95 at worst on a PC (`search_speed_at_20000_items`); still to measure on the POCO
   - [ ] Images: originals, thumbnails, gallery references
   - [ ] Retention, delete and stats
   - [ ] Phone: recording through `ffi`, then the Android screens

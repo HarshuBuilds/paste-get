@@ -13,7 +13,7 @@ workspace = true
 [features]
 # The clipboard history (`history` module). Off unless an app asks for it, so the other crates
 # don't build SQLite.
-history = ["dep:miniz_oxide", "dep:rusqlite"]
+history = ["dep:miniz_oxide", "dep:rusqlite", "dep:unicode-normalization"]
 
 [dependencies]
 bytes = "1"
@@ -28,12 +28,14 @@ rcgen = { version = "0.14", default-features = false, features = ["crypto", "rin
 ring = "0.17"
 # SQLite built from its C source with `cc` (FTS5 included), so phone and PC run the same version:
 # Android's own SQLite is as old as 3.22 on Android 10 and lacks the trigram tokenizer.
-rusqlite = { version = "0.41", default-features = false, features = ["bundled"], optional = true }
+rusqlite = { version = "0.41", default-features = false, features = ["bundled", "functions"], optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 subtle = "2"
 thiserror = "2"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+# Takes accents off letters for the history's search, the way SQLite's tokenizer does.
+unicode-normalization = { version = "0.1", optional = true }
 tracing = "0.1"
 zeroize = "1"
 

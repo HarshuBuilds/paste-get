@@ -10,7 +10,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-pasteget-core = { path = "../core" }
+pasteget-core = { path = "../core", features = ["history"] }
 pasteget-desktop = { path = "../desktop" }
 pasteget-ffi = { path = "../ffi" }
 
@@ -55,6 +55,13 @@ bench = false
 [[bin]]
 name = "detect"
 path = "fuzz_targets/detect.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "history_query"
+path = "fuzz_targets/history_query.rs"
 test = false
 doc = false
 bench = false

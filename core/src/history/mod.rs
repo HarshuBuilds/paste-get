@@ -14,9 +14,12 @@
 //! takes and gives is plain data ([`Item`], [`Recorded`]…), so an app can put its own trait in
 //! front of it and fake it in tests; a store in a temporary folder is fast too.
 
+mod fold;
 mod items;
+mod query;
 mod record;
 mod schema;
+mod search;
 mod types;
 
 use std::fmt;
@@ -27,8 +30,10 @@ use rusqlite::Connection;
 use crate::identity::DeviceId;
 
 pub use items::PREVIEW_CHARS;
+pub use query::{MAX_QUERY_CHARS, MAX_TERMS};
 pub use record::{BARE_CODE_TTL_MS, HEAD_LEN, MAX_TEXT_LEN};
 pub use schema::SCHEMA_VERSION;
+pub use search::{Cursor, Filter, MAX_PAGE_SIZE, PAGE_SIZE, Page, Query, SHORT_SEARCH_ITEMS};
 pub use types::{Context, Device, Format, Item, ItemId, Kept, Reason, Recorded, Source, Thumb};
 
 /// The database file, in the folder given to [`HistoryStore::open`].
@@ -113,6 +118,7 @@ impl HistoryStore {
     pub fn open(dir: &Path, this_device: DeviceId, policy: Policy) -> Result<Self, Error> {
         std::fs::create_dir_all(dir)?;
         let conn = schema::open(&dir.join(DATABASE_FILE))?;
+        search::register_fold(&conn)?;
         Ok(Self {
             conn,
             dir: dir.to_owned(),

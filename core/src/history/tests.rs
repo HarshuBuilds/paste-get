@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use std::ops::Range;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -540,22 +541,27 @@ impl std::io::Write for Captured {
     }
 }
 
-/// Runs `f` with every `tracing` event of this thread, at every level, written to a buffer.
+/// Runs `f`, then gives every `tracing` event of this test binary so far, at every level.
+///
+/// One subscriber for the whole binary, set once: subscribers set per thread miss events while
+/// other tests come and go. Each test checks for its own sentinel, so other tests' logs only make
+/// the check stricter.
 pub(super) fn logs_of(f: impl FnOnce()) -> String {
-    let captured = Captured::default();
-    let writer = captured.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
-        .with_writer(move || writer.clone())
-        .finish();
-    tracing::subscriber::with_default(subscriber, || {
-        // Another test's thread may have met these log lines first, with no subscriber: the
-        // interest tracing cached for them then would hide them here.
+    static LOGS: std::sync::OnceLock<Captured> = std::sync::OnceLock::new();
+    let logs = LOGS.get_or_init(|| {
+        let captured = Captured::default();
+        let writer = captured.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::set_global_default(subscriber).unwrap();
         tracing::callsite::rebuild_interest_cache();
-        f();
+        captured
     });
-    let bytes = captured.0.lock().unwrap().clone();
-    String::from_utf8(bytes).unwrap()
+    f();
+    let bytes = logs.0.lock().unwrap().clone();
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 #[test]
@@ -573,4 +579,434 @@ fn logs_never_hold_contents() {
     assert!(logs.contains("history: kept a clip out"), "{logs}");
     assert!(!logs.contains(sentinel), "{logs}");
     assert!(!logs.contains("example.com"), "{logs}");
+}
+
+impl Test {
+    fn search(&self, text: &str) -> Vec<ItemId> {
+        self.page(&Query {
+            text: text.into(),
+            ..Query::default()
+        })
+        .items
+        .iter()
+        .map(|item| item.id)
+        .collect()
+    }
+
+    fn filtered(&self, filter: Filter) -> Vec<ItemId> {
+        self.page(&Query {
+            filter,
+            ..Query::default()
+        })
+        .items
+        .iter()
+        .map(|item| item.id)
+        .collect()
+    }
+
+    fn page(&self, query: &Query) -> Page {
+        self.store.page(query).unwrap()
+    }
+
+    fn pin(&self, id: ItemId) {
+        self.store
+            .conn
+            .execute(
+                "UPDATE item SET pinned_at = ?2 WHERE id = ?1",
+                rusqlite::params![id.0, self.now()],
+            )
+            .unwrap();
+    }
+}
+
+#[test]
+fn pages_are_newest_first_and_stay_put_while_clips_arrive() {
+    let mut test = Test::new();
+    let ids: Vec<ItemId> = (0..5)
+        .map(|i| {
+            test.advance(1000);
+            test.added(&format!("clip {i}"))
+        })
+        .collect();
+
+    let first = test.page(&Query {
+        limit: 2,
+        ..Query::default()
+    });
+    assert_eq!(
+        first.items.iter().map(|i| i.id).collect::<Vec<_>>(),
+        [ids[4], ids[3]]
+    );
+    // New clips arrive: they go before the first page, not into the next ones.
+    test.advance(1000);
+    test.added("newer");
+    let second = test.page(&Query {
+        limit: 2,
+        after: first.next,
+        ..Query::default()
+    });
+    assert_eq!(
+        second.items.iter().map(|i| i.id).collect::<Vec<_>>(),
+        [ids[2], ids[1]]
+    );
+    let last = test.page(&Query {
+        limit: 2,
+        after: second.next,
+        ..Query::default()
+    });
+    assert_eq!(
+        last.items.iter().map(|i| i.id).collect::<Vec<_>>(),
+        [ids[0]]
+    );
+    assert_eq!(last.next, None);
+}
+
+#[test]
+fn search_finds_any_part_of_a_word_accents_ignored_both_ways() {
+    let mut test = Test::new();
+    let accented = test.added("Code de vérification : voir le message");
+    let plain = test.added("verification needed");
+    let site = test.added("https://github.com/Nexoryx-business/paste-get");
+    let summer = test.added("Bon été à tous");
+
+    let mut both = vec![plain, accented];
+    assert_eq!(test.search("verif"), both);
+    assert_eq!(test.search("VÉRIF"), both);
+    assert_eq!(test.search("rificat"), both);
+    both.retain(|id| *id == accented);
+    assert_eq!(test.search("vérif message"), both);
+    assert_eq!(test.search("hub"), [site]);
+    assert_eq!(test.search("nexoryx-bus"), [site]);
+    assert_eq!(test.search("\"bon ete\""), [summer]);
+    assert_eq!(test.search("ÉTÉ"), [summer]);
+    assert!(test.search("absent").is_empty());
+    assert!(test.search("verif absent").is_empty());
+}
+
+#[test]
+fn words_under_three_characters_are_searched_too() {
+    let mut test = Test::new();
+    let cafe = test.added("Un café");
+    let code = test.added("id: 42");
+    assert_eq!(test.search("é"), [cafe]);
+    assert_eq!(test.search("E"), [cafe]);
+    assert_eq!(test.search("42"), [code]);
+    assert_eq!(test.search("id 42"), [code]);
+    // With a longer word, the index narrows first.
+    assert_eq!(test.search("café un"), [cafe]);
+    assert_eq!(test.search("café zz"), []);
+}
+
+#[test]
+fn any_query_works_and_errors_never_quote_it() {
+    let mut test = Test::new();
+    test.added("text with \"quotes\" and (brackets) * and NEAR words");
+    for text in [
+        "\"",
+        "\"\"",
+        "\"\"\"",
+        "*",
+        "a*",
+        "NEAR(a b)",
+        "a OR b",
+        "a AND NOT b",
+        "-x",
+        "^start",
+        "col:x",
+        "text:x",
+        "{text ocr}: x",
+        "(",
+        ")",
+        "\\",
+        "'",
+        "'; DROP TABLE item; --",
+        "%_",
+        "\u{0}",
+        "\u{1}\u{7f}",
+        "👋🏽",
+        "e\u{301}",
+        "site:\"\" from:\"\" type: is: after: before:",
+        "from:\"unfinished",
+        &"x ".repeat(1000),
+        &"é".repeat(5000),
+    ] {
+        let query = Query {
+            text: text.into(),
+            ..Query::default()
+        };
+        assert!(test.store.page(&query).is_ok(), "{text:?}");
+    }
+    assert_eq!(test.search("\"quotes\" (brackets)").len(), 1);
+    assert_eq!(test.search("near words").len(), 1);
+}
+
+#[test]
+fn operators_narrow_the_search() {
+    let mut test = Test::new();
+    test.store
+        .set_device(PC, "HP-AIO (Windows)", Some(2))
+        .unwrap();
+    let github = test.added("https://github.com/rust-lang/rust");
+    let gist = test.added("https://gist.github.com/x/1");
+    let other = test.added("https://notgithub.com/rust");
+    let Recorded::Added(from_pc) = test
+        .store
+        .record(
+            &Clip::text("rust from the PC", PC),
+            &Context::received_from(PC),
+        )
+        .unwrap()
+    else {
+        panic!("not added");
+    };
+
+    assert_eq!(test.search("site:github.com"), [gist, github]);
+    assert_eq!(test.search("site:www.github.com rust"), [github]);
+    assert_eq!(test.search("site:notgithub.com"), [other]);
+    assert_eq!(test.search("from:hp-aio"), [from_pc]);
+    assert_eq!(test.search("from:\"aio (win\" rust"), [from_pc]);
+    assert_eq!(test.search("type:link rust"), [other, github]);
+    assert_eq!(test.search("type:text"), [from_pc]);
+    // An unknown type is a word, found nowhere.
+    assert!(test.search("type:pdf").is_empty());
+
+    test.pin(gist);
+    assert_eq!(test.search("is:pinned"), [gist]);
+}
+
+#[test]
+fn dates_are_days_in_the_users_time_zone() {
+    let mut test = Test::new();
+    // T0 is 2027-01-15 08:00 UTC.
+    let today = test.added("today");
+    test.advance(-DAY_MS);
+    let yesterday = test.added("yesterday");
+    let query = |text: &str, utc_offset_minutes| {
+        test.page(&Query {
+            text: text.into(),
+            utc_offset_minutes,
+            ..Query::default()
+        })
+        .items
+        .iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>()
+    };
+    assert_eq!(query("after:2027-01-15", 0), [today]);
+    assert_eq!(query("before:2027-01-15", 0), [yesterday]);
+    assert_eq!(query("after:2027-01-14 before:2027-01-15", 0), [yesterday]);
+    // In Tokyo (UTC+9) the first clip was copied at 17:00 on the 15th, the other on the 14th.
+    assert_eq!(query("after:2027-01-15", 9 * 60), [today]);
+    // In Los Angeles (UTC-8), the 15th starts at 08:00 UTC: just the first.
+    assert_eq!(query("after:2027-01-15", -8 * 60), [today]);
+    assert_eq!(query("before:2027-01-15", -8 * 60), [yesterday]);
+}
+
+#[test]
+fn chips_filter_by_kind_shelf_device_and_pins() {
+    let mut test = Test::new();
+    let link = test.added("https://example.com/a");
+    let email = test.added("jean@example.fr");
+    let Recorded::Added(received) = test
+        .store
+        .record(&Clip::text("from the PC", PC), &Context::received_from(PC))
+        .unwrap()
+    else {
+        panic!("not added");
+    };
+    test.advance(1000);
+    let frequent = test.added("copied often");
+    test.copy("copied often");
+    test.copy("copied often");
+    test.pin(email);
+
+    let filter = |filter: Filter| test.filtered(filter);
+    assert_eq!(
+        filter(Filter {
+            category: Some(Category::Link),
+            ..Filter::default()
+        }),
+        [link]
+    );
+    assert_eq!(
+        filter(Filter {
+            host: Some("example.com".into()),
+            ..Filter::default()
+        }),
+        [link]
+    );
+    assert_eq!(
+        filter(Filter {
+            device: Some(PC),
+            ..Filter::default()
+        }),
+        [received]
+    );
+    assert_eq!(
+        filter(Filter {
+            source: Some(Source::Received),
+            ..Filter::default()
+        }),
+        [received]
+    );
+    assert_eq!(
+        filter(Filter {
+            pinned: Some(true),
+            ..Filter::default()
+        }),
+        [email]
+    );
+    assert_eq!(
+        filter(Filter {
+            pinned: Some(false),
+            format: Some(Format::Text),
+            ..Filter::default()
+        }),
+        [frequent, received, link]
+    );
+    assert_eq!(
+        filter(Filter {
+            min_times: Some(3),
+            ..Filter::default()
+        }),
+        [frequent]
+    );
+    assert_eq!(
+        filter(Filter {
+            since_ms: Some(T0 + 1000),
+            ..Filter::default()
+        }),
+        [frequent]
+    );
+    assert_eq!(
+        filter(Filter {
+            until_ms: Some(T0 + 1000),
+            ..Filter::default()
+        }),
+        [received, email, link]
+    );
+    assert_eq!(
+        test.store.sites(10).unwrap(),
+        [("example.com".to_owned(), 1)]
+    );
+}
+
+#[test]
+fn results_carry_highlights_in_utf16() {
+    let mut test = Test::new();
+    test.added("👋 Vérification e\u{301}té");
+    let page = test.page(&Query {
+        text: "verif".into(),
+        ..Query::default()
+    });
+    let item = &page.items[0];
+    assert_eq!(item.highlights, vec![Range { start: 3, end: 8 }]);
+    let utf16: Vec<u16> = item.preview.encode_utf16().collect();
+    assert_eq!(String::from_utf16(&utf16[3..8]).unwrap(), "Vérif");
+
+    // A long text shows the part that matched.
+    let long = format!("{} the needle {}", "hay ".repeat(500), "hay ".repeat(500));
+    test.added(&long);
+    let page = test.page(&Query {
+        text: "needle".into(),
+        ..Query::default()
+    });
+    assert!(page.items[0].preview.starts_with('…'));
+    assert!(page.items[0].preview.contains("needle"));
+    assert_eq!(page.items[0].highlights.len(), 1);
+    // Without a search, the start, cut for a list.
+    let browse = test.page(&Query::default());
+    assert_eq!(browse.items[0].preview.chars().count(), PREVIEW_CHARS);
+    assert!(browse.items[0].highlights.is_empty());
+}
+
+#[test]
+fn expired_items_are_hidden_even_before_they_are_deleted() {
+    let mut test = Test::new();
+    let code = test.added("482913");
+    let kept = test.added("483 kept");
+    test.advance(BARE_CODE_TTL_MS);
+    assert_eq!(test.search("48"), [kept]);
+    assert_eq!(test.filtered(Filter::default()), [kept]);
+    // Pinned, it stays.
+    test.pin(code);
+    assert_eq!(test.search("48"), [kept, code]);
+}
+
+#[test]
+fn search_logs_never_hold_the_query() {
+    let logs = logs_of(|| {
+        let mut test = Test::new();
+        test.added("vbnq-QUERY-SENTINEL");
+        test.search("vbnq-QUERY");
+        test.search("QUERY-SENTINEL\" OR (");
+    });
+    assert!(!logs.contains("QUERY-SENTINEL"), "{logs}");
+    assert!(!logs.contains("vbnq"), "{logs}");
+}
+
+/// `cargo test -p pasteget-core --features history --release -- --ignored --nocapture
+/// search_speed`. The design's target is under 30 ms (p95) at 20,000 items on the POCO.
+#[test]
+#[ignore]
+fn search_speed_at_20000_items() {
+    let mut test = Test::new();
+    let words = [
+        "vérification",
+        "github",
+        "paste",
+        "bonjour",
+        "facture",
+        "rendez-vous",
+    ];
+    for i in 0..20_000 {
+        test.advance(1);
+        test.copy(&format!(
+            "{} {} item {i} https://example.com/{i}",
+            words[i % words.len()],
+            words[(i / 7) % words.len()]
+        ));
+    }
+    for text in [
+        "verif",
+        "hub page",
+        "item 1999",
+        "é",
+        "zz",
+        "site:example.com 42",
+    ] {
+        let mut times: Vec<std::time::Duration> = (0..20)
+            .map(|_| {
+                let start = std::time::Instant::now();
+                test.page(&Query {
+                    text: text.into(),
+                    ..Query::default()
+                });
+                start.elapsed()
+            })
+            .collect();
+        times.sort();
+        println!("{text:?}: p95 {:?}", times[18]);
+    }
+}
+
+proptest::proptest! {
+    // The `history_query` fuzz target's checks, on queries made of what the parser looks at.
+    #[test]
+    fn any_query_works_and_highlights_fit(text in "[ a-zé\"*:()^\\-_.%'\\\\]{0,40}|(site|from|type|is|after|before):[ -~]{0,12}") {
+        let mut test = Test::new();
+        test.added("Code de vérification : 482913 \"quoted\" (x) *");
+        test.added("https://github.com/Nexoryx-business/paste-get");
+        let page = test.store.page(&Query { text, ..Query::default() });
+        proptest::prop_assert!(page.is_ok());
+        for item in page.unwrap().items {
+            let len = item.preview.encode_utf16().count() as u32;
+            let mut end = 0;
+            for range in item.highlights {
+                proptest::prop_assert!(end <= range.start && range.start < range.end);
+                proptest::prop_assert!(range.end <= len);
+                end = range.end;
+            }
+        }
+    }
 }
