@@ -28,7 +28,7 @@ use pasteget_core::detect;
 use pasteget_core::echo::EchoGuard;
 use pasteget_core::identity::{DeviceId, Identity};
 use pasteget_core::pairing::{
-    self, Opening, PairedDevice, PairingError, PairingInvite, PairingRequest, PairingWindow,
+    self, Dial, Opening, PairedDevice, PairingError, PairingInvite, PairingRequest, PairingWindow,
 };
 use pasteget_core::proto::{Hello, PROTOCOL_VERSION, Platform, RefusalReason};
 use pasteget_core::session::{self, HANDSHAKE_TIMEOUT, Peers, RECONNECT_MIN, SessionEvents};
@@ -323,15 +323,27 @@ impl Daemon {
         Ok(invite)
     }
 
-    /// Pairs with the device that shows `invite`, then keeps a connection to it.
+    /// Pairs with the device that shows `invite`, then keeps a connection to it. Only the
+    /// invite's addresses on the local network are dialed, or on this computer itself (another
+    /// profile).
     pub async fn join(&self, invite: &PairingInvite) -> Result<KnownDevice> {
-        let (paired, worked) =
-            pairing::pair_with_any_address(&self.shared.identity, invite, &self.shared.device_name)
-                .await
-                .context("could not pair")?;
+        let dial = Dial::LocalNetwork;
+        let (paired, worked) = pairing::pair_with_any_address(
+            &self.shared.identity,
+            invite,
+            &self.shared.device_name,
+            dial,
+        )
+        .await
+        .context("could not pair")?;
         // The address that worked is dialed first.
         let mut addresses = vec![worked];
-        addresses.extend(invite.addresses.iter().filter(|a| **a != worked));
+        addresses.extend(
+            invite
+                .addresses
+                .iter()
+                .filter(|a| **a != worked && dial.allows(**a)),
+        );
         let device = KnownDevice::joined(paired, addresses);
         self.shared.remember(device.clone())?;
         self.shared.start_dialer(device.clone());
@@ -902,8 +914,10 @@ struct LocalAddress {
 
 /// The addresses for a pairing code, the likeliest to reach this PC from a phone on the same
 /// network first: home networks (192.168.x, then 10.x), then 172.16-31.x (often Docker or WSL),
-/// then the rest, and interfaces that look virtual (VMs, containers, VPNs) last.
+/// then the rest, and interfaces that look virtual (VMs, containers, VPNs) last. Only addresses
+/// on the local network: the phone dials no other.
 fn likeliest_first(mut addresses: Vec<LocalAddress>) -> Vec<IpAddr> {
+    addresses.retain(|address| pairing::on_local_network(address.ip));
     addresses.sort_by_key(|address| (likelihood_rank(address), address.ip));
     let mut ips = Vec::new();
     for address in addresses {
@@ -1660,6 +1674,29 @@ mod tests {
         assert!(wait_for_async(|| connected(&laptop.daemon)).await);
     }
 
+    /// The code also names an address on the Internet: it isn't dialed, nor remembered.
+    #[tokio::test]
+    async fn joining_dials_no_address_on_the_internet() {
+        let pc = start("pc").await;
+        let laptop = start("laptop").await;
+        let mut invite = pc.daemon.open_pairing().await.unwrap();
+        let internet: SocketAddr = "203.0.113.9:47290".parse().unwrap();
+        invite.addresses.insert(0, internet);
+
+        let joined = timeout(Duration::from_secs(3), laptop.daemon.join(&invite))
+            .await
+            .expect("the address on the Internet was dialed")
+            .unwrap();
+
+        assert_eq!(joined.addresses, [pc.daemon.local_addr()]);
+        invite.addresses = vec![internet];
+        let error = laptop.daemon.join(&invite).await.unwrap_err();
+        assert_eq!(
+            format!("{error:#}"),
+            "could not pair: 203.0.113.9:47290: not on the local network, not tried"
+        );
+    }
+
     #[test]
     fn pairing_codes_list_the_likeliest_addresses_first() {
         let address = |interface: &str, ip: &str| LocalAddress {
@@ -1689,13 +1726,12 @@ mod tests {
             "192.168.1.21",
             "10.0.0.12",
             "172.20.1.5",
-            "203.0.113.9",
             // Virtual: last.
             "10.8.0.2",
-            "100.64.0.7",
             "172.17.0.1",
             "172.25.80.1",
             "192.168.56.1",
+            // Not on the local network: 203.0.113.9 and 100.64.0.7, left out.
         ];
         assert_eq!(ordered, expected.map(|ip| ip.parse::<IpAddr>().unwrap()));
     }

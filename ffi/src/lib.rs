@@ -20,13 +20,14 @@ use std::fs;
 use std::io::Write;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use pasteget_core::clip::{Clip, Kind, mime};
 use pasteget_core::echo::EchoGuard;
 use pasteget_core::identity::{DeviceId, Identity};
-use pasteget_core::pairing::{self, PairingInvite, sanitize_device_name};
+use pasteget_core::pairing::{self, Dial, PairingInvite, sanitize_device_name};
 use pasteget_core::proto::{AckStatus, Hello, PROTOCOL_VERSION, Platform};
 use pasteget_core::session::{self, Delivery, Peers, SessionEvents, found_first};
 use serde::{Deserialize, Serialize};
@@ -115,6 +116,8 @@ pub struct PhoneClient {
     state: Arc<State>,
     /// One per paired computer while the client runs.
     dialers: Mutex<HashMap<DeviceId, Dialer>>,
+    /// Set by [`PhoneClient::pair_on_loopback_for_tests`] only.
+    pair_on_loopback: AtomicBool,
 }
 
 /// Keeps a session with one computer.
@@ -167,6 +170,7 @@ impl PhoneClient {
                 listener: Mutex::new(None),
             }),
             dialers: Mutex::new(HashMap::new()),
+            pair_on_loopback: AtomicBool::new(false),
         }))
     }
 
@@ -178,19 +182,26 @@ impl PhoneClient {
         lock(&self.state.computers).clone()
     }
 
-    /// Pairs with the computer whose QR code was scanned. Tries all the code's addresses at
-    /// once and blocks for up to ~10 s. The error names each address and why it failed.
+    /// Pairs with the computer whose QR code was scanned. Tries all the code's addresses on the
+    /// local network at once, never one of this phone (another app listens there), and blocks
+    /// for up to ~10 s. The error names each address and why it failed.
     pub fn pair(&self, invite_uri: String) -> Result<PairedComputer, PastegetError> {
         let invite: PairingInvite = invite_uri
             .trim()
             .parse()
             .map_err(|_| PastegetError::InvalidCode)?;
+        let dial = if self.pair_on_loopback.load(Ordering::Relaxed) {
+            Dial::LocalNetwork
+        } else {
+            Dial::OtherDevicesOnly
+        };
         let (paired, worked) = self
             .runtime
             .block_on(pairing::pair_with_any_address(
                 &self.state.identity,
                 &invite,
                 &self.state.device_name,
+                dial,
             ))
             .map_err(|failed| {
                 if failed.reached_the_device() {
@@ -202,11 +213,14 @@ impl PhoneClient {
         let computer = PairedComputer {
             device_id: paired.device_id.to_string(),
             name: paired.device_name,
-            // The address that worked is dialed first.
-            addresses: found_first([worked], invite.addresses.iter().copied())
-                .iter()
-                .map(SocketAddr::to_string)
-                .collect(),
+            // The address that worked is dialed first, then the others it may dial.
+            addresses: found_first(
+                [worked],
+                invite.addresses.iter().copied().filter(|a| dial.allows(*a)),
+            )
+            .iter()
+            .map(SocketAddr::to_string)
+            .collect(),
         };
         {
             let mut computers = lock(&self.state.computers);
@@ -355,6 +369,13 @@ pub fn find_one_time_code(text: String) -> Option<String> {
 }
 
 impl PhoneClient {
+    /// Lets [`PhoneClient::pair`] dial loopback addresses, for tests against a desktop daemon on
+    /// the same machine. Not exported to the app: a phone never pairs with something on itself.
+    #[doc(hidden)]
+    pub fn pair_on_loopback_for_tests(&self) {
+        self.pair_on_loopback.store(true, Ordering::Relaxed);
+    }
+
     /// Sends what the user shared, even if it was sent before.
     fn send(&self, mime_type: &str, data: Vec<u8>, sensitive: bool) -> u32 {
         // Remember it, so the automatic copy doesn't send it a second time.

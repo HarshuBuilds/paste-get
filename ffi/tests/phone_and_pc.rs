@@ -148,6 +148,14 @@ fn path_of(dir: &tempfile::TempDir) -> String {
     dir.path().to_str().unwrap().to_owned()
 }
 
+/// A phone app with its data in `dir`. It may pair with the test daemons, which listen on
+/// loopback; the app never does.
+fn phone_client(dir: &tempfile::TempDir, name: &str) -> Arc<PhoneClient> {
+    let client = PhoneClient::new(path_of(dir), name.into()).unwrap();
+    client.pair_on_loopback_for_tests();
+    client
+}
+
 /// A phone paired with `pc` and connected to it.
 struct Phone {
     client: Arc<PhoneClient>,
@@ -162,7 +170,7 @@ fn connected_phone(pc: &Pc, name: &str) -> Phone {
         .unwrap()
         .to_uri();
     let dir = tempfile::tempdir().unwrap();
-    let client = PhoneClient::new(path_of(&dir), name.into()).unwrap();
+    let client = phone_client(&dir, name);
     client.pair(qr_code).unwrap();
     let listener = Arc::new(Recorder::default());
     client.start(listener.clone());
@@ -193,7 +201,7 @@ fn phone_pairs_then_shares_text_and_screenshots_with_the_pc() {
         .unwrap()
         .to_uri();
     let phone_dir = tempfile::tempdir().unwrap();
-    let phone = PhoneClient::new(path_of(&phone_dir), "POCO M8 5G".into()).unwrap();
+    let phone = phone_client(&phone_dir, "POCO M8 5G");
 
     // Scan the QR code.
     let computer = phone.pair(qr_code).unwrap();
@@ -260,7 +268,7 @@ fn phone_pairs_then_shares_text_and_screenshots_with_the_pc() {
 
     // The app restarts: same identity, same pairing.
     drop(phone);
-    let again = PhoneClient::new(path_of(&phone_dir), "POCO M8 5G".into()).unwrap();
+    let again = phone_client(&phone_dir, "POCO M8 5G");
     assert_eq!(again.device_id(), phone_id);
     assert_eq!(again.paired_computers(), vec![computer]);
 }
@@ -274,7 +282,7 @@ fn forgetting_a_computer_disconnects_it() {
         .unwrap()
         .to_uri();
     let phone_dir = tempfile::tempdir().unwrap();
-    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    let phone = phone_client(&phone_dir, "POCO");
     let computer = phone.pair(qr_code).unwrap();
     phone.start(Arc::new(Recorder::default()));
     wait_until("the connection", || phone.connected_count() == 1);
@@ -336,7 +344,7 @@ fn renames_reach_the_other_side() {
     // The phone was renamed: the app starts again with its new name.
     client.stop();
     drop(client);
-    let client = PhoneClient::new(path_of(&dir), "Mon téléphone".into()).unwrap();
+    let client = phone_client(&dir, "Mon téléphone");
     client.start(Arc::new(Recorder::default()));
     wait_until("the new name on the PC", || {
         let status = pc.runtime.block_on(pc.daemon.status());
@@ -363,7 +371,7 @@ fn renames_reach_the_other_side() {
     assert_eq!(known.iter().next().unwrap().name, "Mon téléphone");
     client.stop();
     drop(client);
-    let again = PhoneClient::new(path_of(&dir), "Mon téléphone".into()).unwrap();
+    let again = phone_client(&dir, "Mon téléphone");
     assert_eq!(again.paired_computers()[0].name, "Bureau");
 }
 
@@ -539,7 +547,7 @@ fn copies_made_while_a_session_is_silently_dead_arrive_when_it_reconnects() {
         .unwrap();
     invite.addresses = vec![proxy.address];
     let phone_dir = tempfile::tempdir().unwrap();
-    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    let phone = phone_client(&phone_dir, "POCO");
     phone.pair(invite.to_uri()).unwrap();
     let listener = Arc::new(Recorder::default());
     phone.start(listener.clone());
@@ -627,7 +635,7 @@ fn a_computer_found_at_a_new_address_is_reconnected() {
         .unwrap()
         .to_uri();
     let phone_dir = tempfile::tempdir().unwrap();
-    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    let phone = phone_client(&phone_dir, "POCO");
     let computer = phone.pair(qr_code).unwrap();
     phone.start(Arc::new(Recorder::default()));
     wait_until("the connection", || phone.connected_count() == 1);
@@ -667,7 +675,7 @@ fn a_screenshot_sized_image_is_delivered_in_under_a_second() {
         .unwrap()
         .to_uri();
     let phone_dir = tempfile::tempdir().unwrap();
-    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    let phone = phone_client(&phone_dir, "POCO");
     let computer = phone.pair(qr_code).unwrap();
     let listener = Arc::new(Recorder::default());
     phone.start(listener.clone());
@@ -703,7 +711,7 @@ fn an_image_copied_on_the_pc_reaches_the_phone() {
         .unwrap()
         .to_uri();
     let phone_dir = tempfile::tempdir().unwrap();
-    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    let phone = phone_client(&phone_dir, "POCO");
     phone.pair(qr_code).unwrap();
     let listener = Arc::new(Recorder::default());
     phone.start(listener.clone());
@@ -740,7 +748,7 @@ fn copies_on_the_phone_reach_the_pc_without_echo() {
         .unwrap()
         .to_uri();
     let phone_dir = tempfile::tempdir().unwrap();
-    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    let phone = phone_client(&phone_dir, "POCO");
     phone.pair(qr_code).unwrap();
     let listener = Arc::new(Recorder::default());
     phone.start(listener.clone());
@@ -1005,7 +1013,7 @@ fn pairing_says_why_each_address_failed() {
     let other = other_pc.daemon.local_addr();
     invite.addresses = vec![closed, other];
     let phone_dir = tempfile::tempdir().unwrap();
-    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    let phone = phone_client(&phone_dir, "POCO");
 
     let error = phone.pair(invite.to_uri()).unwrap_err();
     assert!(matches!(error, PastegetError::Unreachable(_)));
@@ -1035,7 +1043,7 @@ fn an_unreadable_computer_list_is_set_aside() {
     let saved = phone_dir.path().join("computers.json");
     std::fs::write(&saved, b"[{\"device_id\": \"ABC\", \"na").unwrap();
 
-    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    let phone = phone_client(&phone_dir, "POCO");
 
     assert!(phone.paired_computers().is_empty());
     assert_eq!(
@@ -1050,14 +1058,51 @@ fn an_unreadable_computer_list_is_set_aside() {
         .to_uri();
     let computer = phone.pair(qr_code).unwrap();
     drop(phone);
-    let again = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    let again = phone_client(&phone_dir, "POCO");
     assert_eq!(again.paired_computers(), [computer]);
+}
+
+/// A code can come from a link that any web page or app opens: the phone dials only computers
+/// on the local network, never an address on the Internet or one of its own, where another app
+/// would answer.
+#[test]
+fn a_code_pointing_off_the_local_network_is_not_dialed() {
+    let pc = start_pc();
+    let mut invite: PairingInvite = pc
+        .runtime
+        .block_on(pc.daemon.open_pairing())
+        .unwrap()
+        .to_uri()
+        .parse()
+        .unwrap();
+    let on_the_phone = pc.daemon.local_addr();
+    let internet: SocketAddr = "203.0.113.9:47290".parse().unwrap();
+    invite.addresses = vec![internet, on_the_phone];
+    let phone_dir = tempfile::tempdir().unwrap();
+    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+
+    let started = Instant::now();
+    let error = phone.pair(invite.to_uri()).unwrap_err();
+
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "an address was dialed"
+    );
+    assert!(matches!(error, PastegetError::Unreachable(_)));
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "could not reach the computer: {internet}: not on the local network, not tried; \
+             {on_the_phone}: an address of this device, not tried"
+        )
+    );
+    assert!(phone.paired_computers().is_empty());
 }
 
 #[test]
 fn bad_input_is_refused() {
     let phone_dir = tempfile::tempdir().unwrap();
-    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    let phone = phone_client(&phone_dir, "POCO");
 
     assert!(matches!(
         phone.pair("https://example.com".into()),

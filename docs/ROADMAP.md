@@ -116,7 +116,9 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
   (`TESTING.md`, P15)
 - [x] The phone asks before pairing: a scanned code or a `pasteget://` link (which any web page
   or message can open) shows the name and addresses it gives and pairs only on *Pair*. Pairing
-  errors are explained in the phone's language, with the technical message under *Details*
+  errors are explained in the phone's language, with the technical message under *Details*.
+  Only the code's addresses on the local network are dialed, never one on the Internet or of
+  the phone itself (`TESTING.md`, P18)
 - [x] *Settings…* window in the tray: this computer's name, notifications, links, hotkeys and
   starting at login, checked before saving. Notifications and links apply at once
   (`pasteget` control request `reload_settings`); a new name or hotkeys restart the daemon the
