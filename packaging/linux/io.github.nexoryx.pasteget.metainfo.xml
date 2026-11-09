@@ -24,19 +24,19 @@
       là. Une capture d'écran prise sur le téléphone est dans le presse-papiers du PC moins
       d'une seconde plus tard.
     </p>
+    <!-- Only list items are translated, each next to its English one: AppStream ignores
+         xml:lang on <ul> and refuses it since 1.0.3. -->
     <ul>
       <li>Phone to PC, automatically, without root</li>
+      <li xml:lang="fr">Du téléphone au PC, automatiquement, sans root</li>
       <li>Screenshots, full size</li>
+      <li xml:lang="fr">Captures d'écran, en taille réelle</li>
       <li>PC to phone: text and images</li>
+      <li xml:lang="fr">Du PC au téléphone : texte et images</li>
       <li>2FA codes from the phone's notifications, ready to paste (off by default)</li>
+      <li xml:lang="fr">Codes 2FA des notifications du téléphone, prêts à coller (désactivé par défaut)</li>
       <li>A link copied on the phone can be opened on the PC</li>
-    </ul>
-    <ul xml:lang="fr">
-      <li>Du téléphone au PC, automatiquement, sans root</li>
-      <li>Captures d'écran, en taille réelle</li>
-      <li>Du PC au téléphone : texte et images</li>
-      <li>Codes 2FA des notifications du téléphone, prêts à coller (désactivé par défaut)</li>
-      <li>Un lien copié sur le téléphone peut s'ouvrir sur le PC</li>
+      <li xml:lang="fr">Un lien copié sur le téléphone peut s'ouvrir sur le PC</li>
     </ul>
     <p>
       There is no server and no account. Devices talk directly over the local network, end-to-end

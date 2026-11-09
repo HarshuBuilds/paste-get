@@ -29,8 +29,10 @@ On Fedora, the installed desktop entry, metainfo and firewalld service also go t
 The AppStream metainfo, `packaging/linux/io.github.nexoryx.pasteget.metainfo.xml`, is what KDE
 Discover and GNOME Software show about paste-get: summary, description, links, and one
 `<release>` per version. Every Linux package installs it in `/usr/share/metainfo/`. Check it
-after editing with `appstreamcli validate --no-net` (package `appstream`). It has no
-screenshots yet: add a `<screenshots>` section with image links once there are real ones.
+after editing with `appstreamcli validate --no-net` (package `appstream`), version 1.0.3 or
+newer like CI's Fedora: older ones miss checks, such as the one refusing a translated `<ul>`
+(translate each `<li>` instead). It has no screenshots yet: add a `<screenshots>` section with
+image links once there are real ones.
 
 The Windows installer installs WebView2 if the PC doesn't have it (Windows 11 always does): the
 *Pair a phone* and *Settings* windows need it. It then downloads Microsoft's bootstrapper, silently;
