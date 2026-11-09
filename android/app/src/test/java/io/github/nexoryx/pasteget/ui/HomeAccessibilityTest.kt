@@ -84,16 +84,13 @@ class HomeAccessibilityTest {
 
     @Test
     fun forgetButtonsNameTheirComputer() {
-        val forgotten = mutableListOf<String>()
-        show(
-            HomeFixtures.state(computers = listOf(HomeFixtures.hp, HomeFixtures.arch)),
-            HomeActions(onForget = { forgotten += it.name }),
-        )
+        show(HomeFixtures.state(computers = listOf(HomeFixtures.hp, HomeFixtures.arch)))
 
         compose.onNodeWithContentDescription(app.getString(R.string.forget_named, "Arch-PC"))
             .performScrollTo()
             .assertHasClickAction()
             .performClick()
-        assertEquals(listOf("Arch-PC"), forgotten)
+        // It asks about that one.
+        compose.onNodeWithText(app.getString(R.string.forget_title, "Arch-PC")).assertExists()
     }
 }

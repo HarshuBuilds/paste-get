@@ -6,26 +6,21 @@ import android.text.format.DateFormat
 import android.text.format.Formatter
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -125,39 +120,6 @@ private fun statusTitle(status: AppStatus): String = when (status) {
 
 @Composable
 private fun connectedText(count: Int): String = pluralStringResource(R.plurals.notification_connected, count, count)
-
-@Composable
-private fun ComputerList(computers: List<PairedComputer>, connected: Set<String>, onForget: (PairedComputer) -> Unit) {
-    if (computers.isEmpty()) return
-    Text(
-        stringResource(R.string.paired_computers),
-        style = MaterialTheme.typography.titleSmall,
-        modifier = Modifier.semantics { heading() },
-    )
-    computers.forEach { computer ->
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                val isConnected = computer.deviceId in connected
-                // Name and state read as one: "HP-AIO, Connected".
-                Column(modifier = Modifier.weight(1f).semantics(mergeDescendants = true) {}) {
-                    Text(computer.name, style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        stringResource(if (isConnected) R.string.connected else R.string.offline),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                // "Forget HP-AIO" rather than the same "Forget" for every computer.
-                val label = stringResource(R.string.forget_named, computer.name)
-                TextButton(onClick = { onForget(computer) }, modifier = Modifier.semantics { contentDescription = label }) {
-                    Text(stringResource(R.string.forget))
-                }
-            }
-        }
-    }
-}
 
 /** How long the last clip took to reach a computer: the latency the roadmap aims to keep under a second. */
 @Composable

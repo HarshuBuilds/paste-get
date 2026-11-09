@@ -32,8 +32,12 @@
     <string name="paired_computers">Ordinateurs appairés</string>
     <string name="connected">Connecté</string>
     <string name="offline">Hors ligne</string>
-    <string name="forget">Oublier</string>
+    <string name="forget">Oublier…</string>
     <string name="forget_named">Oublier %s</string>
+    <string name="forget_title">Oublier %s ?</string>
+    <string name="forget_text">%1$s ne recevra plus ce que tu copies, et ce téléphone ne s\'y connectera plus. Pour le réutiliser, appaire-le à nouveau. Sur l\'ordinateur, ce téléphone reste dans la liste jusqu\'à ce que tu l\'oublies là-bas aussi.</string>
+    <string name="forget_confirm">Oublier</string>
+    <string name="cancel">Annuler</string>
     <string name="screenshots_title">Envoyer les captures d\'écran</string>
     <string name="screenshots_on">Chaque capture va dans le presse-papiers de tes ordinateurs</string>
     <string name="screenshots_off">Fais une capture, colle-la sur ton ordinateur</string>

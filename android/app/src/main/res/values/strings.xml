@@ -28,8 +28,12 @@
     <string name="paired_computers">Paired computers</string>
     <string name="connected">Connected</string>
     <string name="offline">Offline</string>
-    <string name="forget">Forget</string>
+    <string name="forget">Forget…</string>
     <string name="forget_named">Forget %s</string>
+    <string name="forget_title">Forget %s?</string>
+    <string name="forget_text">%1$s will stop receiving what you copy, and this phone will stop connecting to it. To use it again, pair again. On the computer, this phone stays listed until you forget it there too.</string>
+    <string name="forget_confirm">Forget</string>
+    <string name="cancel">Cancel</string>
     <string name="screenshots_title">Send new screenshots</string>
     <string name="screenshots_on">Each screenshot goes to your computers\' clipboard</string>
     <string name="screenshots_off">Take a screenshot, paste it on your computer</string>
