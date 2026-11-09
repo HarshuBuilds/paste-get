@@ -814,6 +814,27 @@ fn words_under_three_characters_are_searched_too() {
 }
 
 #[test]
+fn short_words_find_pinned_items_of_any_age() {
+    let mut test = Test::new();
+    let pinned = test.added("lock 42, the old one");
+    test.store.pin(pinned, true).unwrap();
+    test.added("another 42, not pinned");
+    // Newer items than both, more than a short search looks at.
+    test.store
+        .conn
+        .execute(
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+             INSERT INTO item (sha256, format, size, category, source, first_at, last_at, kept,
+                               text_head)
+             SELECT randomblob(32), 1, 6, 1, 1, ?1 + i, ?1 + i, 0, 'filler' FROM n",
+            rusqlite::params![test.now(), SHORT_SEARCH_ITEMS],
+        )
+        .unwrap();
+
+    assert_eq!(test.search("42"), [pinned]);
+}
+
+#[test]
 fn any_query_works_and_errors_never_quote_it() {
     let mut test = Test::new();
     test.added("text with \"quotes\" and (brackets) * and NEAR words");

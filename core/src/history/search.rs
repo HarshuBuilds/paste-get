@@ -17,7 +17,8 @@ use crate::identity::DeviceId;
 pub const PAGE_SIZE: u32 = 50;
 pub const MAX_PAGE_SIZE: u32 = 200;
 
-/// A search made only of words under 3 characters looks at this many newest items.
+/// A search made only of words under 3 characters looks at this many newest items, and at
+/// every pinned one.
 pub const SHORT_SEARCH_ITEMS: u32 = 5000;
 
 /// What the chips of the history screen narrow it to. Every field set must match.
@@ -170,8 +171,10 @@ fn add_search(and: &mut impl FnMut(&str, Vec<Value>), parsed: &Parsed, utc_offse
     let fts = query::fts_match(&parsed.terms);
     let mut short = query::short_terms(&parsed.terms).peekable();
     if fts.is_none() && short.peek().is_some() {
+        // The newest items, and every pinned one: the pinned section is searched whole.
         and(
-            "item.id IN (SELECT id FROM item ORDER BY last_at DESC, id DESC LIMIT ?)",
+            "(item.pinned_at IS NOT NULL
+              OR item.id IN (SELECT id FROM item ORDER BY last_at DESC, id DESC LIMIT ?))",
             vec![i64::from(SHORT_SEARCH_ITEMS).into()],
         );
     }
