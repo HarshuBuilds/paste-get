@@ -199,6 +199,7 @@ class MainActivity : ComponentActivity() {
         val state = AppState(
             status = status,
             computers = computers,
+            computersLoaded = model.paired != null,
             connected = connected,
             message = model.message,
             pairing = model.pairing,

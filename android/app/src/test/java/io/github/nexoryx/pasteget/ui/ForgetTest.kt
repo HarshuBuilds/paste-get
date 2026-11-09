@@ -4,6 +4,9 @@ package io.github.nexoryx.pasteget.ui
 
 import android.app.Application
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -80,6 +83,19 @@ class ForgetTest {
         }
         compose.onNodeWithText(app.getString(R.string.connected)).assertIsDisplayed()
         compose.onNodeWithText("192.168.1.20:47290").assertIsDisplayed()
+    }
+
+    @Test
+    fun aPageRestoredBeforeTheListIsReadWaitsForIt() {
+        // Android stopped the app on this page: it comes back before the computers are read.
+        var state by mutableStateOf(AppFixtures.state().copy(computersLoaded = false))
+        compose.setContent { MaterialTheme { DeviceScreen(state, "a1", AppActions(), onBack = { backs++ }) } }
+        compose.waitForIdle()
+        assertEquals(0, backs)
+
+        state = AppFixtures.state(computers = listOf(AppFixtures.hp))
+        compose.onNodeWithText(app.getString(R.string.forget_this)).performScrollTo().assertIsDisplayed()
+        assertEquals(0, backs)
     }
 
     @Test

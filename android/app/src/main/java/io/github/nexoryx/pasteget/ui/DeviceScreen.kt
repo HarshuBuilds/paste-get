@@ -33,8 +33,10 @@ import io.github.nexoryx.pasteget.R
 @Composable
 fun DeviceScreen(state: AppState, deviceId: String, actions: AppActions, onBack: () -> Unit) {
     val computer = state.computers.firstOrNull { it.deviceId == deviceId }
-    // Forgotten here, or unpaired by the PC meanwhile: nothing left to show.
-    LaunchedEffect(computer == null) { if (computer == null) onBack() }
+    // Forgotten here, or unpaired by the PC meanwhile: nothing left to show. Only once the list
+    // is read: after Android stopped the app, this page comes back before its computers do.
+    val gone = computer == null && state.computersLoaded
+    LaunchedEffect(gone) { if (gone) onBack() }
     if (computer == null) return
     // Kept when the screen rotates.
     var asking by rememberSaveable { mutableStateOf(false) }

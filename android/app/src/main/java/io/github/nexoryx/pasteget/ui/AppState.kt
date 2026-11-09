@@ -9,6 +9,8 @@ import uniffi.pasteget_ffi.PairedComputer
 data class AppState(
     val status: AppStatus,
     val computers: List<PairedComputer>,
+    /** `false` until [computers] is read from the Rust client: empty then means "not known yet". */
+    val computersLoaded: Boolean = true,
     val connected: Set<String>,
     /** The result of the last thing the user did, or what just happened: a Snackbar. */
     val message: String?,
