@@ -57,15 +57,16 @@ class PairingSheetTest {
 
     @Test
     fun pairOnlyWhenTheUserSaysSo() {
-        var confirmed = 0
+        val confirmed = mutableListOf<PairingState.Confirm>()
         var cancelled = 0
-        show(AppFixtures.state().copy(pairing = confirm), AppActions(onConfirmPairing = { confirmed++ }, onCancelPairing = { cancelled++ }))
+        show(AppFixtures.state().copy(pairing = confirm), AppActions(onConfirmPairing = { confirmed += it }, onCancelPairing = { cancelled++ }))
 
         compose.onNodeWithText(app.getString(R.string.cancel)).performScrollTo().performClick()
-        assertEquals(0 to 1, confirmed to cancelled)
+        assertEquals(0 to 1, confirmed.size to cancelled)
         compose.onNodeWithText(app.getString(R.string.pair_confirm_button)).performScrollTo().performClick()
         compose.waitForIdle()
-        assertEquals(1 to 1, confirmed to cancelled)
+        // The yes names the code it was for.
+        assertEquals(listOf(confirm) to 1, confirmed to cancelled)
     }
 
     @Test

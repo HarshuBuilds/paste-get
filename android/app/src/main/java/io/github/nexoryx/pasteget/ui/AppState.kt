@@ -36,7 +36,8 @@ data class ThisPhone(val name: String, val deviceId: String)
 class AppActions(
     /** Scans a pairing code. */
     val onPair: () -> Unit = {},
-    val onConfirmPairing: () -> Unit = {},
+    /** Yes to the code the sheet showed. */
+    val onConfirmPairing: (PairingState.Confirm) -> Unit = {},
     /** No to the code shown, or closing the pairing error. */
     val onCancelPairing: () -> Unit = {},
     val onSendClipboard: () -> Unit = {},

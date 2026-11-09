@@ -39,7 +39,7 @@ The full protocol is in [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 | Someone on the network pretending to be your PC or phone | Their key isn't the pinned one: the handshake fails |
 | Pairing with the wrong PC | The QR code carries the PC's device ID; TLS fails for any other key |
 | A device pairing without seeing your screen | It needs the one-time secret from the QR code |
-| A web page or message opening a pairing link (`pasteget://pair?…`) on the phone | The phone never pairs on its own: it shows the name and addresses the link gives (unchecked, without characters that could disguise them) and pairs only when you tap *Pair* under "Only continue if this code is on your computer's screen right now" |
+| A web page or message opening a pairing link (`pasteget://pair?…`) on the phone | The phone never pairs on its own: it shows the name and addresses the link gives (unchecked, without characters that could disguise them) and pairs only when you tap *Pair* under "Only continue if this code is on your computer's screen right now". Another link arriving while that question is shown is ignored, so it can't take the place of the code you are reading |
 | Another user of the same computer | The local control channel is a socket in a directory only you can open (Linux), or a named pipe that rejects remote clients and includes your user name (Windows) |
 | Passwords ending up in logs | Logs contain sizes, MIME types and hashes only, never clipboard contents |
 | Passwords lingering | Clips marked sensitive (password managers) skip clipboard history on Windows and the tray's *Recent* list |

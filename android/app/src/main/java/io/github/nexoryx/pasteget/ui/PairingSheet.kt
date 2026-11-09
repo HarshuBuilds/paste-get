@@ -24,6 +24,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -53,7 +54,12 @@ import uniffi.pasteget_ffi.PairedComputer
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PairingFlow(pairing: PairingState, computers: List<PairedComputer>, onConfirm: () -> Unit, onCancel: () -> Unit) {
+fun PairingFlow(
+    pairing: PairingState,
+    computers: List<PairedComputer>,
+    onConfirm: (PairingState.Confirm) -> Unit,
+    onCancel: () -> Unit,
+) {
     // Paired: from Busy back to Idle (a failure goes to Failed). Felt as well as read.
     val haptics = LocalHapticFeedback.current
     var wasBusy by remember { mutableStateOf(false) }
@@ -63,12 +69,15 @@ fun PairingFlow(pairing: PairingState, computers: List<PairedComputer>, onConfir
     }
     when (pairing) {
         PairingState.Idle -> {}
-        is PairingState.Confirm -> PairingSheet(
-            confirm = pairing,
-            known = computers.firstOrNull { it.deviceId == pairing.invite.deviceId },
-            onConfirm = onConfirm,
-            onCancel = onCancel,
-        )
+        // A sheet of its own for each code: a tap meant for one never lands on another.
+        is PairingState.Confirm -> key(pairing) {
+            PairingSheet(
+                confirm = pairing,
+                known = computers.firstOrNull { it.deviceId == pairing.invite.deviceId },
+                onConfirm = { onConfirm(pairing) },
+                onCancel = onCancel,
+            )
+        }
         PairingState.Busy, is PairingState.Failed -> {
             // Pairing can't be stopped halfway: the sheet stays until it's done.
             val busy by rememberUpdatedState(pairing == PairingState.Busy)

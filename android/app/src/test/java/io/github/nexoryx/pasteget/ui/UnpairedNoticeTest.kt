@@ -67,7 +67,7 @@ class UnpairedNoticeTest {
         val model = model(FakeComputers(emptyList()))
 
         model.offerPairing("pasteget://pair?v=0&id=a1&s=AB&a=192.168.1.20%3A47290&n=HP-AIO")
-        model.confirmPairing()
+        model.confirmPairing(model.pairing as PairingState.Confirm)
 
         assertNull(model.unpaired)
     }

@@ -227,10 +227,11 @@ class AppViewModel(
 
     /**
      * A scanned code or a `pasteget://` link, which any web page or message can open: shown for
-     * the user to confirm ([confirmPairing]), never paired right away.
+     * the user to confirm ([confirmPairing]), never paired right away. While a code waits for the
+     * user, another one is ignored: it could take its place just as they tap Pair.
      */
     fun offerPairing(scanned: String) {
-        if (pairing == PairingState.Busy) return
+        if (pairing == PairingState.Busy || pairing is PairingState.Confirm) return
         val code = PairingCode.extract(scanned)
         if (code == null) {
             message = app.getString(R.string.not_a_pairing_code)
@@ -240,9 +241,10 @@ class AppViewModel(
         pairing = if (invite == null) PairingState.Failed(unreadableCode()) else PairingState.Confirm(code, invite)
     }
 
-    /** The user said yes to the code shown. */
-    fun confirmPairing() {
+    /** The user said yes to [shown]: it pairs only if that is still the code waiting. */
+    fun confirmPairing(shown: PairingState.Confirm) {
         val confirmed = pairing as? PairingState.Confirm ?: return
+        if (confirmed !== shown) return
         pairing = PairingState.Busy
         message = null
         viewModelScope.launch {
