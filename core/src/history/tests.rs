@@ -1137,7 +1137,8 @@ fn search_logs_never_hold_the_query() {
 }
 
 /// `cargo test -p pasteget-core --features history --release -- --ignored --nocapture
-/// search_speed`. The design's target is under 30 ms (p95) at 20,000 items on the POCO.
+/// search_speed`. The design's target is under 30 ms (p95) at 20,000 items on the POCO. Also
+/// prints what recording a clip costs with that many items, retention included.
 #[test]
 #[ignore]
 fn search_speed_at_20000_items() {
@@ -1149,15 +1150,44 @@ fn search_speed_at_20000_items() {
         "bonjour",
         "facture",
         "rendez-vous",
+        "meeting",
+        "invoice",
+        "tomorrow",
+        "adresse",
     ];
+    // Texts like the design's: about 250 bytes on average, one in 100 filling its 4 KiB head,
+    // one in 10 a link alone.
+    let mut seed: u64 = 7;
+    let mut next = move |n: usize| {
+        seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        (seed >> 33) as usize % n
+    };
+    let mut record_times = Vec::new();
     for i in 0..20_000 {
         test.advance(1);
-        test.copy(&format!(
-            "{} {} item {i} https://example.com/{i}",
-            words[i % words.len()],
-            words[(i / 7) % words.len()]
-        ));
+        let text = if next(10) == 0 {
+            format!("https://example.com/{i}/{}", words[next(words.len())])
+        } else {
+            let len = if next(100) == 0 {
+                HEAD_LEN + 1000
+            } else {
+                40 + next(330)
+            };
+            let mut text = format!("item {i} ");
+            while text.len() < len {
+                text.push_str(words[next(words.len())]);
+                text.push(' ');
+            }
+            text
+        };
+        let start = std::time::Instant::now();
+        test.copy(&text);
+        if i >= 19_000 {
+            record_times.push(start.elapsed());
+        }
     }
+    record_times.sort();
+    println!("record: p95 {:?}", record_times[950]);
     for text in [
         "verif",
         "hub page",

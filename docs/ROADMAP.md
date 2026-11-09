@@ -147,7 +147,9 @@ History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart ac
   - [x] Pages and search: any part of a word, accents ignored both ways (folding checked
     against SQLite's own), words under 3 characters, `site:`/`from:`/`type:`/`is:pinned`/
     `after:`/`before:`, filters for the chips, keyset pages, UTF-16 highlights. 20,000 items:
-    13 ms p95 at worst on a PC (`search_speed_at_20000_items`); still to measure on the POCO
+    texts of about 250 bytes, 32 ms p95 on a PC for a word found in nearly every item, 15 ms or
+    less otherwise, and 0.6 ms to record a clip (`search_speed_at_20000_items`); still to
+    measure on the POCO, where the target is 30 ms
   - [x] Images: originals as files (written whole or not at all, swept at open), thumbnails
     made by the app and checked (JPEG, PNG or WebP, 64 KiB at most), phone screenshots as
     MediaStore references that follow gallery deletions
