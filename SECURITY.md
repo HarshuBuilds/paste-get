@@ -74,8 +74,8 @@ running `adb`: that is how it starts its shell helper. Consequences:
 The history store is in the core (`core/src/history`) but no app turns it on yet. When one does:
 - It stays on the device, in a folder only paste-get can open (on the phone, one that is never
   backed up). It is never sent anywhere.
-- **Never kept:** clips marked sensitive (password managers), 2FA codes, and anything that looks
-  like a private key, a 2FA seed (`otpauth://`), an API token, a card number or a generated
+- **Never kept:** clips marked sensitive (password managers), 2FA codes (and copies of their
+  digits made just before or in the 15 minutes after), and anything that looks like a private key, a 2FA seed (`otpauth://`), an API token, a card number or a generated
   password (`core/src/detect.rs`). Only how many were kept out is counted. A number of 4 to 8
   digits alone is kept for 15 minutes: then it is hidden, and deleted like below the next time
   the history applies its limits (after the next clip, or when the app's timer for it fires).

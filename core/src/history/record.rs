@@ -45,6 +45,9 @@ impl HistoryStore {
             Decision::KeptOut(reason) => {
                 self.count_kept_out(reason, now)?;
                 tracing::debug!(?reason, size = clip.data.len(), "history: kept a clip out");
+                if let Kind::OneTimeCode { .. } = clip.kind {
+                    self.forget_copies_of_code(clip)?;
+                }
                 return Ok(Recorded::KeptOut(reason));
             }
             Decision::Ignore => return Ok(Recorded::Ignored),
@@ -237,10 +240,12 @@ impl HistoryStore {
             // after a pause.
             self.recent_codes
                 .retain(|(_, at)| now - at < BARE_CODE_TTL_MS && *at <= now);
-            if self.recent_codes.len() == RECENT_CODES {
-                self.recent_codes.remove(0);
+            if let Some(code) = clip.as_text().and_then(code_digits) {
+                if self.recent_codes.len() == RECENT_CODES {
+                    self.recent_codes.remove(0);
+                }
+                self.recent_codes.push((code, now));
             }
-            self.recent_codes.push((clip.sha256(), now));
             return Decision::KeptOut(Reason::OneTimeCode);
         }
         if self.policy.paused_until.is_some_and(|until| now < until) {
@@ -274,11 +279,11 @@ impl HistoryStore {
             if !self.policy.keep_bare_codes {
                 return Decision::KeptOut(Reason::BareCode);
             }
-            let sha256 = clip.sha256();
+            let digits = code_digits(text);
             let just_seen = self
                 .recent_codes
                 .iter()
-                .any(|(code, at)| *code == sha256 && now - at < BARE_CODE_TTL_MS);
+                .any(|(code, at)| Some(*code) == digits && now - at < BARE_CODE_TTL_MS);
             if just_seen {
                 return Decision::KeptOut(Reason::OneTimeCode);
             }
@@ -287,6 +292,39 @@ impl HistoryStore {
             format,
             text: Some(text),
         }
+    }
+
+    /// Deletes the numbers kept a short while that hold this one-time code's digits: copied by
+    /// hand before its notification arrived. Pinned ones stay.
+    fn forget_copies_of_code(&mut self, clip: &Clip) -> Result<(), Error> {
+        let Some(code) = clip.as_text().and_then(code_digits) else {
+            return Ok(());
+        };
+        let copies: Vec<ItemId> = {
+            let mut statement = self.conn.prepare(
+                "SELECT id, text_head FROM item
+                 WHERE expires_at IS NOT NULL AND pinned_at IS NULL AND text_head IS NOT NULL",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
+            let mut copies = Vec::new();
+            for row in rows {
+                let (id, text) = row?;
+                if detect::bare_code(&text) && code_digits(&text) == Some(code) {
+                    copies.push(ItemId(id));
+                }
+            }
+            copies
+        };
+        if !copies.is_empty() {
+            self.delete(&copies)?;
+            tracing::debug!(
+                count = copies.len(),
+                "history: deleted copies of a one-time code"
+            );
+        }
+        Ok(())
     }
 
     fn count_kept_out(&mut self, reason: Reason, now: i64) -> Result<(), Error> {
@@ -371,6 +409,18 @@ impl<'a> NewItem<'a> {
             thumb,
         }
     }
+}
+
+/// The SHA-256 of the digits of a code, so "482 913", "482-913" and "482913\n" are one code.
+/// `None` without digits.
+fn code_digits(text: &str) -> Option<[u8; 32]> {
+    let digits: String = text.chars().filter(char::is_ascii_digit).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    let mut hash = [0; 32];
+    hash.copy_from_slice(ring::digest::digest(&ring::digest::SHA256, digits.as_bytes()).as_ref());
+    Some(hash)
 }
 
 /// The row of a device, added without a name if new.

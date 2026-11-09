@@ -505,6 +505,39 @@ fn a_log_another_connection_holds_is_emptied_later() {
 }
 
 #[test]
+fn copies_of_a_one_time_code_go_however_they_are_written() {
+    let mut test = Test::new();
+    // Copied by hand before its notification arrived: deleted when it does, unless pinned.
+    let early = test.added("482 913");
+    let pinned = test.added("482-913");
+    test.store.pin(pinned, true).unwrap();
+    let other = test.added("482914");
+    let code = Clip::one_time_code("482913", "Messages", PC);
+    assert_eq!(
+        test.store
+            .record(&code, &Context::received_from(PC))
+            .unwrap(),
+        Recorded::KeptOut(Reason::OneTimeCode)
+    );
+    assert!(!test.exists(early));
+    assert!(test.exists(pinned) && test.exists(other));
+
+    // Copied after it, the same digits are refused, however they are spaced.
+    for copy in ["482913", "482 913", " 482913\n"] {
+        assert_eq!(
+            test.copy(copy),
+            Recorded::KeptOut(Reason::OneTimeCode),
+            "{copy:?}"
+        );
+    }
+    // Not a number in a sentence.
+    assert_ne!(
+        test.copy("the code 482913 was used"),
+        Recorded::KeptOut(Reason::OneTimeCode)
+    );
+}
+
+#[test]
 fn a_one_time_code_is_refused_again_for_15_minutes_only() {
     let mut test = Test::new();
     let code = Clip::one_time_code("482913", "Messages", PC);

@@ -135,7 +135,7 @@ pub struct HistoryStore {
     this_device: DeviceId,
     policy: Policy,
     clock: Box<dyn Fn() -> i64 + Send>,
-    /// One-time codes seen lately, as (SHA-256, unix ms). In memory only.
+    /// One-time codes seen lately, as (SHA-256 of their digits, unix ms). In memory only.
     recent_codes: Vec<([u8; 32], i64)>,
     /// The write-ahead log still holds deleted rows: another connection kept it from being
     /// emptied.

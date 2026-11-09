@@ -136,7 +136,8 @@ Each line is a claim to check. "→" points at where it's enforced.
     can't panic. The shell grants are fixed commands for this app's own listener only.
     → `core/src/detect.rs`, `core/src/clip.rs`, `OneTimeCodes.kt`, `ShellCommands.codeAccessGrants`
 30. The clipboard history writes nothing about a clip that is sensitive, a one-time code (or a
-    copy of one seen in the last 15 minutes), or matched by `detect::looks_secret`, except a
+    copy of its digits, however spaced, in the next 15 minutes; a copy made just before is
+    deleted when the code arrives), or matched by `detect::looks_secret`, except a
     count per reason and day; `HistoryStore::record` is the only way in. Every byte kept is
     checked (texts over 1 MiB keep their first 4 KiB only). Errors keep SQLite's result code,
     never its message, which can quote a search. → `core/src/history/record.rs`,
