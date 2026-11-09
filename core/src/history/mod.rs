@@ -19,6 +19,7 @@ mod images;
 mod items;
 mod query;
 mod record;
+mod retention;
 mod schema;
 mod search;
 mod types;
@@ -34,6 +35,7 @@ pub use images::{MAX_ORIGINAL_LEN, MAX_THUMBNAIL_LEN, ORIGINALS_DIR, PendingThum
 pub use items::PREVIEW_CHARS;
 pub use query::{MAX_QUERY_CHARS, MAX_TERMS};
 pub use record::{BARE_CODE_TTL_MS, HEAD_LEN, MAX_TEXT_LEN};
+pub use retention::{KEPT_OUT_DAYS, Stats, Swept};
 pub use schema::SCHEMA_VERSION;
 pub use search::{Cursor, Filter, MAX_PAGE_SIZE, PAGE_SIZE, Page, Query, SHORT_SEARCH_ITEMS};
 pub use types::{Context, Device, Format, Item, ItemId, Kept, Reason, Recorded, Source, Thumb};
@@ -42,6 +44,11 @@ pub use types::{Context, Device, Format, Item, ItemId, Kept, Reason, Recorded, S
 pub const DATABASE_FILE: &str = "history.db";
 
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// The budget of originals on a phone, which also has the gallery's copy of its screenshots.
+pub const ORIGINALS_BUDGET_PHONE: u64 = 150 * 1024 * 1024;
+/// The budget of originals on a PC, which has no other copy of the phone's screenshots.
+pub const ORIGINALS_BUDGET_PC: u64 = 500 * 1024 * 1024;
 
 /// What can go wrong. Never holds clip contents or search text: SQLite's own messages can quote
 /// them, so only its error code is kept.
@@ -76,7 +83,8 @@ impl From<rusqlite::Error> for Error {
     }
 }
 
-/// The user's settings, as far as the history needs them.
+/// The user's settings, as far as the history needs them. The default is the phone's: three
+/// months, 20,000 items, 150 MB of originals for 7 days.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
     /// Until this time (unix ms), every clip is kept out: "Pause history".
@@ -86,6 +94,19 @@ pub struct Policy {
     /// Keep a thumbnail of each phone screenshot, so it stays in the history after it is
     /// deleted from the gallery. Off: screenshots follow the gallery.
     pub keep_screenshot_thumbnails: bool,
+    /// Unpinned items are deleted this long after they were last copied. `None`: never.
+    pub keep_for_ms: Option<i64>,
+    /// At most this many unpinned items; the oldest go first.
+    pub max_items: u32,
+    /// A guard on the database's size: past it, the oldest unpinned images go, then texts.
+    pub max_database_bytes: u64,
+    /// What originals may take: [`ORIGINALS_BUDGET_PHONE`] or [`ORIGINALS_BUDGET_PC`]. Past
+    /// it, the oldest unpinned originals go, and their thumbnails stay.
+    pub originals_budget: u64,
+    /// Originals are kept this long after their last copy, then only their thumbnail.
+    pub originals_for_ms: i64,
+    /// The disk has under 1 GiB free, as the app sees it: the originals budget is halved.
+    pub low_on_space: bool,
 }
 
 impl Default for Policy {
@@ -94,6 +115,12 @@ impl Default for Policy {
             paused_until: None,
             keep_bare_codes: true,
             keep_screenshot_thumbnails: false,
+            keep_for_ms: Some(90 * DAY_MS),
+            max_items: 20_000,
+            max_database_bytes: 200 * 1024 * 1024,
+            originals_budget: ORIGINALS_BUDGET_PHONE,
+            originals_for_ms: 7 * DAY_MS,
+            low_on_space: false,
         }
     }
 }

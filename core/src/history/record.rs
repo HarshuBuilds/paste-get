@@ -143,7 +143,6 @@ impl HistoryStore {
                 Recorded::Added(ItemId(id))
             }
         };
-        delete_expired(&tx, now)?;
         tx.commit()?;
         written.0 = None;
         tracing::debug!(
@@ -152,6 +151,10 @@ impl HistoryStore {
             size = clip.data.len(),
             "history: recorded"
         );
+        // Expired items go now. The clip is kept either way: a failure here is only logged.
+        if let Err(error) = self.after_record() {
+            tracing::warn!(%error, "history: retention failed");
+        }
         Ok(recorded)
     }
 
@@ -375,13 +378,5 @@ fn device_row(conn: &Connection, id: &DeviceId) -> Result<i64, Error> {
         "SELECT id FROM device WHERE key = ?1",
         [&id.as_bytes()[..]],
         |row| row.get(0),
-    )?)
-}
-
-/// Deletes unpinned items past their expiry.
-pub(super) fn delete_expired(conn: &Connection, now: i64) -> Result<usize, Error> {
-    Ok(conn.execute(
-        "DELETE FROM item WHERE expires_at <= ?1 AND pinned_at IS NULL",
-        [now],
     )?)
 }

@@ -106,7 +106,7 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
 - [x] `SECURITY.md` draft: threat model, known gaps, private reporting
 - [ ] README demo GIF: needs the real devices; how to record it is in `RELEASING.md`
 - [ ] Human review of crypto and protocol code: `docs/REVIEW.md` lists the files and the
-  30 properties to check
+  31 properties to check
 - [x] Pairing from the tray: a *Pair a phone* window with the QR code, opened by itself on the
   first start, so no terminal is needed
 - [x] PC side can revoke a paired phone: `pasteget forget <name>`, or the tray menu → the phone
@@ -151,7 +151,10 @@ History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart ac
   - [x] Images: originals as files (written whole or not at all, swept at open), thumbnails
     made by the app and checked (JPEG, PNG or WebP, 64 KiB at most), phone screenshots as
     MediaStore references that follow gallery deletions
-  - [ ] Retention, delete and stats
+  - [x] Retention, delete and stats: expiry and age, originals after 7 days or past their
+    budget, the item count, then images before texts when the database is full; pins never go.
+    A deleted clip is gone from the database, its WAL and the index; space goes back to the
+    disk. Measured on 1,000 texts: the trigram index is 3.2 times the text, 1.4 KB per item
   - [ ] Phone: recording through `ffi`, then the Android screens
   - [ ] PC: history in the daemon, `pasteget history`, the tray's history window
 Desktop identity key in the OS keystore when one is available (M2 stores it in a user-only file,

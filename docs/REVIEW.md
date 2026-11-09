@@ -21,7 +21,8 @@ make trust decisions. In order of risk:
 | `core/src/framing.rs` | Length-prefixed frames, 1 MiB limit | ~190 |
 | `core/src/echo.rs` | Echo-loop guard (not a security boundary, but it hashes untrusted data) | ~120 |
 | `core/src/detect.rs` | Finds a link to open, or a one-time code, in untrusted text; sorts clips into shelves and spots secrets for the history | ~1,200, plus tests |
-| `core/src/history/record.rs` | The one place that decides what the clipboard history keeps | ~300 |
+| `core/src/history/record.rs` | The one place that decides what the clipboard history keeps | ~380 |
+| `core/src/history/retention.rs` | Deleting from the history, and keeping it small | ~360 |
 | `desktop/src/daemon.rs` | `handle_incoming`: known device → session, unknown → pairing only while a window is open | part |
 | `desktop/src/control.rs` | Local control channel: Unix socket in a 0700 directory, Windows named pipe | ~550 |
 | `desktop/src/config.rs` | Key file permissions (0600), profile names (path traversal) | part |
@@ -143,6 +144,10 @@ Each line is a claim to check. "→" points at where it's enforced.
     and `logs_never_hold_contents`. A search is parsed in Rust and reaches FTS5 only as quoted
     phrases, so no query can fail or be read as FTS5 syntax. → `core/src/history/query.rs`
     (fuzz target `history_query`)
+31. Deleting from the history leaves nothing of the clip: rows, body, thumbnail and search
+    entries go in one transaction (`secure_delete`, FTS5 secure-delete), the original file
+    after the commit, then the free pages and the WAL are emptied. Retention never deletes a
+    pinned item. → `core/src/history/retention.rs`, test `a_deleted_clip_leaves_nothing_behind`
 
 ## Known gaps (not bugs to report, but worth an opinion)
 

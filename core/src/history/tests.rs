@@ -1274,3 +1274,468 @@ fn an_original_is_removed_if_its_row_is_not_committed() {
     );
     assert!(test.originals().is_empty());
 }
+
+impl Test {
+    fn exists(&self, id: ItemId) -> bool {
+        self.store.item(id).unwrap().is_some()
+    }
+
+    fn image_with_thumbnail(&mut self, seed: u8, len: usize) -> ItemId {
+        let Recorded::Added(id) = self.received_image(png(seed, len)) else {
+            panic!("not added");
+        };
+        let mut thumbnail = JPEG_THUMB.to_vec();
+        thumbnail.resize(4000, seed);
+        self.store.set_thumbnail(id, &thumbnail, 100, 100).unwrap();
+        id
+    }
+
+    fn vocabulary(&self, terms: &[&str]) -> Vec<String> {
+        self.store
+            .conn
+            .execute_batch(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS temp.vocabulary
+                 USING fts5vocab(main, item_fts, 'row')",
+            )
+            .unwrap();
+        let mut statement = self
+            .store
+            .conn
+            .prepare("SELECT term FROM temp.vocabulary")
+            .unwrap();
+        let all: Vec<String> = statement
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        all.into_iter()
+            .filter(|term| terms.contains(&term.as_str()))
+            .collect()
+    }
+}
+
+#[test]
+fn pinned_items_never_expire_nor_age_out() {
+    let mut test = Test::new();
+    let code = test.added("482913");
+    let old = test.added("an old note");
+    let plain = test.added("another old note");
+    test.store.pin(code, true).unwrap();
+    test.store.pin(old, true).unwrap();
+    assert_eq!(test.item(code).pinned_at, Some(T0));
+
+    test.advance(91 * DAY_MS);
+    test.added("today");
+
+    assert!(test.exists(code) && test.exists(old));
+    assert!(!test.exists(plain));
+    // Unpinned, it goes at the next pass.
+    test.store.pin(old, false).unwrap();
+    assert_eq!(test.item(old).pinned_at, None);
+    test.store.retain().unwrap();
+    assert!(!test.exists(old));
+}
+
+#[test]
+fn items_last_copied_long_ago_go_unless_kept_forever() {
+    let mut test = Test::new();
+    let old = test.added("old");
+    test.advance(89 * DAY_MS);
+    test.copy("old");
+    test.advance(2 * DAY_MS);
+    test.added("new");
+    // Copied again 2 days ago: still there.
+    assert!(test.exists(old));
+
+    test.store.set_policy(Policy {
+        keep_for_ms: None,
+        ..Policy::default()
+    });
+    test.advance(1000 * DAY_MS);
+    test.store.retain().unwrap();
+    assert!(test.exists(old));
+}
+
+#[test]
+fn the_oldest_items_go_past_the_count() {
+    let mut test = Test::with_policy(Policy {
+        max_items: 3,
+        ..Policy::default()
+    });
+    let pinned = test.added("pinned");
+    test.store.pin(pinned, true).unwrap();
+    let ids: Vec<ItemId> = (0..5)
+        .map(|i| {
+            test.advance(1000);
+            test.added(&format!("item {i}"))
+        })
+        .collect();
+    assert!(test.exists(pinned));
+    assert!(!test.exists(ids[0]) && !test.exists(ids[1]));
+    assert!(ids[2..].iter().all(|id| test.exists(*id)));
+}
+
+#[test]
+fn originals_age_into_thumbnails_unless_pinned_or_waiting() {
+    let mut test = Test::new();
+    let old = test.image_with_thumbnail(1, 1000);
+    let pinned = test.image_with_thumbnail(2, 1000);
+    test.store.pin(pinned, true).unwrap();
+    // Its thumbnail isn't made yet: the original must stay until it is.
+    let Recorded::Added(waiting) = test.received_image(png(3, 1000)) else {
+        panic!("not added");
+    };
+    test.advance(6 * DAY_MS);
+    let recent = test.image_with_thumbnail(4, 1000);
+    let old_path = test.store.original_path(old).unwrap().unwrap();
+
+    test.advance(DAY_MS + 1);
+    let swept = test.store.retain().unwrap();
+
+    assert_eq!(swept.originals_removed, 1);
+    let item = test.item(old);
+    assert_eq!(
+        (item.kept, item.thumb),
+        (Kept::OriginalEvicted, Thumb::Done)
+    );
+    assert!(!old_path.exists());
+    assert_eq!(test.store.original_path(old).unwrap(), None);
+    assert!(test.store.thumbnail(old).unwrap().is_some());
+    for id in [pinned, waiting, recent] {
+        assert_eq!(test.item(id).kept, Kept::Original);
+    }
+    assert_eq!(test.originals().len(), 3);
+}
+
+#[test]
+fn the_oldest_originals_go_past_the_budget() {
+    let mut test = Test::with_policy(Policy {
+        originals_budget: 2500,
+        ..Policy::default()
+    });
+    let ids: Vec<ItemId> = (0..3)
+        .map(|i| {
+            test.advance(1000);
+            test.image_with_thumbnail(i, 1000)
+        })
+        .collect();
+    // Three originals of 1000 bytes: the oldest goes at the next pass.
+    test.store.retain().unwrap();
+    let kept: Vec<Kept> = ids.iter().map(|id| test.item(*id).kept).collect();
+    assert_eq!(
+        kept,
+        [Kept::OriginalEvicted, Kept::Original, Kept::Original]
+    );
+    assert_eq!(test.store.stats().unwrap().originals_bytes, 2000);
+
+    // Little space left on the disk: half the budget.
+    test.store.set_policy(Policy {
+        originals_budget: 2500,
+        low_on_space: true,
+        ..Policy::default()
+    });
+    test.store.retain().unwrap();
+    assert_eq!(test.item(ids[1]).kept, Kept::OriginalEvicted);
+    assert_eq!(test.item(ids[2]).kept, Kept::Original);
+    assert_eq!(test.store.stats().unwrap().originals_budget, 1250);
+}
+
+#[test]
+fn a_full_database_drops_images_before_texts() {
+    let mut test = Test::new();
+    let text = test.added("an old text");
+    test.advance(1000);
+    let images: Vec<ItemId> = (0..20).map(|i| test.image_with_thumbnail(i, 200)).collect();
+    test.advance(1000);
+    let newer_text = test.added("a newer text");
+
+    let used = live_bytes(&test.store);
+    test.store.set_policy(Policy {
+        max_database_bytes: used - 30_000,
+        ..Policy::default()
+    });
+    test.store.retain().unwrap();
+
+    // The oldest images went, though older than all of them is a text, which stays.
+    assert!(test.exists(text) && test.exists(newer_text));
+    assert!(!test.exists(images[0]));
+    assert!(test.exists(images[19]));
+    assert!(live_bytes(&test.store) <= used - 30_000);
+
+    // With no image left, texts go too, oldest first.
+    test.store.set_policy(Policy {
+        max_database_bytes: 1,
+        ..Policy::default()
+    });
+    test.store.retain().unwrap();
+    assert_eq!(test.store.stats().unwrap().items, 0);
+}
+
+fn live_bytes(store: &HistoryStore) -> u64 {
+    let bytes: i64 = store
+        .conn
+        .query_row(
+            "SELECT (page_count - freelist_count) * page_size
+             FROM pragma_page_count(), pragma_freelist_count(), pragma_page_size()",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    bytes as u64
+}
+
+#[test]
+fn a_deleted_clip_leaves_nothing_behind() {
+    let mut test = Test::new();
+    let sentinel = "kqzv-DELETED-SENTINEL-wj7x";
+    let short = test.added(&format!("{sentinel} short"));
+    let long = test.added(&format!("{sentinel} {}", "long text ".repeat(1000)));
+    let image = test.image_with_thumbnail(9, 3000);
+    let image_path = test.store.original_path(image).unwrap().unwrap();
+    let kept = test.added("this one stays");
+    for i in 0..50 {
+        test.added(&format!("filler {i}"));
+    }
+    assert_eq!(test.vocabulary(&["kqz", "qzv", "wj7"]).len(), 3);
+
+    assert_eq!(test.store.delete(&[short, long, image]).unwrap(), 3);
+
+    assert!(!test.exists(short) && !test.exists(long) && !test.exists(image));
+    assert!(test.exists(kept));
+    assert!(test.vocabulary(&["kqz", "qzv", "wj7"]).is_empty());
+    assert!(!image_path.exists());
+    assert!(test.search("DELETED").is_empty());
+    let count = |table: &str| -> i64 {
+        test.store
+            .conn
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    };
+    assert_eq!((count("body"), count("thumb")), (0, 0));
+    // Not in the database file, its WAL (emptied), or any other file of the history.
+    let wal = test.dir.path().join(format!("{DATABASE_FILE}-wal"));
+    assert_eq!(std::fs::metadata(&wal).map_or(0, |m| m.len()), 0);
+    let mut bytes = Vec::new();
+    for file in walk(test.dir.path()) {
+        bytes.extend(std::fs::read(file).unwrap());
+    }
+    assert!(!contains(&bytes, sentinel));
+    assert!(!contains(&bytes, "DELETED-SENTINEL"));
+}
+
+#[test]
+fn clearing_a_time_span_keeps_pins_unless_asked() {
+    let mut test = Test::new();
+    let old = test.added("yesterday");
+    test.advance(DAY_MS);
+    let pinned = test.added("pinned today");
+    test.store.pin(pinned, true).unwrap();
+    test.advance(1000);
+    let recent = test.added("just now");
+
+    // The last hour.
+    let hour = test.now() - 3_600_000;
+    assert_eq!(test.store.clear(hour..i64::MAX, false).unwrap(), 1);
+    assert!(!test.exists(recent));
+    assert!(test.exists(pinned) && test.exists(old));
+    // Everything but pins, then everything.
+    assert_eq!(test.store.clear(i64::MIN..i64::MAX, false).unwrap(), 1);
+    assert!(test.exists(pinned));
+    assert_eq!(test.store.clear(i64::MIN..i64::MAX, true).unwrap(), 1);
+    assert_eq!(test.store.stats().unwrap().items, 0);
+}
+
+#[test]
+fn what_came_from_a_device_can_go_with_it() {
+    let mut test = Test::new();
+    let mine = test.added("mine");
+    let Recorded::Added(from_pc) = test
+        .store
+        .record(&Clip::text("from the PC", PC), &Context::received_from(PC))
+        .unwrap()
+    else {
+        panic!("not added");
+    };
+    let Recorded::Added(relayed) = test
+        .store
+        .record(
+            &Clip::text("from the laptop", LAPTOP),
+            &Context::received_from(PC),
+        )
+        .unwrap()
+    else {
+        panic!("not added");
+    };
+    assert_eq!(test.store.delete_from_device(LAPTOP).unwrap(), 1);
+    assert!(!test.exists(relayed) && test.exists(from_pc));
+    assert_eq!(test.store.delete_from_device(PC).unwrap(), 1);
+    assert!(test.exists(mine));
+    assert_eq!(test.store.delete_from_device(PC).unwrap(), 0);
+}
+
+#[test]
+fn freed_space_goes_back_to_the_file_system() {
+    let mut test = Test::new();
+    let ids: Vec<ItemId> = (0..300)
+        .map(|i| test.added(&format!("{i} {}", "text to fill pages ".repeat(50))))
+        .collect();
+    test.store.sweep().unwrap();
+    let pages = |test: &Test| pragma(&test.store, "page_count");
+    let before = pages(&test);
+
+    test.store.delete(&ids).unwrap();
+
+    assert!(
+        pages(&test) < before / 4,
+        "{} pages of {before}",
+        pages(&test)
+    );
+    assert_eq!(pragma(&test.store, "freelist_count"), 0);
+}
+
+#[test]
+fn the_daily_sweep_drops_old_kept_out_numbers() {
+    let mut test = Test::new();
+    test.copy("x7#Kp2!vQz9&mR4t");
+    test.advance((KEPT_OUT_DAYS + 1) * DAY_MS);
+    test.copy("x7#Kp2!vQz9&mR4t");
+    test.added("a clip: the sweep is due");
+    assert_eq!(test.store.kept_out(T0).unwrap(), [(Reason::LooksSecret, 1)]);
+    let last: i64 = test
+        .store
+        .conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'last_sweep_at'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(last, test.now());
+}
+
+#[test]
+fn stats_say_what_the_history_holds() {
+    let mut test = Test::new();
+    test.added("one");
+    let pinned = test.added("two");
+    test.store.pin(pinned, true).unwrap();
+    test.image_with_thumbnail(1, 1234);
+    test.screenshot(png(2, 999), 7);
+
+    let stats = test.store.stats().unwrap();
+    assert_eq!(
+        (
+            stats.items,
+            stats.pinned,
+            stats.images,
+            stats.originals_bytes
+        ),
+        (4, 1, 2, 1234)
+    );
+    assert_eq!(stats.originals_budget, ORIGINALS_BUDGET_PHONE);
+    assert!(stats.database_bytes > 0);
+}
+
+/// 1,000 texts and 200 thumbnails: what each costs, and how big the trigram index is next to
+/// the text it indexes. Past 3.5 times, switch to the unicode61 tokenizer with prefix queries
+/// (`docs/AUDIT.md`, section 10).
+#[test]
+fn size_per_item_and_trigram_ratio() {
+    let mut test = Test::with_policy(Policy {
+        keep_for_ms: None,
+        ..Policy::default()
+    });
+    let words = [
+        "bonjour",
+        "rendez-vous",
+        "demain",
+        "facture",
+        "vérification",
+        "adresse",
+        "colis",
+        "github",
+        "paste",
+        "clipboard",
+        "réunion",
+        "téléphone",
+        "merci",
+        "envoyer",
+        "lien",
+        "photo",
+        "maison",
+        "travail",
+        "projet",
+        "budget",
+        "voiture",
+        "école",
+        "médecin",
+        "the",
+        "meeting",
+        "invoice",
+        "tomorrow",
+        "password",
+        "delivery",
+        "address",
+        "release",
+    ];
+    // A small linear congruential generator: the same texts on every run.
+    let mut seed: u64 = 42;
+    let mut next = move |n: usize| {
+        seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        (seed >> 33) as usize % n
+    };
+    for i in 0..1000 {
+        test.advance(1);
+        let mut text = String::new();
+        let len = 150 + next(200);
+        while text.len() < len {
+            text.push_str(words[next(words.len())]);
+            text.push(' ');
+            if next(5) == 0 {
+                text.push_str(&format!("{} ", next(100_000)));
+            }
+        }
+        text.push_str(&format!("#{i}"));
+        test.added(&text);
+    }
+    for i in 0..200u32 {
+        test.advance(1);
+        let mut data = png(0, 600);
+        data.extend(i.to_le_bytes());
+        let Recorded::Added(id) = test.received_image(data) else {
+            panic!("not added");
+        };
+        let mut thumbnail = JPEG_THUMB.to_vec();
+        thumbnail.extend((0..15_000).map(|_| next(256) as u8));
+        test.store.set_thumbnail(id, &thumbnail, 320, 180).unwrap();
+    }
+    test.store.sweep().unwrap();
+
+    let bytes = |sql: &str| -> i64 {
+        test.store
+            .conn
+            .query_row(sql, [], |row| row.get(0))
+            .unwrap()
+    };
+    let fts = bytes("SELECT sum(pgsize) FROM dbstat WHERE name LIKE 'item_fts%'");
+    let thumbs = bytes("SELECT sum(pgsize) FROM dbstat WHERE name = 'thumb'");
+    let thumb_data = bytes("SELECT sum(length(data)) FROM thumb");
+    let total = bytes("SELECT sum(pgsize) FROM dbstat");
+    let text = bytes("SELECT sum(length(CAST(text_head AS BLOB))) FROM item");
+    let ratio = fts as f64 / text as f64;
+    let per_text = (total - thumbs) / 1000;
+    let per_thumbnail = (thumbs - thumb_data) / 200;
+    println!(
+        "texts: {text} B, index {fts} B ({ratio:.2}x), {per_text} B per text item; \
+         thumbnails: {} B each plus {per_thumbnail} B; database {total} B",
+        thumb_data / 200
+    );
+    assert!(
+        ratio < 3.5,
+        "trigram index {ratio:.2}x the text: switch to unicode61"
+    );
+    assert!(per_text < 1500, "{per_text} B per text item");
+    assert!(per_thumbnail < 2048, "{per_thumbnail} B per thumbnail");
+}
