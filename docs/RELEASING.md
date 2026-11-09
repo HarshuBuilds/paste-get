@@ -12,6 +12,7 @@ How the packages are built, and the steps of a release. CI does the building
 | Debian/Ubuntu package, `paste-get_<version>_amd64.deb` | the same run | `/usr/bin/pasteget` and `pasteget-tray`, a desktop entry, an icon and the AppStream metainfo. Depends on the system's WebKitGTK 4.1, GTK 3 and libayatana-appindicator3 (the tray icon). Ubuntu 22.04, Debian 12 or newer |
 | Fedora/openSUSE package, `paste-get_<version>_x86_64.rpm` | the same run (Tauri names it `paste-get-<version>-1.x86_64.rpm`; the workflow renames it) | The same files. Requires the same libraries by their file names (`libwebkit2gtk-4.1.so.0()(64bit)` and so on), which works across RPM distributions |
 | Android APK, `paste-get_<version>_foss.apk` | `./gradlew assembleFossRelease` on `ubuntu-latest` | Signed with the release key, for both phone ABIs (`arm64-v8a`, `x86_64`). Without the key (forks, before it's set up) it comes out as `…_foss-unsigned.apk`, which Android won't install; a tag refuses to release without it |
+| Arch package `paste-get-bin` | `packaging/aur/paste-get-bin/PKGBUILD`, tested with `makepkg` in an Arch container on the .deb above | The .deb's files, unpacked. Points at a published release's .deb, so it's updated after each release (see below) |
 | Arch package `paste-get-git` | `packaging/aur/paste-get-git/PKGBUILD`, tested with `makepkg` in an Arch container | `/usr/bin/pasteget` and `pasteget-tray`, a desktop entry, an icon and the metainfo. Built from source on the user's machine |
 
 Every push that changes the packaging builds them all, without releasing: they're in the run's
@@ -48,24 +49,78 @@ Tauri expects for a "sidecar" program), then bundles the tray with
 `desktop/tray/tauri.bundle.conf.json` on top of `tauri.conf.json`. That file is kept apart
 because declaring the sidecar makes `cargo build` look for it, and everyday builds don't have it.
 
-## The AUR package
+## The AUR packages
 
-`paste-get-git` builds the latest commit of the default branch, so it needs no update per
-release. The CI job builds it from the commit being tested and checks that `.SRCINFO` matches the
-PKGBUILD. After changing the PKGBUILD, regenerate it on Arch:
-`makepkg --printsrcinfo > .SRCINFO`.
+Two PKGBUILDs, for Arch users (`yay -S …` once they are on the AUR):
 
-Publishing it on the AUR is done once, by hand, by whoever maintains it there (it needs an AUR
-account with an SSH key):
-```sh
-git clone ssh://aur@aur.archlinux.org/paste-get-git.git
-cp packaging/aur/paste-get-git/{PKGBUILD,.SRCINFO} paste-get-git/
-cd paste-get-git && git add PKGBUILD .SRCINFO && git commit -m "Initial upload" && git push
-```
-Until then, Arch users can build it from the repository:
-`cd packaging/aur/paste-get-git && makepkg -si`.
+- `paste-get-bin` (`packaging/aur/paste-get-bin/`) unpacks the release's .deb: nothing to
+  compile, it installs in seconds. It is updated after each release, by `update.sh`.
+- `paste-get-git` (`packaging/aur/paste-get-git/`) builds the latest commit of the GitHub
+  repository's default branch from source, so it needs no update per release.
 
-A `paste-get` package built from release tarballs can follow once releases are regular.
+CI builds and installs both with `makepkg` in an Arch container (`paste-get-bin` from the .deb of
+the same run, so the programs are seen to start with Arch's libraries), and checks that each
+`.SRCINFO` matches its PKGBUILD. After changing a PKGBUILD by hand, regenerate it on Arch:
+`makepkg --printsrcinfo > .SRCINFO`. Until they are published, Arch users can build them from the
+repository: `cd packaging/aur/paste-get-git && makepkg -si`.
+
+### Once: an AUR account
+
+On the Arch PC:
+
+1. Make an SSH key for the AUR: `ssh-keygen -t ed25519 -f ~/.ssh/aur -C aur`. It asks for a
+   passphrase: one is safer (it's asked at each upload); Enter twice for none.
+2. Tell SSH to use it for the AUR:
+   `printf 'Host aur.archlinux.org\n  IdentityFile ~/.ssh/aur\n  User aur\n' >> ~/.ssh/config`
+3. Open <https://aur.archlinux.org/register>. Fill in a user name and an e-mail address. In
+   *SSH Public Key*, paste the line that `cat ~/.ssh/aur.pub` prints (it starts with
+   `ssh-ed25519`). Answer the captcha and create the account; the e-mail it sends has a link to
+   choose a password.
+4. Check it works: `ssh aur.archlinux.org help`. The first time, SSH asks whether to trust the
+   server: compare the fingerprint it shows with the ED25519 one listed on the AUR's home page,
+   then type `yes`. It prints a list of commands: the account works.
+5. On GitHub, make sure the repository's default branch is `main` with the released work
+   (*Settings* → *General* → *Default branch*): `paste-get-git` builds that branch.
+
+### paste-get-git: once (again only if its PKGBUILD changes)
+
+6. In the paste-get checkout:
+   ```sh
+   git -c init.defaultBranch=master clone ssh://aur@aur.archlinux.org/paste-get-git.git ~/aur/paste-get-git
+   cp packaging/aur/paste-get-git/{PKGBUILD,.SRCINFO} ~/aur/paste-get-git/
+   cd ~/aur/paste-get-git
+   git add PKGBUILD .SRCINFO
+   git commit -m "Initial upload"
+   git push
+   ```
+   Git warns that the clone is empty: that's expected, the push creates the package. (The AUR
+   only takes the `master` branch, hence `init.defaultBranch=master`.)
+7. Check <https://aur.archlinux.org/packages/paste-get-git>, and that `yay -S paste-get-git`
+   installs it.
+
+### paste-get-bin: after each release
+
+Don't upload it before step 8 has run once: until then its checksum is `SKIP`.
+
+8. Once the GitHub release is **published** (not a draft), in the paste-get checkout:
+   `packaging/aur/paste-get-bin/update.sh 0.1.0` (the new version). It sets the version and
+   the .deb's checksum from the release's `SHA256SUMS`, downloads the .deb once to check it, and
+   rewrites `.SRCINFO`. Commit the two changed files to the paste-get repository as usual.
+9. The first time only:
+   `git -c init.defaultBranch=master clone ssh://aur@aur.archlinux.org/paste-get-bin.git ~/aur/paste-get-bin`.
+   The next times: `cd ~/aur/paste-get-bin && git pull`.
+10. Upload it:
+    ```sh
+    cp packaging/aur/paste-get-bin/{PKGBUILD,.SRCINFO} ~/aur/paste-get-bin/
+    cd ~/aur/paste-get-bin
+    git add PKGBUILD .SRCINFO
+    git commit -m "Update to 0.1.0"
+    git push
+    ```
+11. Check that `yay -S paste-get-bin` installs the new version.
+
+To change something else in `paste-get-bin` between releases (a dependency, say), raise `pkgrel`
+by one, run `makepkg --printsrcinfo > .SRCINFO` in its directory, and upload as in step 10.
 
 ## The Android release key
 

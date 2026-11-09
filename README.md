@@ -35,7 +35,9 @@ lives in the notification area (under `^` in the taskbar).
 - Fedora, openSUSE: `sudo dnf install ./paste-get_<version>_x86_64.rpm` (openSUSE: `sudo zypper
   install --allow-unsigned-rpm ./paste-get_<version>_x86_64.rpm`).
 - Any other distribution: `chmod +x paste-get_<version>_amd64.AppImage` and run it.
-- Arch: the [`paste-get-git`](packaging/aur/paste-get-git/PKGBUILD) PKGBUILD builds it from source.
+- Arch: two PKGBUILDs, soon on the AUR: [`paste-get-bin`](packaging/aur/paste-get-bin/PKGBUILD)
+  installs the release's .deb, [`paste-get-git`](packaging/aur/paste-get-git/PKGBUILD) builds the
+  latest code from source. Until then: `cd packaging/aur/paste-get-git && makepkg -si`.
 - The tray icon needs a tray: KDE Plasma has one; on Hyprland, use a bar with a tray (Waybar's
   `tray` module).
 

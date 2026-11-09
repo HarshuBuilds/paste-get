@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# paste-get from a release's .deb, unpacked: nothing to compile. update.sh sets pkgver and the
+# checksum for each release. See docs/RELEASING.md.
+# Maintainer: paste-get contributors <https://github.com/Nexoryx-business/paste-get>
+
+pkgname=paste-get-bin
+_name=paste-get
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Copy on your phone, paste on your PC: clipboard sync with Android over the local network'
+arch=('x86_64')
+url='https://github.com/Nexoryx-business/paste-get'
+license=('GPL-3.0-or-later')
+# The tray app (Tauri 2) links to WebKitGTK and loads the app indicator library.
+depends=('gcc-libs' 'glibc' 'gtk3' 'webkit2gtk-4.1' 'libayatana-appindicator' 'hicolor-icon-theme')
+provides=('paste-get')
+conflicts=('paste-get')
+# Built elsewhere, without debug information to split off.
+options=('!debug')
+source=("$url/releases/download/v$pkgver/${_name}_${pkgver}_amd64.deb")
+sha256sums=('SKIP')
+
+package() {
+  # makepkg has unpacked the .deb: its files are in data.tar.gz.
+  bsdtar -xf data.tar.gz -C "$pkgdir"
+}

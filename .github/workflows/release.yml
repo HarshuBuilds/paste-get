@@ -209,10 +209,48 @@ jobs:
           chown -R builder .
           su builder -c 'makepkg --printsrcinfo' | diff -u .SRCINFO -
 
+  aur-bin:
+    name: AUR package paste-get-bin (makepkg on Arch)
+    needs: linux
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install the build tools
+        run: pacman -Syu --noconfirm --needed base-devel
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux
+          path: dist
+      - name: Build and install the PKGBUILD from this run's .deb
+        run: |
+          useradd -m builder
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          deb="$GITHUB_WORKSPACE/dist/paste-get_${version}_amd64.deb"
+          cp packaging/aur/paste-get-bin/PKGBUILD /home/builder/
+          # The same PKGBUILD, with this run's .deb instead of a published release's.
+          sed -i -e "s/^pkgver=.*/pkgver=$version/" \
+            -e "s|^source=.*|source=(\"file://$deb\")|" \
+            -e "s/^sha256sums=.*/sha256sums=('$(sha256sum "$deb" | cut -d ' ' -f 1)')/" \
+            /home/builder/PKGBUILD
+          chown -R builder /home/builder
+          echo 'builder ALL=(ALL) NOPASSWD: /usr/bin/pacman' > /etc/sudoers.d/builder
+          su builder -c 'cd ~ && makepkg --syncdeps --install --noconfirm'
+      # Built on Ubuntu: this shows the programs find Arch's libraries.
+      - name: Both programs start
+        run: |
+          pasteget --version
+          pasteget-tray --version
+      - name: The committed .SRCINFO matches the PKGBUILD
+        run: |
+          cd packaging/aur/paste-get-bin
+          chown -R builder .
+          su builder -c 'makepkg --printsrcinfo' | diff -u .SRCINFO -
+
   release:
     name: Draft the GitHub release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows, linux, linux-install, android, aur]
+    needs: [windows, linux, linux-install, android, aur, aur-bin]
     runs-on: ubuntu-latest
     permissions:
       contents: write

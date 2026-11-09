@@ -101,6 +101,8 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
     a draft release for each `v*` tag (`RELEASING.md`)
   - [x] AUR `paste-get-git` PKGBUILD, built with `makepkg` in an Arch container by CI (publishing
     it on the AUR needs a maintainer account)
+  - [x] AUR `paste-get-bin` PKGBUILD from the release's .deb, built and installed by CI the same
+    way; `update.sh` points it at each new release. Publishing both: `RELEASING.md`, steps 1–11
   - [x] `.deb` and `.rpm`, built with the AppImage. The Release workflow checks their files and
     dependencies, then installs them on Debian 12 and the latest Fedora (checked locally; its
     first CI run is still to see)
