@@ -65,6 +65,7 @@ fun ScreenshotsCard(
                 text = stringResource(if (setting.on) R.string.screenshots_on else R.string.screenshots_off),
                 checked = setting.on,
                 onCheckedChange = onChange,
+                icon = R.drawable.ic_screenshot,
             )
             if (problem != null) {
                 Text(stringResource(problem), style = MaterialTheme.typography.bodySmall)
@@ -116,6 +117,7 @@ fun AutoCopyCard(state: AutoCopyCardState, actions: AutoCopyActions) {
                 text = if (state.on) modeText(state) else stringResource(R.string.copies_off),
                 checked = state.on,
                 onCheckedChange = actions.onChange,
+                icon = R.drawable.ic_content_copy,
             )
             if (state.on) {
                 // What isn't working yet, and the step that fixes it.
@@ -333,6 +335,7 @@ fun CodesCard(state: CodesCardState, actions: CodesActions) {
                 },
                 checked = state.on,
                 onCheckedChange = actions.onChange,
+                icon = R.drawable.ic_password,
             )
             if (state.on) CodesAccessLine(state, actions)
         }

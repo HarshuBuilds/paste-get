@@ -2,6 +2,7 @@
 
 package io.github.nexoryx.pasteget.ui
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -43,7 +44,9 @@ fun ComputerList(computers: List<PairedComputer>, connected: Set<String>, onForg
             Row(
                 modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
             ) {
+                TonalIcon(R.drawable.ic_computer)
                 val isConnected = computer.deviceId in connected
                 // Name and state read as one: "HP-AIO, Connected".
                 Column(modifier = Modifier.weight(1f).semantics(mergeDescendants = true) {}) {
