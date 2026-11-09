@@ -703,7 +703,7 @@ impl SessionEvents for Shared {
         let name = self.name_of(&peer);
         if let Some(notifier) = &self.notifier {
             notifier.notice(if french() {
-                format!("{name} utilise une autre version de paste-get : mettez les deux à jour")
+                format!("{name} utilise une autre version de paste-get : mets les deux à jour")
             } else {
                 format!("{name} runs another version of paste-get: update both")
             });
