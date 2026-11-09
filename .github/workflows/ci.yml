@@ -42,6 +42,9 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      # The clipboard history is behind a feature no app turns on yet.
+      - run: cargo clippy -p pasteget-core --features history --all-targets --locked -- -D warnings
+      - run: cargo test -p pasteget-core --features history --locked
 
   android:
     name: Android app

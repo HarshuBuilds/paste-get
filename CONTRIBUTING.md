@@ -39,7 +39,8 @@ cargo deny check          # cargo install cargo-deny
 ```
 
 The clipboard history (`core/src/history`) is behind the core's `history` feature, which no app
-turns on yet. Until one does, the commands above leave it out; when you change it, also run:
+turns on yet. Until one does, the commands above leave it out; when you change it, also run
+(CI does):
 
 ```sh
 cargo clippy -p pasteget-core --features history --all-targets -- -D warnings
