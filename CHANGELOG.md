@@ -58,6 +58,9 @@ sync over your own Wi-Fi, with no account and no server.
   sent yet.
 - The Windows installer isn't code-signed yet: SmartScreen warns once.
 - Google Play Protect may block the APK because of the 2FA feature (the README says what to do).
-- Nothing is kept on disk: there is no clipboard history yet, and a copy waiting for a device
-  that is away is lost if paste-get restarts.
+- A copy waiting for a device that is away is kept in memory only: it is lost if paste-get
+  restarts.
+- The clipboard history is off by default and has no screen yet: on the PC it can be turned on
+  in `settings.toml` (`[history]`) and read with `pasteget history`; on the phone it comes with
+  the next version. Passwords and codes are never kept in it.
 - See [`docs/TESTING.md`](docs/TESTING.md#known-limitations) for the rest.
