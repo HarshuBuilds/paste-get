@@ -6,13 +6,13 @@
     <string name="share_label">Envoyer au PC</string>
     <string name="tile_label">Envoyer le presse-papiers</string>
     <string name="notification_channel">Connexion</string>
-    <string name="notification_connecting">Recherche de tes ordinateurs…</string>
     <string name="notification_no_computer">Aucun ordinateur appairé pour l\'instant</string>
-    <plurals name="notification_connected">
-        <item quantity="one">Connecté à %d ordinateur</item>
-        <item quantity="many">Connecté à %d ordinateurs</item>
-        <item quantity="other">Connecté à %d ordinateurs</item>
-    </plurals>
+    <string name="notification_copies_auto">Les copies partent toutes seules</string>
+    <string name="notification_copies_step">Copies : encore une étape</string>
+    <string name="tile_offline">Hors ligne : envoi au retour</string>
+    <string name="tile_not_paired">Non appairé</string>
+    <string name="shortcut_send">Envoyer</string>
+    <string name="shortcut_pair">Appairer</string>
     <plurals name="sent_to">
         <item quantity="one">Envoyé à %d ordinateur</item>
         <item quantity="many">Envoyé à %d ordinateurs</item>

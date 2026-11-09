@@ -134,7 +134,7 @@ The phone and the PC must be on the **same Wi-Fi**. On the PC, run `pasteget dae
 
 | # | Do this | Expected |
 |---|---|---|
-| P1 | Open paste-get, allow notifications | A persistent "paste-get" notification appears |
+| P1 | Open paste-get, allow notifications | A persistent notification appears: "No computer paired yet", then after P2 "Connected to <PC>" with a **Send clipboard** button |
 | P2 | PC: `pasteget pair`. Phone: **Scan the code** on the home screen, scan it | Phone: a sheet "Pair with this computer?" with the PC's name and address. Tap **Pair**: a sheet with a progress bar, then "Paired with …" at the bottom of the screen for a few seconds, and the card at the top says "Connected to <PC>". PC: `✓ Paired with …` |
 | P2b | Turn Wi-Fi off on the phone for a minute | The card says "Looking for <PC>…" with a moving bar; after 30 s it says what to check and offers **Try again**. Wi-Fi back on: "Connected to <PC>" again |
 | P3 | In any app, select text → **Share** → **Send to PC**, then `Ctrl+V` on the PC | The text is pasted |
@@ -147,6 +147,9 @@ The phone and the PC must be on the **same Wi-Fi**. On the PC, run `pasteget dae
 | P10 | Turn on dark mode, close paste-get (swipe it away in recents), open it again | The start screen and the app are dark from the first frame, with no white flash |
 | P13 | Tap **History**, **Devices**, then the gear at the top right; press Back twice | History lists what was sent (P3–P5) with sizes and times. Devices lists the PC ("Connected · … ms") and *This phone* with its device ID in groups of four; tapping the PC shows its addresses. With the PC's daemon stopped and started again, pulling the Devices list down reconnects at once instead of after the backoff. The gear opens Settings; Back goes to Devices, then Home. Rotate the phone on any of them: the same screen stays |
 | P14 | The gear → **Dark**, then **Light**, then **System**; turn **Wallpaper colors** off and on (Android 12+); **Language** → French (Android 13+); **Open-source licences** | The app changes at once; after closing and reopening it, the start screen matches the choice too (Android 12+). Without wallpaper colors, the app is indigo. In French, every screen is in French. The licences list the libraries and show the Apache License text |
+| P15 | Quit the PC's daemon, pull down Quick Settings; start it again | The tile reads "Offline: sends when back", then the PC's name, lit. The notification says "Looking for <PC>…", then "Connected to <PC>" |
+| P16 | Long-press paste-get's launcher icon: **Send**, then **Pair**, then **History** | Send sends the clipboard (as the tile does); Pair opens the scanner; History opens the History tab |
+| P17 | Copy text, pull down the notification shade, tap **Send clipboard** in paste-get's notification | "Sent to 1 computer"; `Ctrl+V` on the PC pastes it |
 | P11 | PC: `pasteget pair`, then quit the daemon. Phone: scan the code, **Pair** | After a few seconds: "Pairing didn't work" and what to check (same Wi-Fi, paste-get open on the PC), in the phone's language. **Details** shows the technical error |
 | P12 | Last: in the **Devices** tab, tap the PC, then **Forget this computer…**, then **Cancel**; tap it again, then **Forget** | Cancel keeps the PC. Forget removes it from the list, and the phone stops connecting to it. The PC still lists the phone (forget it there too, or pair again) |
 

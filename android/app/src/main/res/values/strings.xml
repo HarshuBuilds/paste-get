@@ -4,12 +4,13 @@
     <string name="share_label">Send to PC</string>
     <string name="tile_label">Send clipboard</string>
     <string name="notification_channel">Connection</string>
-    <string name="notification_connecting">Looking for your computers…</string>
     <string name="notification_no_computer">No computer paired yet</string>
-    <plurals name="notification_connected">
-        <item quantity="one">Connected to %d computer</item>
-        <item quantity="other">Connected to %d computers</item>
-    </plurals>
+    <string name="notification_copies_auto">Copies go out by themselves</string>
+    <string name="notification_copies_step">Copies: one step left</string>
+    <string name="tile_offline">Offline: sends when back</string>
+    <string name="tile_not_paired">Not paired</string>
+    <string name="shortcut_send">Send</string>
+    <string name="shortcut_pair">Pair</string>
     <plurals name="sent_to">
         <item quantity="one">Sent to %d computer</item>
         <item quantity="other">Sent to %d computers</item>

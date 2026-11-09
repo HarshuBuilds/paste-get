@@ -64,6 +64,9 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="pasteget" android:host="pair" />
             </intent-filter>
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
 
         <!-- "paste-get" in the share sheet: sends text or an image to the PC. -->

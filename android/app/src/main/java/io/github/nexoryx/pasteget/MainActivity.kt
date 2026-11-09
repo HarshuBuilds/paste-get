@@ -26,7 +26,9 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
@@ -48,10 +50,12 @@ import io.github.nexoryx.pasteget.ui.PasteGetUi
 import io.github.nexoryx.pasteget.ui.Route
 import io.github.nexoryx.pasteget.ui.SettingsActions
 import io.github.nexoryx.pasteget.ui.SettingsState
+import io.github.nexoryx.pasteget.ui.Tab
 import io.github.nexoryx.pasteget.ui.appStatus
 import io.github.nexoryx.pasteget.ui.codesHealth
 import io.github.nexoryx.pasteget.ui.copiesHealth
 import io.github.nexoryx.pasteget.ui.screenshotsHealth
+import io.github.nexoryx.pasteget.ui.selectTab
 import io.github.nexoryx.pasteget.ui.shellReady
 import io.github.nexoryx.pasteget.ui.theme.PasteGetTheme
 
@@ -63,6 +67,9 @@ class MainActivity : ComponentActivity() {
     private val model: AppViewModel by viewModels {
         viewModelFactory { initializer { AppViewModel(application, NativeComputers(pasteGet)) } }
     }
+
+    /** A tab a launcher shortcut asked for, until shown. */
+    private var openTab by mutableStateOf<Tab?>(null)
 
     private val photoPermission =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
@@ -102,7 +109,7 @@ class MainActivity : ComponentActivity() {
         }
         startSyncService()
         // Not again when the activity is recreated (a rotation): its intent is still the link.
-        if (savedInstanceState == null) handlePairingLink(intent)
+        if (savedInstanceState == null) handleIntent(intent)
     }
 
     @Composable
@@ -130,6 +137,10 @@ class MainActivity : ComponentActivity() {
         val actions = remember { appActions() }
         // Saved with the activity, so the user comes back to the same screen.
         val backStack = rememberNavBackStack(Route.Home)
+        LaunchedEffect(openTab) {
+            openTab?.let { selectTab(backStack, it) }
+            openTab = null
+        }
         PasteGetUi(
             state = AppState(
                 status = status,
@@ -268,7 +279,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        handlePairingLink(intent)
+        handleIntent(intent)
+    }
+
+    /** A launcher shortcut (Pair a computer, History), or a pairing link. */
+    private fun handleIntent(intent: Intent?) {
+        when (intent?.action) {
+            ACTION_PAIR -> scan()
+            ACTION_HISTORY -> openTab = Tab.HISTORY
+            else -> handlePairingLink(intent)
+        }
     }
 
     /**
@@ -399,6 +419,10 @@ class MainActivity : ComponentActivity() {
 
     private companion object {
         const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
+
+        // The launcher shortcuts' actions (res/xml/shortcuts.xml).
+        const val ACTION_PAIR = "io.github.nexoryx.pasteget.action.PAIR"
+        const val ACTION_HISTORY = "io.github.nexoryx.pasteget.action.HISTORY"
         const val SHIZUKU_DOWNLOAD = "https://shizuku.rikka.app/download/"
 
         // The navigation bar's scrims enableEdgeToEdge uses by default, for 3-button navigation.

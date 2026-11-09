@@ -7,6 +7,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -16,10 +17,18 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
+import android.service.quicksettings.TileService
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import io.github.nexoryx.pasteget.ui.copiesHealth
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.launch
 import uniffi.pasteget_ffi.ClipDelivery
 import uniffi.pasteget_ffi.PairedComputer
 import uniffi.pasteget_ffi.PhoneListener
@@ -28,7 +37,7 @@ import uniffi.pasteget_ffi.PhoneListener
  * Keeps the connections to the paired computers alive while the app is in the background.
  *
  * A `connectedDevice` foreground service: unlike `dataSync`, Android 15 doesn't cap its running
- * time. Its notification shows how many computers are connected. While one of them isn't, it
+ * time. Its notification names the connected computers. While one of them isn't, it
  * looks for it on the local network. When the user turned them on, it also sends new screenshots
  * and what they copy ([AutoCopy]).
  */
@@ -36,6 +45,9 @@ class SyncService : Service() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var finder: ComputerFinder
     private lateinit var screenshots: ScreenshotWatcher
+
+    /** Follows the automatic copy's state, on the main thread, while the service runs. */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     /** Callbacks from the client's threads may still arrive after onDestroy. */
     private var running = false
@@ -112,11 +124,19 @@ class SyncService : Service() {
         screenshots = ScreenshotWatcher(this, ::sendScreenshot)
         running = true
         pasteGet.client.start(listener)
+        // The notification says how copies go: it follows the automatic copy's modes.
+        val autoCopy = pasteGet.autoCopy
+        scope.launch {
+            combine(autoCopy.builtIn.state, autoCopy.shizuku.state, autoCopy.logs.state) { _, _, _ -> }
+                .collect { if (running) updateNotification() }
+        }
         getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(network)
     }
 
     /** Also called again by the app after pairing or a settings change. */
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // A pairing or a setting may have changed what it says.
+        updateNotification()
         if (intent?.action == ACTION_RETRY) {
             // As on a new network: dial now, and search again.
             pasteGet.client.networkChanged()
@@ -130,6 +150,7 @@ class SyncService : Service() {
 
     override fun onDestroy() {
         running = false
+        scope.cancel()
         getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(network)
         finder.setActive(false)
         screenshots.stop()
@@ -143,27 +164,28 @@ class SyncService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun notification(): Notification {
-        val connected = pasteGet.connected.value.size
-        val text = when {
-            pasteGet.client.pairedComputers().isEmpty() -> getString(R.string.notification_no_computer)
-            connected == 0 -> getString(R.string.notification_connecting)
-            else -> resources.getQuantityString(R.plurals.notification_connected, connected, connected)
+        val connected = pasteGet.connected.value
+        val paired = pasteGet.client.pairedComputers()
+        val copies = if (Preferences.sendCopies(this)) {
+            val autoCopy = pasteGet.autoCopy
+            copiesHealth(
+                on = true,
+                builtIn = autoCopy.builtIn.state.value,
+                shizuku = autoCopy.shizuku.state.value,
+                logs = autoCopy.logs.state.value,
+                fallback = FallbackAccess.of(this),
+                canNotify = BuiltInShell.canNotify(this),
+            )
+        } else {
+            null
         }
-        val openApp = PendingIntent.getActivity(
+        return ConnectionNotification.build(
             this,
-            0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE,
+            CHANNEL_ID,
+            paired.map { it.name },
+            paired.filter { it.deviceId in connected }.map { it.name },
+            copies,
         )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_tile)
-            .setContentTitle(getString(R.string.app_name))
-            .setContentText(text)
-            .setContentIntent(openApp)
-            .setOngoing(true)
-            .setSilent(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
     }
 
     /** "HP-AIO (Windows) unpaired this phone": the computer did it, so the user should know. */
@@ -221,8 +243,10 @@ class SyncService : Service() {
         Log.i(TAG, "screenshot of ${sendable.size} bytes read in $readMs ms, sent to $sentTo computers")
     }
 
+    /** The notification and the tile both show who is connected. */
     private fun updateNotification() {
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification())
+        TileService.requestListeningState(this, ComponentName(this, ClipboardTileService::class.java))
     }
 
     private fun createChannel() {
