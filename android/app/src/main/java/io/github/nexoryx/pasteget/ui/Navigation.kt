@@ -48,6 +48,10 @@ sealed interface Route : NavKey {
     /** The open-source licences, from Settings. */
     @Serializable
     data object Licences : Route
+
+    /** What keeps Android from stopping paste-get, from Settings. */
+    @Serializable
+    data object KeepAlive : Route
 }
 
 /** The navigation bar's (or rail's) destinations, in order. */

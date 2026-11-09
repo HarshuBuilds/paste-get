@@ -14,6 +14,7 @@ import io.github.nexoryx.pasteget.Appearance
 import io.github.nexoryx.pasteget.BuiltInShell
 import io.github.nexoryx.pasteget.CodeAccess
 import io.github.nexoryx.pasteget.FallbackAccess
+import io.github.nexoryx.pasteget.KeepAlive
 import io.github.nexoryx.pasteget.OneTimeCodes
 import io.github.nexoryx.pasteget.PairingCode
 import io.github.nexoryx.pasteget.PhotoAccess
@@ -89,6 +90,14 @@ class AppViewModel(
     var setUpChecks by mutableStateOf(SetUpChecks())
         private set
 
+    /** Battery optimisation and notifications, as Android says. */
+    var keepAlive by mutableStateOf(KeepAlive(battery = true, notifications = true))
+        private set
+    var autostartTicked by mutableStateOf(Preferences.autostartTicked(app))
+        private set
+    var batterySaverTicked by mutableStateOf(Preferences.batterySaverTicked(app))
+        private set
+
     /** Read once: only Settings changes them. */
     var appearance by mutableStateOf(Preferences.appearance(app))
         private set
@@ -118,6 +127,19 @@ class AppViewModel(
         canNotify = BuiltInShell.canNotify(app)
         builtInSetUp = app.pasteGet.autoCopy.builtIn.isSetUp
         refreshChecks()
+        keepAlive = KeepAlive.of(app)
+    }
+
+    /** The user ticked (or unticked) Xiaomi's Autostart, which no API reads. */
+    fun tickAutostart(ticked: Boolean) {
+        Preferences.setAutostartTicked(app, ticked)
+        autostartTicked = ticked
+    }
+
+    /** The same for Xiaomi's own battery saver. */
+    fun tickBatterySaver(ticked: Boolean) {
+        Preferences.setBatterySaverTicked(app, ticked)
+        batterySaverTicked = ticked
     }
 
     /**

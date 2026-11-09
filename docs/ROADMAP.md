@@ -121,12 +121,16 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
   started: kind, size, time, never contents, until the history store exists), Devices (each
   computer's page, this phone's ID, pull to refresh), a screen per feature, Settings
   (appearance, language, the tile, licences); the notification and the tile name the computers;
-  launcher shortcuts; 640 dp columns on wide screens (`TESTING.md`, P13–P18). Still to do: the
-  keep-alive checklist and onboarding
+  launcher shortcuts; 640 dp columns on wide screens (`TESTING.md`, P13–P18). Still to do:
+  onboarding
 - [x] The built-in mode's set-up, step by step: Wi-Fi, notifications, Developer options and
   Wireless debugging checked live (also in split screen), Xiaomi's own words, the pairing's
   progress mirrored from the notification, a code field in split screen, and each failure
   explained with **Retry** (`TESTING.md`, W9–W12)
+- [x] *Keep paste-get running*, in Settings: battery optimisation (Android's own "always run in
+  the background?" question) and notifications checked live; on Xiaomi phones, Autostart and
+  Battery saver (behind `VendorSettings`, with App info as the fallback), ticked by hand since
+  no API reads them, and the recent-apps lock as a tip (`TESTING.md`, P19)
 - [x] *Settings…* window in the tray: this computer's name, notifications, links, hotkeys and
   starting at login, checked before saving. Notifications and links apply at once
   (`pasteget` control request `reload_settings`); a new name or hotkeys restart the daemon the

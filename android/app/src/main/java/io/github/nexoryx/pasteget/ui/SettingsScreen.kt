@@ -56,13 +56,24 @@ class SettingsActions(
 )
 
 /**
- * What is rarely changed, behind the gear: appearance, language, the Quick Settings tile, and
- * about paste-get. [onBack] goes back to the tab it was opened from; [onOpenLicences] lists the
- * open-source licences.
+ * What is rarely changed, behind the gear: keeping paste-get running, appearance, language, the
+ * Quick Settings tile, and about paste-get. [onBack] goes back to the tab it was opened from;
+ * [onOpenLicences] lists the open-source licences, [onOpenKeepAlive] opens the checklist that
+ * [keepAlive] sums up.
  */
 @Composable
-fun SettingsScreen(state: SettingsState, actions: SettingsActions, onBack: () -> Unit, onOpenLicences: () -> Unit) {
+fun SettingsScreen(
+    state: SettingsState,
+    actions: SettingsActions,
+    onBack: () -> Unit,
+    onOpenLicences: () -> Unit,
+    keepAlive: KeepAliveState = KeepAliveState(),
+    onOpenKeepAlive: () -> Unit = {},
+) {
     ScreenScaffold(title = stringResource(R.string.settings_title), onBack = onBack) {
+        // First: on most phones it decides whether copies keep going out.
+        LinkRow(R.drawable.ic_check_circle, stringResource(R.string.keepalive_title), keepAliveProgress(keepAlive), onOpenKeepAlive)
+
         Section(R.string.settings_appearance)
         AppearanceChoice(state.appearance, actions.onAppearanceChange)
         // Material You's colors exist from Android 12.
@@ -83,7 +94,7 @@ fun SettingsScreen(state: SettingsState, actions: SettingsActions, onBack: () ->
         // Per-app languages exist from Android 13; before, paste-get follows the phone's.
         if (state.sdk >= Build.VERSION_CODES.TIRAMISU) {
             Section(R.string.settings_language)
-            LinkRow(R.drawable.ic_language, R.string.settings_language, R.string.settings_language_text, actions.onOpenLanguage)
+            LinkRow(R.drawable.ic_language, stringResource(R.string.settings_language), stringResource(R.string.settings_language_text), actions.onOpenLanguage)
         }
 
         Section(R.string.settings_tile)
@@ -133,7 +144,7 @@ private fun AppearanceChoice(current: Appearance, onChange: (Appearance) -> Unit
 
 /** A row that opens something else: an icon, a title, a line under it. */
 @Composable
-private fun LinkRow(@DrawableRes icon: Int, @StringRes title: Int, @StringRes text: Int, onClick: () -> Unit) {
+private fun LinkRow(@DrawableRes icon: Int, title: String, text: String, onClick: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Row(
             modifier = Modifier.padding(16.dp),
@@ -142,8 +153,8 @@ private fun LinkRow(@DrawableRes icon: Int, @StringRes title: Int, @StringRes te
         ) {
             TonalIcon(icon)
             Column(modifier = Modifier.weight(1f)) {
-                Text(stringResource(title), style = MaterialTheme.typography.bodyLarge)
-                Text(stringResource(text), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(title, style = MaterialTheme.typography.bodyLarge)
+                Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null)
         }

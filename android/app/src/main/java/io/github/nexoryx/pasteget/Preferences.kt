@@ -14,6 +14,8 @@ object Preferences {
     private const val SEND_CODES = "send_codes"
     private const val APPEARANCE = "appearance"
     private const val WALLPAPER_COLORS = "wallpaper_colors"
+    private const val AUTOSTART_TICKED = "autostart_ticked"
+    private const val BATTERY_SAVER_TICKED = "battery_saver_ticked"
 
     /** Off until the user turns it on and grants photo access. */
     fun sendScreenshots(context: Context): Boolean =
@@ -63,6 +65,22 @@ object Preferences {
 
     fun setWallpaperColors(context: Context, on: Boolean) {
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit { putBoolean(WALLPAPER_COLORS, on) }
+    }
+
+    /** The user said they turned on the vendor's Autostart switch, which no API reads. */
+    fun autostartTicked(context: Context): Boolean =
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getBoolean(AUTOSTART_TICKED, false)
+
+    fun setAutostartTicked(context: Context, ticked: Boolean) {
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit { putBoolean(AUTOSTART_TICKED, ticked) }
+    }
+
+    /** The user said they set Xiaomi's own battery saver to No restrictions, which no API reads. */
+    fun batterySaverTicked(context: Context): Boolean =
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getBoolean(BATTERY_SAVER_TICKED, false)
+
+    fun setBatterySaverTicked(context: Context, ticked: Boolean) {
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit { putBoolean(BATTERY_SAVER_TICKED, ticked) }
     }
 }
 

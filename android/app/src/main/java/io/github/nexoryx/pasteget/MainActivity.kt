@@ -3,6 +3,7 @@
 package io.github.nexoryx.pasteget
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.StatusBarManager
 import android.app.UiModeManager
 import android.content.ActivityNotFoundException
@@ -52,6 +53,8 @@ import io.github.nexoryx.pasteget.ui.CodesActions
 import io.github.nexoryx.pasteget.ui.CodesState
 import io.github.nexoryx.pasteget.ui.CopiesActions
 import io.github.nexoryx.pasteget.ui.CopiesState
+import io.github.nexoryx.pasteget.ui.KeepAliveActions
+import io.github.nexoryx.pasteget.ui.KeepAliveState
 import io.github.nexoryx.pasteget.ui.NativeComputers
 import io.github.nexoryx.pasteget.ui.PasteGetUi
 import io.github.nexoryx.pasteget.ui.Route
@@ -225,6 +228,7 @@ class MainActivity : ComponentActivity() {
                 unpairedBy = model.unpaired,
                 refreshing = model.refreshing,
                 settings = SettingsState(model.appearance, model.wallpaperColors),
+                keepAlive = KeepAliveState(model.keepAlive, VENDOR, model.autostartTicked, model.batterySaverTicked),
             ),
             actions = actions,
             backStack = backStack,
@@ -273,7 +277,45 @@ class MainActivity : ComponentActivity() {
             onOpenLanguage = ::openLanguageSettings,
             onAddTile = ::addTile,
         ),
+        keepAlive = KeepAliveActions(
+            onAllowBattery = ::allowBattery,
+            onOpenNotificationSettings = ::openNotificationSettings,
+            onOpenAutostart = { openFirst(VendorSettings.of(VENDOR).autostartPages(packageName)) },
+            onOpenAppInfo = ::openAppSettings,
+            onTickAutostart = model::tickAutostart,
+            onTickBatterySaver = model::tickBatterySaver,
+        ),
     )
+
+    /**
+     * Android's own question, "Let app always run in the background?". Where a vendor removed
+     * it: the list of battery optimisations, then App info. paste-get keeps a connection to the
+     * user's computers open, which is what the exemption is for.
+     */
+    @SuppressLint("BatteryLife")
+    private fun allowBattery() {
+        openFirst(
+            listOf(
+                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.fromParts("package", packageName, null)),
+                Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+                VendorSettings.appInfo(packageName),
+            ),
+        )
+    }
+
+    /** The first of [pages] this phone opens: vendors remove or rename settings pages. */
+    private fun openFirst(pages: List<Intent>) {
+        for (page in pages) {
+            try {
+                startActivity(page)
+                return
+            } catch (e: ActivityNotFoundException) {
+                // Not on this phone: the next one.
+            } catch (e: SecurityException) {
+                // There, but not open to other apps.
+            }
+        }
+    }
 
     /**
      * Also tells Android (12+), so the window behind the app and the start screen match the
@@ -473,7 +515,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openAppSettings() {
-        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
+        startActivity(VendorSettings.appInfo(packageName))
     }
 
     /** This activity has focus, so it may read the clipboard directly. */

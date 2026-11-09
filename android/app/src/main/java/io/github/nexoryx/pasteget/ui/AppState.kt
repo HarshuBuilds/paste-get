@@ -26,6 +26,7 @@ data class AppState(
     /** The computers are being dialed again ([AppActions.onRefresh]). */
     val refreshing: Boolean = false,
     val settings: SettingsState = SettingsState(),
+    val keepAlive: KeepAliveState = KeepAliveState(),
 )
 
 /** This phone as its computers know it. */
@@ -52,4 +53,5 @@ class AppActions(
     val autoCopy: CopiesActions = CopiesActions(),
     val codes: CodesActions = CodesActions(),
     val settings: SettingsActions = SettingsActions(),
+    val keepAlive: KeepAliveActions = KeepAliveActions(),
 )
