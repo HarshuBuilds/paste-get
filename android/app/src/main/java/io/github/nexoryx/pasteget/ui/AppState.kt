@@ -10,7 +10,7 @@ data class AppState(
     val status: AppStatus,
     val computers: List<PairedComputer>,
     val connected: Set<String>,
-    /** The result of the last thing the user did, or what just happened. */
+    /** The result of the last thing the user did, or what just happened: a Snackbar. */
     val message: String?,
     val pairing: PairingState,
     /** Newest first. */
@@ -43,6 +43,8 @@ class AppActions(
     val onDismissUnpaired: () -> Unit = {},
     /** Dials every computer now and searches the network again. */
     val onRefresh: () -> Unit = {},
+    /** The Snackbar showed this message and went away. */
+    val onMessageShown: (String) -> Unit = {},
     val onScreenshotsChange: (Boolean) -> Unit = {},
     /** paste-get's page in the system settings, where photo access is. */
     val onOpenAppSettings: () -> Unit = {},

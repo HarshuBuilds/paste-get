@@ -80,12 +80,13 @@ class HomeAccessibilityTest {
     }
 
     @Test
-    fun theStatusAndTheMessageAreReadOutWhenTheyChange() {
-        show(AppFixtures.state(message = "Paired with HP-AIO"))
+    fun theStatusIsReadOutWhenItChanges() {
+        show(AppFixtures.state())
 
         val polite = SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite)
-        compose.onNodeWithText(app.getString(R.string.status_no_computer)).assert(polite)
-        compose.onNodeWithText("Paired with HP-AIO").assert(polite)
+        // Title and text as one announcement.
+        compose.onNode(hasText(app.getString(R.string.hero_pair_title)) and hasText(app.getString(R.string.hero_pair_text)))
+            .assert(polite)
     }
 
     @Test

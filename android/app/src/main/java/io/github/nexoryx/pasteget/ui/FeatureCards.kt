@@ -105,6 +105,8 @@ class AutoCopyActions(
     val onOpenPrivacySettings: () -> Unit = {},
     /** paste-get's notification settings. */
     val onOpenNotificationSettings: () -> Unit = {},
+    /** The Wi-Fi panel: wireless debugging needs Wi-Fi. */
+    val onOpenWifi: () -> Unit = {},
 )
 
 /** The automatic copy: on or off, how it works right now, and what to do if it doesn't. */

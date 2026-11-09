@@ -3,11 +3,13 @@
 package io.github.nexoryx.pasteget.ui
 
 import android.app.Application
+import android.icu.text.ListFormatter
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
-import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -22,7 +24,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
-/** The home screen, drawn from a plain state: no app, no native library. */
+/** The home screen and its status card in each state, drawn from a plain state: no app, no native library. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class HomeScreenTest {
@@ -40,26 +42,77 @@ class HomeScreenTest {
         var pairs = 0
         show(AppFixtures.state(), AppActions(onPair = { pairs++ }))
 
-        compose.onNodeWithText(app.getString(R.string.status_no_computer)).assertIsDisplayed()
-        compose.onNodeWithText(app.getString(R.string.pair_button)).performClick()
+        compose.onNodeWithText(app.getString(R.string.hero_pair_title)).assertIsDisplayed()
+        compose.onNodeWithText(app.getString(R.string.hero_scan)).performClick()
         assertEquals(1, pairs)
-        compose.onNodeWithText(app.getString(R.string.paired_computers)).assertDoesNotExist()
+        // Nobody to send to.
+        compose.onNodeWithText(app.getString(R.string.send_clipboard_button)).assertDoesNotExist()
     }
 
     @Test
-    fun theMessageIsShown() {
-        show(AppFixtures.state(message = "Paired with HP-AIO"))
+    fun aComputerThatUnpairedThePhoneIsNamed() {
+        var pairs = 0
+        show(AppFixtures.state(unpaired = AppFixtures.hp), AppActions(onPair = { pairs++ }))
 
-        compose.onNodeWithText("Paired with HP-AIO").assertIsDisplayed()
+        compose.onNodeWithText(app.getString(R.string.unpaired_title, "HP-AIO")).assertIsDisplayed()
+        compose.onNodeWithText(app.getString(R.string.pair_again)).performClick()
+        assertEquals(1, pairs)
     }
 
     @Test
-    fun theClipboardCanBeSentWhileTheComputersAreAway() {
+    fun whileLookingTheClipboardCanStillBeSent() {
         var sends = 0
-        show(AppFixtures.state(computers = listOf(AppFixtures.hp)), AppActions(onSendClipboard = { sends++ }))
+        var retries = 0
+        show(AppFixtures.state(computers = listOf(AppFixtures.hp)), AppActions(onSendClipboard = { sends++ }, onRefresh = { retries++ }))
 
+        compose.onNodeWithText(app.getString(R.string.hero_looking, "HP-AIO")).assertIsDisplayed()
         compose.onNodeWithText(app.getString(R.string.send_clipboard_button)).assertIsEnabled().performClick()
         assertEquals(1, sends)
+        compose.onNodeWithText(app.getString(R.string.hero_looking_long)).assertDoesNotExist()
+
+        // After half a minute: what usually keeps them apart, and a way to try again.
+        compose.mainClock.advanceTimeBy(31_000)
+        compose.onNodeWithText(app.getString(R.string.hero_looking_long)).assertIsDisplayed()
+        compose.onNodeWithText(app.getString(R.string.hero_try_again)).performClick()
+        assertEquals(1, retries)
+    }
+
+    @Test
+    fun aBlockedFeatureGetsItsNextStep() {
+        var setUps = 0
+        show(
+            AppFixtures.state(computers = listOf(AppFixtures.hp), connected = setOf("a1"), copiesOn = true),
+            AppActions(autoCopy = AutoCopyActions(onSetUpBuiltIn = { setUps++ })),
+        )
+
+        compose.onNodeWithText(app.getString(R.string.hero_connected, "HP-AIO")).assertIsDisplayed()
+        compose.onNodeWithText(app.getString(R.string.hero_step_copies)).assertIsDisplayed()
+        // The card's own button comes first.
+        compose.onAllNodesWithText(app.getString(R.string.builtin_set_up)).onFirst().performClick()
+        assertEquals(1, setUps)
+    }
+
+    @Test
+    fun whenItWorksTheOfflineComputersAreNamed() {
+        var sends = 0
+        show(
+            AppFixtures.state(computers = listOf(AppFixtures.hp, AppFixtures.arch), connected = setOf("a1")),
+            AppActions(onSendClipboard = { sends++ }),
+        )
+
+        compose.onNodeWithText(app.getString(R.string.hero_connected, "HP-AIO")).assertIsDisplayed()
+        compose.onNodeWithText(app.getString(R.string.hero_working_manual)).assertIsDisplayed()
+        compose.onNodeWithText(app.getString(R.string.hero_offline, "Arch-PC")).assertIsDisplayed()
+        compose.onNodeWithText(app.getString(R.string.send_clipboard_button)).performClick()
+        assertEquals(1, sends)
+    }
+
+    @Test
+    fun severalConnectedComputersAreListed() {
+        show(AppFixtures.state(computers = listOf(AppFixtures.hp, AppFixtures.arch), connected = setOf("a1", "b2")))
+
+        val both = ListFormatter.getInstance().format(listOf("HP-AIO", "Arch-PC"))
+        compose.onNodeWithText(app.getString(R.string.hero_connected, both)).assertIsDisplayed()
     }
 
     @Test
@@ -85,12 +138,5 @@ class HomeScreenTest {
         show(AppFixtures.state(computers = listOf(AppFixtures.hp)))
 
         compose.onNodeWithText(app.getString(R.string.recent_title)).assertDoesNotExist()
-    }
-
-    @Test
-    fun withNothingPairedThereIsNoOneToSendTo() {
-        show(AppFixtures.state())
-
-        compose.onNodeWithText(app.getString(R.string.send_clipboard_button)).assertIsNotEnabled()
     }
 }

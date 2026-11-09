@@ -5,8 +5,12 @@ package io.github.nexoryx.pasteget.ui
 import android.app.Application
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isSelectable
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -56,7 +60,7 @@ class ShellTest {
         assertEquals(listOf(Route.Home, Route.Devices), stack)
 
         tab(R.string.tab_home).performClick()
-        compose.onNodeWithText(app.getString(R.string.send_clipboard_button)).assertIsDisplayed()
+        compose.onNodeWithText(app.getString(R.string.hero_connected, "HP-AIO")).assertIsDisplayed()
         assertEquals(listOf<NavKey>(Route.Home), stack)
     }
 
@@ -73,6 +77,21 @@ class ShellTest {
         compose.onNodeWithContentDescription(app.getString(R.string.back)).performClick()
         compose.onNodeWithText(app.getString(R.string.this_phone_title)).performScrollTo().assertIsDisplayed()
         assertEquals(listOf(Route.Home, Route.Devices), stack)
+    }
+
+    @Test
+    fun aMessageShowsAsASnackbarThenGoes() {
+        val shown = mutableListOf<String>()
+        compose.setContent {
+            MaterialTheme { PasteGetUi(AppFixtures.state(message = "Paired with HP-AIO"), AppActions(onMessageShown = { shown += it }), stack) }
+        }
+
+        compose.onNodeWithText("Paired with HP-AIO").assertIsDisplayed()
+        // Read out, without moving the focus.
+        val polite = SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite)
+        compose.onNode(polite and hasAnyDescendant(hasText("Paired with HP-AIO"))).assertExists()
+        compose.mainClock.advanceTimeBy(10_000)
+        assertEquals(listOf("Paired with HP-AIO"), shown)
     }
 
     @Test

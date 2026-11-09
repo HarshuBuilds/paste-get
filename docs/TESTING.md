@@ -135,7 +135,8 @@ The phone and the PC must be on the **same Wi-Fi**. On the PC, run `pasteget dae
 | # | Do this | Expected |
 |---|---|---|
 | P1 | Open paste-get, allow notifications | A persistent "paste-get" notification appears |
-| P2 | PC: `pasteget pair`. Phone: **Pair a computer**, scan the code | Phone: a sheet "Pair with this computer?" with the PC's name and address. Tap **Pair**: a progress bar (the button waits), then "Paired with …" and "Connected to 1 computer". PC: `✓ Paired with …` |
+| P2 | PC: `pasteget pair`. Phone: **Scan the code** on the home screen, scan it | Phone: a sheet "Pair with this computer?" with the PC's name and address. Tap **Pair**: a sheet with a progress bar, then "Paired with …" at the bottom of the screen for a few seconds, and the card at the top says "Connected to <PC>". PC: `✓ Paired with …` |
+| P2b | Turn Wi-Fi off on the phone for a minute | The card says "Looking for <PC>…" with a moving bar; after 30 s it says what to check and offers **Try again**. Wi-Fi back on: "Connected to <PC>" again |
 | P3 | In any app, select text → **Share** → **Send to PC**, then `Ctrl+V` on the PC | The text is pasted |
 | P4 | Gallery → a screenshot → **Share** → **Send to PC**, then paste on the PC (Paint, GIMP, Discord) | The image is pasted |
 | P5 | Add the **Send clipboard** tile to Quick Settings. Copy text, pull down the shade, tap the tile | "Sent to 1 computer"; `Ctrl+V` on the PC pastes it |

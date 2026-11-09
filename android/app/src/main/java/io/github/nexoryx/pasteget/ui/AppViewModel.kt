@@ -124,6 +124,11 @@ class AppViewModel(
         }
     }
 
+    /** [shown] was on screen and went away. A newer message stays, to be shown next. */
+    fun messageShown(shown: String) {
+        if (message == shown) message = null
+    }
+
     /** The user closed "<PC> unpaired this phone". */
     fun dismissUnpaired() {
         unpaired = null

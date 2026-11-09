@@ -150,6 +150,7 @@ class MainActivity : ComponentActivity() {
         onForget = model::forget,
         onDismissUnpaired = model::dismissUnpaired,
         onRefresh = model::refreshConnections,
+        onMessageShown = model::messageShown,
         onScreenshotsChange = ::toggleScreenshots,
         onOpenAppSettings = ::openAppSettings,
         autoCopy = AutoCopyActions(
@@ -167,6 +168,7 @@ class MainActivity : ComponentActivity() {
             onHideNotices = model::hideNotices,
             onOpenPrivacySettings = ::openPrivacySettings,
             onOpenNotificationSettings = ::openNotificationSettings,
+            onOpenWifi = ::openWifiSettings,
         ),
         codes = CodesActions(
             onChange = model::setSendCodes,
@@ -245,6 +247,15 @@ class MainActivity : ComponentActivity() {
             startActivity(intent)
         } catch (e: ActivityNotFoundException) {
             openAppSettings()
+        }
+    }
+
+    /** Android's Wi-Fi panel, over the app. */
+    private fun openWifiSettings() {
+        try {
+            startActivity(Intent(Settings.Panel.ACTION_WIFI))
+        } catch (e: ActivityNotFoundException) {
+            startActivity(Intent(Settings.ACTION_WIFI_SETTINGS))
         }
     }
 

@@ -80,7 +80,7 @@ class PairingSheetTest {
     fun whilePairingThePairButtonWaits() {
         show(AppFixtures.state().copy(pairing = PairingState.Busy))
 
-        compose.onNodeWithText(app.getString(R.string.pair_button)).assertIsNotEnabled()
+        compose.onNodeWithText(app.getString(R.string.hero_scan)).assertIsNotEnabled()
         compose.onNodeWithText(app.getString(R.string.pairing)).assertIsDisplayed()
     }
 

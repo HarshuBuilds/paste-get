@@ -16,10 +16,13 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -60,6 +63,8 @@ fun ScreenScaffold(
             )
         },
         floatingActionButton = floatingActionButton,
+        // Above the button, on whichever screen is open.
+        snackbarHost = { LocalSnackbarHost.current?.let { SnackbarHost(it) } },
     ) { padding ->
         val column = @Composable {
             Column(
@@ -78,6 +83,9 @@ fun ScreenScaffold(
         }
     }
 }
+
+/** Where the shell shows its messages (Snackbars). `null` in tests that draw one screen. */
+val LocalSnackbarHost = staticCompositionLocalOf<SnackbarHostState?> { null }
 
 /** The gear that opens Settings, in the top bar of each tab. */
 @Composable

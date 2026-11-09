@@ -30,6 +30,7 @@ object AppFixtures {
         builtInStatus: BuiltInStatus = if (copiesOn) BuiltInStatus.NOT_SET_UP else BuiltInStatus.OFF,
         canNotify: Boolean = true,
         activity: List<Activity> = emptyList(),
+        unpaired: PairedComputer? = null,
     ): AppState {
         val builtIn = BuiltInState(builtInStatus)
         val shizuku = ShizukuState(if (copiesOn) ShizukuStatus.NOT_INSTALLED else ShizukuStatus.OFF)
@@ -39,7 +40,7 @@ object AppFixtures {
         val status = appStatus(
             computers,
             connected,
-            null,
+            unpaired,
             listOf(
                 copiesHealth(copiesOn, builtIn, shizuku, logs, fallback, canNotify),
                 screenshotsHealth(screenshots.wanted, screenshots.access),
