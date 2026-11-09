@@ -434,7 +434,7 @@ If Shizuku was set up, the built-in mode replaces it; you can uninstall Shizuku.
 | W2 | Copy text in any app, paste on the PC | Pasted. Android shows "Shell pasted from your clipboard", as with Shizuku |
 | W3 | Turn Wireless debugging off by hand, copy again | Still works (the helper runs on its own) |
 | W4 | Restart the phone, unlock it, wait a minute on Wi-Fi, copy text | Pasted on the PC, without opening paste-get. Wireless debugging is off again afterwards |
-| W5 | Restart the phone with Wi-Fi off | The home screen's card says "Copies need one more step" with **Open Wi-Fi settings**; turn Wi-Fi on: it starts by itself |
+| W5 | Restart the phone with Wi-Fi off, open paste-get | The home screen's card says "Looking for <PC>…" (without Wi-Fi nothing reaches the PC, so that comes first); the Copies row says "One step left", and the Copies screen says the built-in mode is waiting for Wi-Fi, with **Open Wi-Fi settings**. Turn Wi-Fi on: the PC connects and copies start by themselves |
 | W6 | In Wireless debugging → Paired devices, forget paste-get, then restart the phone | The row says "Not working: tap to fix"; the Copies screen says "wireless debugging no longer knows paste-get: pair again" |
 | W7 | **Pair again** on the Copies screen | The Copies screen offers **Start set-up** again |
 | W8 | With the built-in mode running, turn on **Hide "pasted from your clipboard"** on the Copies screen (it shows once a copy went out), then repeat W2 | Pasted, with no notice. Settings → Privacy → *Show clipboard access* is now off. Turning the switch off brings the notice back |
