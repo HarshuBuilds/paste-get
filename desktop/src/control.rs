@@ -20,7 +20,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use data_encoding::BASE64;
 use pasteget_core::clip::mime;
 use pasteget_core::identity::DeviceId;
-use pasteget_core::pairing::{PAIRING_TTL, PairingInvite};
+use pasteget_core::pairing::{PAIRING_TTL, PairingError, PairingInvite};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::broadcast;
@@ -38,6 +38,14 @@ const MAX_REQUEST_LEN: u64 = 96 * 1024 * 1024;
 /// needs to know what a daemon understands. 1: the first to say it, and to know
 /// [`Request::Quit`].
 pub const CONTROL_VERSION: u32 = 1;
+
+/// How a [`Request::Pair`] ends when wrong attempts closed its code. The tray then shows a new
+/// one at once.
+pub const TOO_MANY_ATTEMPTS: &str = "too many wrong attempts: the pairing code was closed";
+
+/// After a wrong attempt closed the code, how long to wait in case a device got it right just
+/// before: it is said paired once its answer is out.
+const CLOSED_GRACE: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
@@ -369,6 +377,13 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(daemon: Arc<Daemon>, stream: 
                                 });
                             }
                             Ok(Event::PairingFailed(reason)) => {
+                                // The third wrong try closes the code: scanning it again would
+                                // be refused, so this request ends.
+                                if reason == PairingError::WrongSecret.to_string()
+                                    && !daemon.status().await.pairing_open
+                                {
+                                    return closed_after_wrong_attempts(&mut events).await;
+                                }
                                 let response = Response::PairingAttemptFailed { reason };
                                 let _ = write_half.write_all(line_of(response).as_bytes()).await;
                             }
@@ -485,6 +500,30 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(daemon: Arc<Daemon>, stream: 
     // Once the answer is out: the process may end right after.
     if quit {
         daemon.request_quit();
+    }
+}
+
+/// A wrong attempt found the code closed: by too many wrong tries, unless a device got it right
+/// meanwhile and is about to be said paired.
+async fn closed_after_wrong_attempts(events: &mut broadcast::Receiver<Event>) -> Response {
+    let paired = tokio::time::timeout(CLOSED_GRACE, async {
+        loop {
+            match events.recv().await {
+                Ok(Event::Paired(device)) => return Some(device),
+                Ok(Event::PairingFailed(_)) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    })
+    .await;
+    match paired {
+        Ok(Some(device)) => Response::Paired(DeviceReply {
+            id: device.id.to_string(),
+            name: device.name,
+        }),
+        _ => Response::Error {
+            message: TOO_MANY_ATTEMPTS.into(),
+        },
     }
 }
 
@@ -687,6 +726,62 @@ mod tests {
         assert!(matches!(&status[..], [Response::Status(s)] if s.devices.is_empty()));
         let again = ask(&pc.endpoint, Request::Forget { device: laptop_id }).await;
         assert!(matches!(&again[..], [Response::Error { .. }]));
+    }
+
+    /// A phone that scanned a code just before it was renewed sends the old secret, once per
+    /// address. The third wrong try closes the code: the request ends rather than keep a dead
+    /// code on screen.
+    #[tokio::test]
+    async fn wrong_attempts_that_close_the_code_end_the_request() {
+        use pasteget_core::pairing::{self, PairingWindow};
+        use std::time::Instant;
+
+        let pc = run("pc").await;
+        let endpoint = pc.endpoint.clone();
+        let (invite_tx, invite_rx) = tokio::sync::oneshot::channel();
+        let pairing = tokio::spawn(async move {
+            let mut invite_tx = Some(invite_tx);
+            let mut responses = Vec::new();
+            call(&endpoint, &Request::Pair, |response| {
+                if let (Response::Invite { uri, .. }, Some(tx)) = (&response, invite_tx.take()) {
+                    let _ = tx.send(uri.clone());
+                }
+                responses.push(response);
+            })
+            .await
+            .unwrap();
+            responses
+        });
+        let invite: PairingInvite = invite_rx.await.unwrap().parse().unwrap();
+        let mut old = PairingWindow::open(Instant::now()).unwrap().invite(
+            &Identity::generate().unwrap(),
+            "pc",
+            invite.addresses.clone(),
+        );
+        old.device_id = invite.device_id;
+
+        let phone = Identity::generate().unwrap();
+        for _ in 0..3 {
+            let socket = tokio::net::TcpStream::connect(pc.daemon.local_addr())
+                .await
+                .unwrap();
+            assert!(
+                pairing::pair_with(socket, &phone, &old, "phone")
+                    .await
+                    .is_err()
+            );
+        }
+
+        let responses = tokio::time::timeout(Duration::from_secs(10), pairing)
+            .await
+            .expect("the request still waits with a closed code")
+            .unwrap();
+        assert!(matches!(responses.first(), Some(Response::Invite { .. })));
+        assert!(
+            matches!(responses.last(), Some(Response::Error { message }) if message == TOO_MANY_ATTEMPTS),
+            "{responses:?}"
+        );
+        assert!(!pc.daemon.status().await.pairing_open);
     }
 
     #[test]
