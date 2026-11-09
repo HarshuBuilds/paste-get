@@ -208,8 +208,9 @@ Either side may send `Ping` at any time; the peer answers with a `Pong` carrying
 ### 4.4 `Unpaired`
 
 Sent in a session, after the `Hello` exchange, by a device that just unpaired the other (section
-2.3). It has no fields. The sender closes the connection right after; what it queued before
-(a clip in flight) may still arrive first. The receiver:
+2.3). It has no fields. It goes before anything the sender still had queued for the receiver,
+which is dropped: a clip being sent may stop midway, and the receiver discards it as the
+connection closes. The sender closes the connection right after. The receiver:
 1. ends the session;
 2. forgets the sender: deletes its ID and anything waiting for it, stops dialing it;
 3. tells the user "<device> unpaired this phone" (or "this computer").

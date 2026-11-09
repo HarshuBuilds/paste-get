@@ -47,8 +47,9 @@ pub const RECONNECT_MAX: Duration = Duration::from_secs(30);
 pub const OUTGOING_QUEUE: usize = 16;
 /// Sent clips still waiting for their [`Ack`]. Beyond that, the oldest is no longer timed.
 const AWAITING_ACK: usize = 32;
-/// How long [`Peers::unpair`] waits for room in a full queue to say [`Unpaired`].
-const FAREWELL_TIMEOUT: Duration = Duration::from_secs(1);
+/// How long a session's writer has, once the session ends, to send what's left ([`Unpaired`]
+/// included) and close the connection.
+const WRITER_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -275,9 +276,9 @@ impl Peers {
     }
 
     /// Tells `peer` it was unpaired ([`Unpaired`]) and ends the session with it, if one runs:
-    /// call it after unpairing the device, so that it forgets this one too, at once. Returns
-    /// whether a session runs; it then ends with [`SessionError::Unpaired`], which also stops
-    /// [`keep_connected`].
+    /// call it after unpairing the device, so that it forgets this one too, at once. It's told
+    /// before anything still queued for it, which is dropped. Returns whether a session runs; it
+    /// then ends with [`SessionError::Unpaired`], which also stops [`keep_connected`].
     pub fn unpair(&self, peer: &DeviceId) -> bool {
         self.end(peer, Ending::Unpair)
     }
@@ -435,6 +436,7 @@ where
     let (sender, queue) = mpsc::channel(OUTGOING_QUEUE);
     let awaiting = AwaitingAck::default();
     let (session, mut kick) = peers.register(peer, sender.clone());
+    let (unpaired, unpaired_seen) = watch::channel(false);
     let mut guard = SessionGuard {
         peers,
         events,
@@ -445,6 +447,7 @@ where
             writer,
             queue,
             Arc::clone(&awaiting),
+            unpaired_seen,
         ))),
     };
     events.connected(peer, &their_hello);
@@ -458,9 +461,9 @@ where
             }
             Ending::Unpair => {
                 tracing::info!(%peer, "session ended: this device unpaired it");
-                // The writer sends what's queued before it closes the connection.
-                let farewell = reply(&sender, Payload::Unpaired(Unpaired {}));
-                let _ = timeout(FAREWELL_TIMEOUT, farewell).await;
+                // No more clips for it. The writer drops those still queued and says Unpaired.
+                guard.unregister();
+                unpaired.send_replace(true);
                 Err(SessionError::Unpaired)
             }
         }
@@ -470,7 +473,7 @@ where
     guard.unregister();
     drop(sender);
     if let Some(mut writer) = guard.writer.take()
-        && timeout(Duration::from_secs(1), &mut writer).await.is_err()
+        && timeout(WRITER_TIMEOUT, &mut writer).await.is_err()
     {
         tracing::debug!(%peer, "writer did not stop in time");
         writer.abort();
@@ -757,24 +760,40 @@ fn await_ack(awaiting: &AwaitingAck, clip_id: Vec<u8>, clip: &Numbered, queued_a
     );
 }
 
+/// Sends what's queued, and pings. Once `unpaired` turns true, sends [`Unpaired`] instead of
+/// anything still queued, and stops.
 async fn write_loop<W: AsyncWrite + Unpin>(
     mut writer: EnvelopeWriter<W>,
     mut queue: mpsc::Receiver<Outgoing>,
     awaiting: AwaitingAck,
+    mut unpaired: watch::Receiver<bool>,
 ) {
     let mut ping = interval(PING_INTERVAL);
     ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
     ping.tick().await;
     let mut nonce = 0u64;
+    // Read between a clip's chunks, while the select below waits on `unpaired`.
+    let unpaired_now = unpaired.clone();
 
     let result: Result<(), SessionError> = async {
         loop {
             tokio::select! {
+                biased;
+                // Before the queue: what's in it was for a device that is no longer paired.
+                Ok(()) = async { unpaired.wait_for(|unpaired| *unpaired).await.map(drop) } => {
+                    let farewell = Envelope { payload: Some(Payload::Unpaired(Unpaired {})) };
+                    writer.send(&farewell).await?;
+                    return Ok(());
+                }
                 next = queue.recv() => match next {
                     Some(Outgoing::Clip { clip, queued_at }) => {
                         let envelopes = clip::outgoing(&clip.clip)
                             .map_err(|_| SessionError::Protocol("no randomness for a clip ID"))?;
                         for mut envelope in envelopes {
+                            // Unpaired meanwhile: the rest of the clip isn't sent.
+                            if *unpaired_now.borrow() {
+                                break;
+                            }
                             // Recorded before the offer leaves, so its ack can't come first.
                             if let Some(Payload::ClipOffer(offer)) = &mut envelope.payload {
                                 offer.age_ms =
@@ -987,6 +1006,51 @@ mod tests {
         // The side that unpaired isn't told it was.
         assert!(pc_events.unpaired_by.lock().unwrap().is_empty());
         assert!(!pc_peers.unpair(&phone.device_id()));
+    }
+
+    /// The farewell goes before a backlog of clips, which the unpaired device no longer gets.
+    #[tokio::test]
+    async fn an_unpaired_device_is_told_before_the_clips_still_queued() {
+        let (phone, pc) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (phone_id, pc_id) = (phone.device_id(), pc.device_id());
+        let (phone_io, pc_io) = duplex(64 * 1024);
+        let (client, server) = tokio::join!(transport::connect(phone_io, &phone, pc_id), async {
+            transport::accept(pc_io, &pc).await?.authorize(|_| true)
+        });
+        let (phone_peers, pc_peers) = (Arc::new(Peers::new()), Arc::new(Peers::new()));
+        let phone_events = Arc::new(Recorder::default());
+        let phone_session = tokio::spawn({
+            let (peers, events) = (Arc::clone(&phone_peers), Arc::clone(&phone_events));
+            async move { run_session(client.unwrap(), hello("phone"), &peers, &*events).await }
+        });
+        let _pc_session = tokio::spawn({
+            let peers = Arc::clone(&pc_peers);
+            async move { run_session(server.unwrap(), hello("pc"), &peers, &Recorder::default()).await }
+        });
+        until(|| phone_peers.is_connected(&pc_id) && pc_peers.is_connected(&phone_id)).await;
+
+        // As many 1 MiB images as the queue holds.
+        let mut image = b"\x89PNG\r\n\x1a\n".to_vec();
+        image.resize(1024 * 1024, 0);
+        for _ in 0..OUTGOING_QUEUE {
+            assert_eq!(
+                pc_peers.broadcast(&Clip::png(image.clone(), pc_id), None),
+                1
+            );
+        }
+        assert!(pc_peers.unpair(&phone_id));
+
+        let phone_ended = timeout(Duration::from_secs(5), phone_session)
+            .await
+            .unwrap();
+        assert!(matches!(
+            phone_ended.unwrap(),
+            Err(SessionError::UnpairedByPeer)
+        ));
+        // At most the one being written when it was unpaired.
+        assert!(phone_events.clips.lock().unwrap().len() <= 1);
+        // Nothing is queued for it any more.
+        assert_eq!(pc_peers.broadcast(&Clip::text("later", pc_id), None), 0);
     }
 
     /// Accepts any device on `listener` and runs a session with it.
