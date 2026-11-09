@@ -106,7 +106,7 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
 - [x] `SECURITY.md` draft: threat model, known gaps, private reporting
 - [ ] README demo GIF: needs the real devices; how to record it is in `RELEASING.md`
 - [ ] Human review of crypto and protocol code: `docs/REVIEW.md` lists the files and the
-  29 properties to check
+  30 properties to check
 - [x] Pairing from the tray: a *Pair a phone* window with the QR code, opened by itself on the
   first start, so no terminal is needed
 - [x] PC side can revoke a paired phone: `pasteget forget <name>`, or the tray menu → the phone
@@ -141,7 +141,9 @@ History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart ac
     generated passwords), with `detect::bare_code` for numbers kept a short while only
   - [x] Store skeleton (`core/src/history`, feature `history`): SQLite with FTS5 trigram, built
     from source (cross-compiles with `cargo-ndk`; about 1.9 MB per ABI)
-  - [ ] Recording text: dedupe, secrets refused and counted, long texts
+  - [x] Recording text: dedupe by SHA-256, secrets refused and counted (only numbers reach the
+    disk), a 4 KiB head and a deflated body, texts over 1 MiB kept "too large", numbers that
+    look like codes kept 15 minutes
   - [ ] Pages and search: any part of a word, accents ignored, filters
   - [ ] Images: originals, thumbnails, gallery references
   - [ ] Retention, delete and stats

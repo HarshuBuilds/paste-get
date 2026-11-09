@@ -20,7 +20,8 @@ make trust decisions. In order of risk:
 | `core/src/clip.rs` | Clip offer/chunks/ack: sizes, offsets, hash check, reassembly | ~510 |
 | `core/src/framing.rs` | Length-prefixed frames, 1 MiB limit | ~190 |
 | `core/src/echo.rs` | Echo-loop guard (not a security boundary, but it hashes untrusted data) | ~120 |
-| `core/src/detect.rs` | Finds a link to open, or a one-time code, in untrusted text | ~450 |
+| `core/src/detect.rs` | Finds a link to open, or a one-time code, in untrusted text; sorts clips into shelves and spots secrets for the history | ~1,100, plus tests |
+| `core/src/history/record.rs` | The one place that decides what the clipboard history keeps | ~300 |
 | `desktop/src/daemon.rs` | `handle_incoming`: known device → session, unknown → pairing only while a window is open | part |
 | `desktop/src/control.rs` | Local control channel: Unix socket in a 0700 directory, Windows named pipe | ~550 |
 | `desktop/src/config.rs` | Key file permissions (0600), profile names (path traversal) | part |
@@ -133,6 +134,13 @@ Each line is a claim to check. "→" points at where it's enforced.
     cleaned-up app name. The detector is bounded (4,096 characters, no superlinear blow-up) and
     can't panic. The shell grants are fixed commands for this app's own listener only.
     → `core/src/detect.rs`, `core/src/clip.rs`, `OneTimeCodes.kt`, `ShellCommands.codeAccessGrants`
+30. The clipboard history writes nothing about a clip that is sensitive, a one-time code (or a
+    copy of one seen in the last 15 minutes), or matched by `detect::looks_secret`, except a
+    count per reason and day; `HistoryStore::record` is the only way in. Every byte kept is
+    checked (texts over 1 MiB keep their first 4 KiB only). Errors keep SQLite's result code,
+    never its message, which can quote a search. → `core/src/history/record.rs`,
+    `core/src/detect.rs` (fuzz target `detect`), tests `secrets_are_kept_out_and_only_counted`
+    and `logs_never_hold_contents`
 
 ## Known gaps (not bugs to report, but worth an opinion)
 

@@ -3043,6 +3043,7 @@ dependencies = [
  "data-encoding",
  "form_urlencoded",
  "futures-util",
+ "miniz_oxide 0.8.9",
  "proptest",
  "prost",
  "prost-build",
@@ -3057,6 +3058,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tracing",
+ "tracing-subscriber",
  "zeroize",
 ]
 
