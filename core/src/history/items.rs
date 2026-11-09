@@ -23,13 +23,21 @@ pub(super) const ITEM_COLUMNS: &str = "item.id, item.sha256, item.format, item.s
 pub(super) const ITEM_JOINS: &str = "LEFT JOIN device o ON o.id = item.origin
     LEFT JOIN device v ON v.id = item.via";
 
+/// Not expired, `?2` being the time now: an expired item is hidden at once, before retention
+/// deletes it. Pinned items never expire.
+pub(super) const NOT_EXPIRED: &str =
+    "(item.expires_at IS NULL OR item.expires_at > ?2 OR item.pinned_at IS NOT NULL)";
+
 impl HistoryStore {
-    /// One item, if it exists.
+    /// One item, if it exists and hasn't expired.
     pub fn item(&self, id: ItemId) -> Result<Option<Item>, Error> {
-        let sql = format!("SELECT {ITEM_COLUMNS} FROM item {ITEM_JOINS} WHERE item.id = ?1");
+        let sql = format!(
+            "SELECT {ITEM_COLUMNS} FROM item {ITEM_JOINS} WHERE item.id = ?1 AND {NOT_EXPIRED}"
+        );
+        let now = (self.clock)();
         let item = self
             .conn
-            .query_row(&sql, [id.0], |row| Ok(item_from_row(row)))
+            .query_row(&sql, [id.0, now], |row| Ok(item_from_row(row)))
             .optional()?
             .transpose()?;
         Ok(item.map(|mut item| {

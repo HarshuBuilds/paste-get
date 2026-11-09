@@ -77,13 +77,16 @@ The history store is in the core (`core/src/history`) but no app turns it on yet
 - **Never kept:** clips marked sensitive (password managers), 2FA codes, and anything that looks
   like a private key, a 2FA seed (`otpauth://`), an API token, a card number or a generated
   password (`core/src/detect.rs`). Only how many were kept out is counted. A number of 4 to 8
-  digits alone is kept for 15 minutes.
+  digits alone is kept for 15 minutes: then it is hidden, and deleted like below the next time
+  the history applies its limits (after the next clip, or when the app's timer for it fires).
 - **Not encrypted by paste-get in this version.** It relies on the device's disk encryption:
   Android encrypts app data; on a PC, that is BitLocker or LUKS. **On a PC without disk
   encryption, anyone who can read the disk can read the history.** Encryption with a key in the
   OS keystore is planned, together with the identity key.
 - Deleting a clip removes it from the database, its journal (WAL) and its search index. Flash
-  storage may still hold old copies of the blocks until it reuses them.
+  storage may still hold old copies of the blocks until it reuses them. Clips the history drops
+  for their age or its size limits leave the database at once, and the journal at the next
+  checkpoint.
 - Logs and error messages never contain what was copied or searched.
 
 ## What it doesn't protect against (yet)

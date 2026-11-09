@@ -153,8 +153,8 @@ History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart ac
     MediaStore references that follow gallery deletions
   - [x] Retention, delete and stats: expiry and age, originals after 7 days or past their
     budget, the item count, then images before texts when the database is full; pins never go.
-    A deleted clip is gone from the database, its WAL and the index; space goes back to the
-    disk. Measured on 1,000 texts: the trigram index is 3.2 times the text, 1.4 KB per item
+    A deleted or expired clip is gone from the database, its WAL and the index (`next_expiry`
+    tells the app when to run retention); space goes back to the disk. Measured on 1,000 texts: the trigram index is 3.2 times the text, 1.4 KB per item
   - [ ] Phone: recording through `ffi`, then the Android screens
   - [ ] PC: history in the daemon, `pasteget history`, the tray's history window
 Desktop identity key in the OS keystore when one is available (M2 stores it in a user-only file,

@@ -450,6 +450,61 @@ fn numbers_that_look_like_codes_are_kept_15_minutes() {
 }
 
 #[test]
+fn an_expired_code_is_hidden_then_leaves_nothing_behind() {
+    let mut test = Test::new();
+    let code = test.added("739184");
+    test.added("copied just after");
+    assert_eq!(
+        test.store.next_expiry().unwrap(),
+        Some(T0 + BARE_CODE_TTL_MS)
+    );
+
+    // Hidden as soon as it expires, even before retention runs.
+    test.advance(BARE_CODE_TTL_MS);
+    assert!(test.store.item(code).unwrap().is_none());
+    assert_eq!(test.store.text(code).unwrap(), None);
+
+    // The app runs retention at that time, without waiting for a clip: the code is gone from
+    // the database and its write-ahead log.
+    assert_eq!(test.store.retain().unwrap().items_deleted, 1);
+    assert_eq!(test.store.next_expiry().unwrap(), None);
+    let wal = test.dir.path().join(format!("{DATABASE_FILE}-wal"));
+    assert_eq!(std::fs::metadata(&wal).map_or(0, |m| m.len()), 0);
+    let mut bytes = Vec::new();
+    for file in walk(test.dir.path()) {
+        bytes.extend(std::fs::read(file).unwrap());
+    }
+    assert!(!contains(&bytes, "739184"));
+}
+
+#[test]
+fn a_log_another_connection_holds_is_emptied_later() {
+    let mut test = Test::new();
+    let id = test.added("first clip");
+    test.store
+        .conn
+        .busy_timeout(std::time::Duration::from_millis(10))
+        .unwrap();
+    // Another connection in the middle of a read keeps the log from being emptied.
+    let reader = Connection::open(test.dir.path().join(DATABASE_FILE)).unwrap();
+    reader.execute_batch("BEGIN").unwrap();
+    let _: i64 = reader
+        .query_row("SELECT count(*) FROM item", [], |row| row.get(0))
+        .unwrap();
+    let logs = logs_of(|| {
+        test.store.delete(&[id]).unwrap();
+    });
+    assert!(logs.contains("write-ahead log"), "{logs}");
+    let wal = test.dir.path().join(format!("{DATABASE_FILE}-wal"));
+    assert!(std::fs::metadata(&wal).unwrap().len() > 0);
+
+    // Once it is done, the next retention empties it.
+    drop(reader);
+    test.added("next clip");
+    assert_eq!(std::fs::metadata(&wal).unwrap().len(), 0);
+}
+
+#[test]
 fn a_one_time_code_is_refused_again_for_15_minutes_only() {
     let mut test = Test::new();
     let code = Clip::one_time_code("482913", "Messages", PC);

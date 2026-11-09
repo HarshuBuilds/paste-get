@@ -5,6 +5,7 @@
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::images::{self, MAX_ORIGINAL_LEN, Uncommitted};
+use super::items::NOT_EXPIRED;
 use super::types::Code;
 use super::{
     Context, Error, Format, HistoryStore, ItemId, Kept, Policy, Reason, Recorded, Source, Thumb,
@@ -175,14 +176,17 @@ impl HistoryStore {
         Ok(())
     }
 
-    /// The whole text of an item, to copy it back. `None` for an image, an unknown item, or a
-    /// text too large to keep.
+    /// The whole text of an item, to copy it back. `None` for an image, an unknown or expired
+    /// item, or a text too large to keep.
     pub fn text(&self, id: ItemId) -> Result<Option<String>, Error> {
+        let now = (self.clock)();
         let row: Option<(i64, i64, Option<String>)> = self
             .conn
             .query_row(
-                "SELECT format, kept, text_head FROM item WHERE id = ?1",
-                [id.0],
+                &format!(
+                    "SELECT format, kept, text_head FROM item WHERE id = ?1 AND {NOT_EXPIRED}"
+                ),
+                [id.0, now],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;

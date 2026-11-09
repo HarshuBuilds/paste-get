@@ -146,8 +146,10 @@ Each line is a claim to check. "→" points at where it's enforced.
     read as FTS5 syntax. → `core/src/history/query.rs` (fuzz target `history_query`)
 31. Deleting from the history leaves nothing of the clip: rows, body, thumbnail and search
     entries go in one transaction (`secure_delete`, FTS5 secure-delete), the original file
-    after the commit, then the free pages and the WAL are emptied. Retention never deletes a
-    pinned item. → `core/src/history/retention.rs`, test `a_deleted_clip_leaves_nothing_behind`
+    after the commit, then the free pages and the WAL are emptied. The same goes for an expired
+    item (a number that looks like a code): hidden when it expires, deleted at the next
+    retention. Retention never deletes a pinned item. → `core/src/history/retention.rs`, tests `a_deleted_clip_leaves_nothing_behind`
+    and `an_expired_code_is_hidden_then_leaves_nothing_behind`
 
 ## Known gaps (not bugs to report, but worth an opinion)
 

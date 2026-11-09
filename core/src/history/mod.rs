@@ -13,6 +13,9 @@
 //! The API is small and synchronous: apps call it from one thread of their own. Everything it
 //! takes and gives is plain data ([`Item`], [`Recorded`]…), so an app can put its own trait in
 //! front of it and fake it in tests; a store in a temporary folder is fast too.
+//!
+//! Open one store per folder, and nothing else on its database: a delete empties the
+//! write-ahead log only when no other connection is reading it.
 
 mod fold;
 mod images;
@@ -134,6 +137,9 @@ pub struct HistoryStore {
     clock: Box<dyn Fn() -> i64 + Send>,
     /// One-time codes seen lately, as (SHA-256, unix ms). In memory only.
     recent_codes: Vec<([u8; 32], i64)>,
+    /// The write-ahead log still holds deleted rows: another connection kept it from being
+    /// emptied.
+    log_to_empty: bool,
 }
 
 impl fmt::Debug for HistoryStore {
@@ -162,6 +168,7 @@ impl HistoryStore {
             policy,
             clock: Box::new(system_now),
             recent_codes: Vec::new(),
+            log_to_empty: false,
         };
         store.sweep_files()?;
         Ok(store)

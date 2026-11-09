@@ -122,7 +122,11 @@ impl HistoryStore {
     /// Applies the policy's limits, in this order: expired and too old items; originals older
     /// than the policy allows; the oldest originals while over the budget; the oldest items over
     /// the count; then, while the database is over its size, the oldest images, then texts.
-    /// Pinned items are never touched. Runs after every clip recorded.
+    /// Pinned items are never touched. Runs after every clip recorded; apps also call it at
+    /// [`Self::next_expiry`].
+    ///
+    /// Expired items leave nothing behind, as with [`Self::delete`]. Items deleted for their age
+    /// or the limits leave the database at once, and its write-ahead log at the next checkpoint.
     pub fn retain(&mut self) -> Result<Swept, Error> {
         let now = (self.clock)();
         let policy = self.policy.clone();
@@ -132,14 +136,22 @@ impl HistoryStore {
         let mut files = Vec::new();
         let mut swept = Swept::default();
 
+        let expired = delete_where(
+            &tx,
+            &originals,
+            "pinned_at IS NULL AND expires_at <= ?1",
+            &[&now],
+            &mut files,
+        )?;
+        swept.items_deleted += expired;
         let too_old = policy
             .keep_for_ms
             .map_or(i64::MIN, |keep| now.saturating_sub(keep));
         swept.items_deleted += delete_where(
             &tx,
             &originals,
-            "pinned_at IS NULL AND (expires_at <= ?1 OR last_at < ?2)",
-            &[&now, &too_old],
+            "pinned_at IS NULL AND last_at < ?1",
+            &[&too_old],
             &mut files,
         )?;
 
@@ -222,11 +234,25 @@ impl HistoryStore {
             }
         }
         tx.commit()?;
-        remove_files(files);
+        if expired > 0 || self.log_to_empty {
+            self.forget_for_real(files)?;
+        } else {
+            remove_files(files);
+        }
         if swept != Swept::default() {
             tracing::debug!(?swept, "history: retention");
         }
         Ok(swept)
+    }
+
+    /// When the next item expires (unix ms), if one does. An expired item is hidden at once, and
+    /// deleted at the next [`Self::retain`]: apps call it then, so it doesn't wait for a clip.
+    pub fn next_expiry(&self) -> Result<Option<i64>, Error> {
+        Ok(self.conn.query_row(
+            "SELECT min(expires_at) FROM item WHERE expires_at IS NOT NULL AND pinned_at IS NULL",
+            [],
+            |row| row.get(0),
+        )?)
     }
 
     /// [`Self::retain`], then the daily cleaning: old "kept out" numbers, files no row points
@@ -300,8 +326,9 @@ impl HistoryStore {
         }
     }
 
-    /// After a delete the user asked for: removes the files, then gives the freed pages back
-    /// and empties the write-ahead log, which still holds the deleted rows.
+    /// After a delete the user asked for, or an expiry: removes the files, then gives the freed
+    /// pages back and empties the write-ahead log, which still holds the deleted rows. If another
+    /// connection keeps the log from being emptied, it is tried again at the next retention.
     fn forget_for_real(&mut self, files: Vec<PathBuf>) -> Result<(), Error> {
         remove_files(files);
         // Deleted entries leave the index's pages at once, but the emptied pages stay until FTS5
@@ -316,8 +343,16 @@ impl HistoryStore {
                 .execute("INSERT INTO item_fts (item_fts) VALUES ('optimize')", [])?;
         }
         incremental_vacuum(&self.conn)?;
-        self.conn
-            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        // 1 in the first column: a reader kept the checkpoint from finishing.
+        let busy: i64 = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+        self.log_to_empty = busy != 0;
+        if self.log_to_empty {
+            tracing::warn!(
+                "history: another connection keeps the write-ahead log from being emptied"
+            );
+        }
         Ok(())
     }
 }
