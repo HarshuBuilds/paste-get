@@ -159,7 +159,9 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
 - [x] *Settings…* window in the tray: this computer's name, notifications, links, hotkeys and
   starting at login, checked before saving. Notifications and links apply at once
   (`pasteget` control request `reload_settings`); a new name or hotkeys restart the daemon the
-  tray runs (`TESTING.md`, T15–T18)
+  tray runs (`TESTING.md`, T15–T18). The restart also works while a pairing code is shown or
+  was shown: stopping the control channel ends its requests, which no longer keep the old
+  daemon and its port
 - [x] Windows notifications come from "paste-get" with its icon, not "Windows PowerShell": its
   AppUserModelID is registered for the user, and removed by the uninstaller
 - [x] Received clips never go to the Windows cloud clipboard (Microsoft account sync); they stay

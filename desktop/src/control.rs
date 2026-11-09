@@ -24,7 +24,7 @@ use pasteget_core::pairing::{PAIRING_TTL, PairingInvite};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::broadcast;
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 
 use crate::clipboard::Content;
 use crate::config::Profile;
@@ -218,7 +218,9 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     })
 }
 
-/// Serves control requests for `daemon` until the returned handle is aborted.
+/// Serves control requests for `daemon` until the returned handle is aborted. Aborting it also
+/// ends the requests under way (a pairing waits minutes for a phone), so they let go of the
+/// daemon: a new one can then take its port and control channel (the tray's restart).
 pub async fn serve(daemon: Arc<Daemon>, endpoint: &Endpoint) -> Result<JoinHandle<()>> {
     #[cfg(unix)]
     {
@@ -236,10 +238,13 @@ pub async fn serve(daemon: Arc<Daemon>, endpoint: &Endpoint) -> Result<JoinHandl
         let listener = UnixListener::bind(&endpoint.path)
             .with_context(|| format!("could not listen on {}", endpoint.path.display()))?;
         Ok(tokio::spawn(async move {
+            // Dropped with this task, which aborts them.
+            let mut requests = JoinSet::new();
             loop {
                 match listener.accept().await {
                     Ok((stream, _)) => {
-                        tokio::spawn(handle(Arc::clone(&daemon), stream));
+                        while requests.try_join_next().is_some() {}
+                        requests.spawn(handle(Arc::clone(&daemon), stream));
                     }
                     Err(e) => tracing::warn!(error = %e, "control socket error"),
                 }
@@ -257,6 +262,9 @@ pub async fn serve(daemon: Arc<Daemon>, endpoint: &Endpoint) -> Result<JoinHandl
             .create(&name)
             .context("could not create the control pipe: is a daemon already running?")?;
         Ok(tokio::spawn(async move {
+            // Dropped with this task, which aborts them and closes their pipe instances: the
+            // next daemon's `first_pipe_instance` needs every one closed.
+            let mut requests = JoinSet::new();
             loop {
                 if let Err(e) = server.connect().await {
                     tracing::warn!(error = %e, "control pipe error");
@@ -273,7 +281,8 @@ pub async fn serve(daemon: Arc<Daemon>, endpoint: &Endpoint) -> Result<JoinHandl
                     }
                 };
                 let connected = std::mem::replace(&mut server, next);
-                tokio::spawn(handle(Arc::clone(&daemon), connected));
+                while requests.try_join_next().is_some() {}
+                requests.spawn(handle(Arc::clone(&daemon), connected));
             }
         }))
     }
@@ -783,6 +792,68 @@ mod tests {
             .await
             .expect("the daemon was not asked to quit")
             .unwrap();
+    }
+
+    /// What the tray does to restart its daemon after a new name or hotkeys: stop serving, let
+    /// the daemon go, and start another on the same port. A pairing request still under way
+    /// (the pairing window, even closed, waits minutes for a phone) must not keep the old daemon,
+    /// its port and its control channel alive.
+    #[tokio::test]
+    async fn a_daemon_stopped_while_a_request_waits_lets_a_new_one_start() {
+        let home = tempfile::tempdir().unwrap();
+        let profile = Profile::open_in(home.path(), "pc").unwrap();
+        let options = |port| DaemonOptions {
+            listen: SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
+            advertised_ips: Some(vec![IpAddr::V4(Ipv4Addr::LOCALHOST)]),
+            poll_interval: Duration::from_millis(10),
+            announce: false,
+            notifier: None,
+            hotkeys: false,
+        };
+        let daemon = Arc::new(
+            Daemon::start(profile.clone(), MemoryClipboard::default(), options(0))
+                .await
+                .unwrap(),
+        );
+        let port = daemon.local_addr().port();
+        let endpoint = Endpoint::for_profile(&profile);
+        let server = serve(Arc::clone(&daemon), &endpoint).await.unwrap();
+        let (shown_tx, shown) = tokio::sync::oneshot::channel();
+        let waiting = endpoint.clone();
+        let pairing = tokio::spawn(async move {
+            let mut shown_tx = Some(shown_tx);
+            let _ = call(&waiting, &Request::Pair, |_| {
+                if let Some(tx) = shown_tx.take() {
+                    let _ = tx.send(());
+                }
+            })
+            .await;
+        });
+        shown.await.unwrap();
+
+        // As the tray's restart does it.
+        server.abort();
+        cleanup(&endpoint);
+        drop(daemon);
+        let mut started = Err(anyhow!("not tried"));
+        for _ in 0..10 {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            started =
+                Daemon::start(profile.clone(), MemoryClipboard::default(), options(port)).await;
+            if started.is_ok() {
+                break;
+            }
+        }
+        let restarted = Arc::new(started.expect("the old daemon still holds its port"));
+        let _server = serve(restarted, &endpoint).await.unwrap();
+
+        // The request ended with the old daemon, rather than wait for a phone it can't take.
+        tokio::time::timeout(Duration::from_secs(5), pairing)
+            .await
+            .expect("the pairing request still waits on the old daemon")
+            .unwrap();
+        let status = ask(&endpoint, Request::Status).await;
+        assert!(matches!(&status[..], [Response::Status(_)]));
     }
 
     #[test]
