@@ -108,9 +108,9 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
 - [ ] Human review of crypto and protocol code: `docs/REVIEW.md` lists the files and the
   31 properties to check
 - [x] Pairing from the tray: a *Pair a phone* window with the QR code, opened by itself on the
-  first start, so no terminal is needed. Wrong secrets don't close the code before 1000 of them,
-  so a device on the network can't close it with a few junk requests (`TESTING.md`, P19). The
-  window isn't protected from screenshots yet
+  first start, so no terminal is needed. Wrong secrets never close the code, so a device on the
+  network can't close it with junk requests (`TESTING.md`, P19). The window isn't protected
+  from screenshots yet
 - [x] PC side can revoke a paired phone: `pasteget forget <name>`, or the tray menu → the phone
   → *Forget this device*; its session ends at once. The phone is told (`Unpaired` in the
   session, or `Refusal`, `NOT_PAIRED`, when it next dials), forgets the PC too and shows "<PC>
@@ -119,11 +119,14 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
 - [x] The phone asks before pairing: a scanned code or a `pasteget://` link (which any web page
   or message can open) shows the name and addresses it gives and pairs only on *Pair*. Pairing
   errors are explained in the phone's language, with the technical message under *Details*.
-  Only the code's addresses on the local network are dialed, never one on the Internet or of
-  the phone itself (`TESTING.md`, P18)
+  Only the code's addresses on the local network are dialed, never one on the Internet, and
+  the phone never pairs through an address of its own: loopback, Wi-Fi, hotspot (`TESTING.md`,
+  P18, P20)
 - [x] Connections not known to come from a paired device are limited: 3 s for the TLS handshake
-  and the first message, 8 at once per address, 64 in all, the oldest closed past that so that a
-  paired device still gets in (`TESTING.md`, section 3, row 13)
+  and the first message, 8 at once per address, 64 in all. Past that the oldest of the address
+  holding the most closes, never one from an address a paired device connected from for one
+  from another address, so a paired device still gets in during a flood (`TESTING.md`, section
+  3, row 13)
 - [x] *Settings…* window in the tray: this computer's name, notifications, links, hotkeys and
   starting at login, checked before saving. Notifications and links apply at once
   (`pasteget` control request `reload_settings`); a new name or hotkeys restart the daemon the
