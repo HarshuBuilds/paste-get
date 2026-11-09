@@ -596,9 +596,80 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pasteget_core::session::SessionError;
+    use pasteget_core::transport;
 
     fn addr(s: &str) -> SocketAddr {
         s.parse().unwrap()
+    }
+
+    /// Records whether the app was told a computer connected.
+    #[derive(Default)]
+    struct Connections(Mutex<Vec<bool>>);
+
+    impl PhoneListener for Connections {
+        fn on_connection_changed(&self, _device_id: String, connected: bool) {
+            self.0.lock().unwrap().push(connected);
+        }
+
+        fn on_clip_received(&self, _mime_type: String, _data: Vec<u8>, _sensitive: bool) {}
+
+        fn on_clip_delivered(&self, _delivery: ClipDelivery) {}
+
+        fn on_unpaired(&self, _computer: PairedComputer) {}
+    }
+
+    /// Records who unpaired the computer.
+    #[derive(Default)]
+    struct UnpairedBy(Mutex<Vec<DeviceId>>);
+
+    impl SessionEvents for UnpairedBy {
+        fn clip_received(&self, _peer: DeviceId, _clip: Clip) {}
+
+        fn unpaired_by(&self, peer: DeviceId) {
+            self.0.lock().unwrap().push(peer);
+        }
+    }
+
+    /// Forgotten while its connection was being set up, where `forget` can't end it yet: the
+    /// session tells the computer itself, and the app never hears it connected.
+    #[test]
+    fn a_computer_forgotten_while_it_connects_is_told() {
+        let dir = tempfile::tempdir().unwrap();
+        let phone = PhoneClient::new(dir.path().to_str().unwrap().into(), "POCO".into()).unwrap();
+        let connections = Arc::new(Connections::default());
+        phone.start(connections.clone());
+        let state = Arc::clone(&phone.state);
+        let pc = Identity::generate().unwrap();
+        let (pc_peers, pc_events) = (Peers::new(), UnpairedBy::default());
+        let pc_hello = Hello {
+            protocol_version: PROTOCOL_VERSION,
+            device_name: "PC".into(),
+            ..Hello::default()
+        };
+
+        let (phone_ended, pc_ended) = phone.runtime.block_on(async {
+            let (phone_io, pc_io) = tokio::io::duplex(64 * 1024);
+            let (client, server) = tokio::join!(
+                transport::connect(phone_io, &state.identity, pc.device_id()),
+                async { transport::accept(pc_io, &pc).await?.authorize(|_| true) }
+            );
+            let sessions = async {
+                tokio::join!(
+                    session::run_session(client.unwrap(), state.hello(), &state.peers, &*state),
+                    session::run_session(server.unwrap(), pc_hello, &pc_peers, &pc_events)
+                )
+            };
+            tokio::time::timeout(Duration::from_secs(5), sessions)
+                .await
+                .expect("both sessions should end")
+        });
+
+        assert!(matches!(phone_ended, Err(SessionError::Unpaired)));
+        assert!(matches!(pc_ended, Err(SessionError::UnpairedByPeer)));
+        assert_eq!(*pc_events.0.lock().unwrap(), [state.identity.device_id()]);
+        assert!(!connections.0.lock().unwrap().contains(&true));
+        assert!(phone.paired_computers().is_empty());
     }
 
     #[test]

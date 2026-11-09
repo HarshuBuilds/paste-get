@@ -1347,6 +1347,71 @@ mod tests {
         fn clip_received(&self, _peer: DeviceId, _clip: Clip) {}
     }
 
+    /// Records who unpaired this side.
+    #[derive(Default)]
+    struct UnpairedBy(Mutex<Vec<DeviceId>>);
+
+    impl SessionEvents for UnpairedBy {
+        fn clip_received(&self, _peer: DeviceId, _clip: Clip) {}
+
+        fn unpaired_by(&self, peer: DeviceId) {
+            self.0.lock().unwrap().push(peer);
+        }
+    }
+
+    /// Forgotten while its connection was being set up (after the TLS handshake checked it was
+    /// paired, before the session started), where [`Daemon::forget`] can't end it yet: the
+    /// session tells the device itself.
+    #[tokio::test]
+    async fn a_device_forgotten_while_it_connects_is_told() {
+        let pc = start("pc").await;
+        let shared = Arc::clone(&pc.daemon.shared);
+        let phone = Identity::generate().unwrap();
+        let (phone_io, pc_io) = tokio::io::duplex(64 * 1024);
+        let (client, server) = tokio::join!(
+            transport::connect(phone_io, &phone, pc.daemon.device_id()),
+            async {
+                // Still paired when its key was checked.
+                transport::accept(pc_io, &shared.identity)
+                    .await?
+                    .authorize(|_| true)
+            }
+        );
+        let phone_hello = Hello {
+            protocol_version: PROTOCOL_VERSION,
+            device_name: "POCO".into(),
+            ..Hello::default()
+        };
+        let (phone_peers, phone_events) = (Peers::new(), UnpairedBy::default());
+
+        let phone_side =
+            session::run_session(client.unwrap(), phone_hello, &phone_peers, &phone_events);
+        let pc_side = async {
+            let Ok(Opening::Hello(connection, hello)) =
+                pairing::read_opening(server.unwrap()).await
+            else {
+                panic!("expected a Hello");
+            };
+            session::answer_session(connection, hello, shared.hello(), &shared.peers, &*shared)
+                .await
+        };
+        let sessions = async { tokio::join!(phone_side, pc_side) };
+        let (phone_ended, pc_ended) = timeout(Duration::from_secs(5), sessions)
+            .await
+            .expect("both sessions should end");
+
+        assert!(matches!(pc_ended, Err(session::SessionError::Unpaired)));
+        assert!(matches!(
+            phone_ended,
+            Err(session::SessionError::UnpairedByPeer)
+        ));
+        assert_eq!(*phone_events.0.lock().unwrap(), [pc.daemon.device_id()]);
+        // It never counted as connected, nor came back as a device.
+        assert!(!shared.peers.is_connected(&phone.device_id()));
+        assert!(pc.daemon.status().await.devices.is_empty());
+        assert!(pc.notifications.1.lock().unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn a_device_that_forgot_this_one_pairs_again() {
         let pc = start("pc").await;
