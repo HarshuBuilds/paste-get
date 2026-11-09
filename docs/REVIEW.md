@@ -171,7 +171,11 @@ Each line is a claim to check. "→" points at where it's enforced.
     or write leaves syncing as it was. → `ffi/src/history.rs`, `ffi/src/lib.rs` (`State::keep`),
     tests `the_history_never_keeps_a_secret` and `syncing_goes_on_when_the_history_cant_open`.
     On the PC, likewise, what the *Recent* list gets. → `desktop/src/history.rs`,
-    `desktop/src/daemon.rs` (`remember_clip`), test `a_sensitive_clip_adds_no_row`
+    `desktop/src/daemon.rs` (`remember_clip`), test `a_sensitive_clip_adds_no_row`.
+    On both, a panic on the history's thread (a bug, the app's listener throwing, an image that
+    breaks the decoder) loses that job only; the PC marks an image failed before decoding it,
+    so one that breaks the decoder isn't tried again. → `record_loop`, `make_thumbnails`, tests
+    `a_listener_that_throws_stops_nothing`, `an_image_that_breaks_the_decoder_stops_nothing`
 31. Deleting from the history leaves nothing of the clip: rows, body, thumbnail and search
     entries go in one transaction (`secure_delete`, FTS5 secure-delete), the original file
     after the commit, then the free pages and the WAL are emptied. The same goes for an expired

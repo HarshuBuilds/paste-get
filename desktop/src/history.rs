@@ -6,12 +6,15 @@
 //!
 //! The daemon hands it what is copied here, sent and received; a thread of its own records it,
 //! makes the thumbnails of images and deletes what expires, so sessions never wait on the disk.
+//! A panic there (a bug, an image that breaks its decoder) loses what it was doing, not the
+//! history.
 //! What it keeps out (passwords, codes, keys) is decided in the core (`HistoryStore::record`).
 //! Contents never reach logs or errors.
 //!
 //! Also the text formats of `pasteget history`.
 
 use std::ops::Range;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -49,6 +52,9 @@ impl std::fmt::Debug for History {
     }
 }
 
+/// Makes a thumbnail: [`thumbnail`], or another decoder in tests.
+type Decoder = fn(&[u8]) -> Option<(Vec<u8>, u32, u32)>;
+
 /// What the history's thread does, in order.
 enum Job {
     Record(Clip, Context),
@@ -61,6 +67,15 @@ enum Job {
 impl History {
     /// Opens the history kept in `dir` for the device `this_device`, and starts its thread.
     pub fn open(dir: &Path, this_device: DeviceId, settings: &HistorySettings) -> Result<Self> {
+        Self::start(dir, this_device, settings, thumbnail)
+    }
+
+    fn start(
+        dir: &Path,
+        this_device: DeviceId,
+        settings: &HistorySettings,
+        decode: Decoder,
+    ) -> Result<Self> {
         let store = HistoryStore::open(dir, this_device, policy(settings))
             .context("could not open the clipboard history")?;
         let store = Arc::new(Mutex::new(store));
@@ -68,7 +83,7 @@ impl History {
         let thread_store = Arc::clone(&store);
         std::thread::Builder::new()
             .name("pasteget-history".into())
-            .spawn(move || record_loop(&thread_store, &jobs))
+            .spawn(move || record_loop(&thread_store, &jobs, decode))
             .context("could not start the history's thread")?;
         Ok(Self { store, queue })
     }
@@ -182,44 +197,53 @@ fn policy(settings: &HistorySettings) -> Policy {
     }
 }
 
-/// Records what it's given until the [`History`] is gone, makes the thumbnails, and deletes
-/// items when they expire.
-fn record_loop(store: &Mutex<HistoryStore>, jobs: &Receiver<Job>) {
+/// Records what it's given until the [`History`] is gone, makes the thumbnails with `decode`,
+/// and deletes items when they expire.
+fn record_loop(store: &Mutex<HistoryStore>, jobs: &Receiver<Job>, decode: Decoder) {
     loop {
         let job = match until_next_expiry(store) {
             Some(wait) => match jobs.recv_timeout(wait) {
-                Ok(job) => job,
-                Err(RecvTimeoutError::Timeout) => {
-                    if let Err(error) = lock(store).retain() {
-                        tracing::warn!(%error, "history: retention failed");
-                    }
-                    continue;
-                }
+                Ok(job) => Some(job),
+                Err(RecvTimeoutError::Timeout) => None,
                 Err(RecvTimeoutError::Disconnected) => return,
             },
             None => match jobs.recv() {
-                Ok(job) => job,
+                Ok(job) => Some(job),
                 Err(_) => return,
             },
         };
-        match job {
-            Job::Record(clip, context) => {
-                if let Err(error) = lock(store).record(&clip, &context) {
-                    tracing::warn!(%error, size = clip.data.len(), "history: a clip was not kept");
-                }
+        // A panic loses this job, not the history. The store's lock ignores poisoning.
+        if panic::catch_unwind(AssertUnwindSafe(|| run(store, job, decode))).is_err() {
+            tracing::error!("history: a job failed, the history goes on");
+        }
+    }
+}
+
+/// Does `job`, then makes the thumbnails; without a job, deletes what expired.
+fn run(store: &Mutex<HistoryStore>, job: Option<Job>, decode: Decoder) {
+    match job {
+        None => {
+            if let Err(error) = lock(store).retain() {
+                tracing::warn!(%error, "history: retention failed");
             }
-            Job::NameDevice(id, name, platform) => {
-                if let Err(error) = lock(store).set_device(id, &name, platform) {
-                    tracing::warn!(%error, "history: a device was not named");
-                }
-            }
-            Job::Flush(done) => {
-                make_thumbnails(store);
-                let _ = done.send(());
+            return;
+        }
+        Some(Job::Record(clip, context)) => {
+            if let Err(error) = lock(store).record(&clip, &context) {
+                tracing::warn!(%error, size = clip.data.len(), "history: a clip was not kept");
             }
         }
-        make_thumbnails(store);
+        Some(Job::NameDevice(id, name, platform)) => {
+            if let Err(error) = lock(store).set_device(id, &name, platform) {
+                tracing::warn!(%error, "history: a device was not named");
+            }
+        }
+        Some(Job::Flush(done)) => {
+            make_thumbnails(store, decode);
+            let _ = done.send(());
+        }
     }
+    make_thumbnails(store, decode);
 }
 
 /// How long until the next item expires, at least a second. `None` if none does.
@@ -236,7 +260,10 @@ fn until_next_expiry(store: &Mutex<HistoryStore>) -> Option<Duration> {
 
 /// Makes the thumbnails images wait for: until one is made, their original can't be removed to
 /// save space. The store is not held while an image is decoded.
-fn make_thumbnails(store: &Mutex<HistoryStore>) {
+///
+/// Each image is marked failed before it is decoded, and done once it is: one that breaks the
+/// decoder (a panic, or a crash of the daemon) isn't tried again, even after a restart.
+fn make_thumbnails(store: &Mutex<HistoryStore>, decode: Decoder) {
     loop {
         let pending = match lock(store).pending_thumbnails(THUMBNAILS_AT_ONCE) {
             Ok(pending) => pending,
@@ -249,16 +276,14 @@ fn make_thumbnails(store: &Mutex<HistoryStore>) {
             return;
         }
         for image in pending {
-            let thumbnail = image
-                .path
-                .and_then(|path| std::fs::read(path).ok())
-                .and_then(|data| thumbnail(&data));
-            let saved = match thumbnail {
+            let data = image.path.and_then(|path| std::fs::read(path).ok());
+            let marked = lock(store).thumbnail_failed(image.id);
+            let saved = marked.and_then(|()| match data.and_then(|data| decode(&data)) {
                 Some((jpeg, width, height)) => {
                     lock(store).set_thumbnail(image.id, &jpeg, width, height)
                 }
-                None => lock(store).thumbnail_failed(image.id),
-            };
+                None => Ok(()),
+            });
             if let Err(error) = saved {
                 // Not asked again until the next clip.
                 tracing::warn!(%error, "history: could not store a thumbnail");
@@ -392,6 +417,35 @@ mod tests {
         let text = history.content(page.items[0].id).unwrap().unwrap();
         assert_eq!(text.data, b"du texte");
         assert!(history.content(ItemId(999)).unwrap().is_none());
+    }
+
+    /// A decoder that panics on an image (a bug in it): the image is marked failed, so it isn't
+    /// tried again after a restart, and the history goes on recording.
+    #[test]
+    fn an_image_that_breaks_the_decoder_stops_nothing() {
+        fn breaks(_: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
+            panic!("a bug in the decoder")
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let history = History::start(dir.path(), PC, &on(), breaks).unwrap();
+
+        history.record(
+            &Clip::png(png(64, 64), PHONE),
+            Context::received_from(PHONE),
+        );
+        history.wait_for_recorder();
+        history.record(&Clip::text("après", PC), Context::new(Source::CopiedHere));
+        history.wait_for_recorder();
+
+        let page = history.page(&Query::default()).unwrap();
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.items[0].preview, "après");
+        assert_eq!(page.items[1].thumb, Thumb::Failed);
+        drop(history);
+        let again = History::open(dir.path(), PC, &on()).unwrap();
+        again.wait_for_recorder();
+        let page = again.page(&Query::default()).unwrap();
+        assert_eq!(page.items[1].thumb, Thumb::Failed);
     }
 
     #[test]

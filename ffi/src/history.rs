@@ -4,13 +4,15 @@
 //!
 //! [`crate::PhoneClient::open_history`] opens it and records into it what the phone copies,
 //! sends and receives, on a thread of its own: sessions never wait on the disk, and a history
-//! that fails (it can't open, the disk is full) never stops syncing. What it keeps out
-//! (passwords, codes, keys) is decided in the core (`HistoryStore::record`).
+//! that fails (it can't open, the disk is full) never stops syncing. A panic on that thread (a
+//! bug, or the app's listener throwing) loses what it was doing, not the history. What it keeps
+//! out (passwords, codes, keys) is decided in the core (`HistoryStore::record`).
 //!
 //! Contents never reach logs, errors or `Debug` output here either. Kotlin's records print every
 //! field in `toString()`: never log them.
 
 use std::fmt;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
@@ -125,29 +127,38 @@ fn record_loop(
     jobs: &Receiver<Job>,
 ) {
     while let Ok(job) = jobs.recv() {
-        let changed = match job {
-            Job::Record(clip, context) => match lock(store).record(&clip, &context) {
-                Ok(recorded) => recorded != Recorded::Ignored,
-                Err(error) => {
-                    tracing::warn!(%error, size = clip.data.len(), "history: a clip was not kept");
-                    false
-                }
-            },
-            Job::NameDevice(id, name, platform) => {
-                if let Err(error) = lock(store).set_device(id, &name, platform) {
-                    tracing::warn!(%error, "history: a device was not named");
-                }
-                false
-            }
-            Job::Flush(done) => {
-                let _ = done.send(());
-                false
-            }
-        };
-        let listener = lock(listener).clone();
-        if let (true, Some(listener)) = (changed, listener) {
-            listener.on_changed();
+        // A panic loses this job, not the history: UniFFI turns an exception the listener
+        // throws into one. The locks ignore poisoning.
+        if panic::catch_unwind(AssertUnwindSafe(|| run(store, listener, job))).is_err() {
+            tracing::error!("history: a job failed, the history goes on");
         }
+    }
+}
+
+/// Does `job`, and tells the listener if the history changed.
+fn run(store: &Mutex<HistoryStore>, listener: &Mutex<Option<Arc<dyn HistoryListener>>>, job: Job) {
+    let changed = match job {
+        Job::Record(clip, context) => match lock(store).record(&clip, &context) {
+            Ok(recorded) => recorded != Recorded::Ignored,
+            Err(error) => {
+                tracing::warn!(%error, size = clip.data.len(), "history: a clip was not kept");
+                false
+            }
+        },
+        Job::NameDevice(id, name, platform) => {
+            if let Err(error) = lock(store).set_device(id, &name, platform) {
+                tracing::warn!(%error, "history: a device was not named");
+            }
+            false
+        }
+        Job::Flush(done) => {
+            let _ = done.send(());
+            false
+        }
+    };
+    let listener = lock(listener).clone();
+    if let (true, Some(listener)) = (changed, listener) {
+        listener.on_changed();
     }
 }
 
@@ -1049,6 +1060,32 @@ mod tests {
             history.kept_out(0).unwrap()[0].reason,
             KeptOutReason::Paused
         );
+    }
+
+    /// The app's listener throws, which UniFFI turns into a panic: the history goes on
+    /// recording, and telling the listener.
+    #[test]
+    fn a_listener_that_throws_stops_nothing() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        struct Throws(AtomicU32);
+        impl HistoryListener for Throws {
+            fn on_changed(&self) {
+                if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+                    panic!("thrown by the app");
+                }
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let history = open(&dir);
+        let listener = Arc::new(Throws(AtomicU32::new(0)));
+        history.set_listener(Some(listener.clone()));
+
+        history.record(copied("first"), Context::new(Source::CopiedHere));
+        history.record(copied("second"), Context::new(Source::CopiedHere));
+        history.wait_for_recorder_for_tests();
+
+        assert_eq!(listener.0.load(Ordering::SeqCst), 2);
+        assert_eq!(history.stats().unwrap().items, 2);
     }
 
     /// The thread is stuck (here, the store is held): clips past the queue are dropped, and
