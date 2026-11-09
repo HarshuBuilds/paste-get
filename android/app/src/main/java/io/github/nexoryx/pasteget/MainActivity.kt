@@ -21,7 +21,6 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -136,7 +135,6 @@ class MainActivity : ComponentActivity() {
                 // The built-in mode grants the permission that lets the app hide the notices.
                 LaunchedEffect(builtIn.status) { notices = AccessNotices.of(this@MainActivity) }
                 HomeScreen(
-                    deviceId = pasteGet.client.deviceId(),
                     status = status,
                     computers = computers,
                     connected = connected,
@@ -432,7 +430,6 @@ private data class ScreenshotSetting(val wanted: Boolean, val access: PhotoAcces
 
 @Composable
 private fun HomeScreen(
-    deviceId: String,
     status: AppStatus,
     computers: List<PairedComputer>,
     connected: Set<String>,
@@ -503,12 +500,6 @@ private fun HomeScreen(
                 }
             }
         }
-
-        Spacer(modifier = Modifier.padding(8.dp))
-        Text(
-            text = stringResource(R.string.this_phone, deviceId.take(12)),
-            style = MaterialTheme.typography.bodySmall,
-        )
     }
 }
 

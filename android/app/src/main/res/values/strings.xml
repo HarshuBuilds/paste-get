@@ -29,7 +29,6 @@
     <string name="connected">Connected</string>
     <string name="offline">Offline</string>
     <string name="forget">Forget</string>
-    <string name="this_phone">This phone: %s…</string>
     <string name="screenshots_title">Send new screenshots</string>
     <string name="screenshots_on">Each screenshot goes to your computers\' clipboard</string>
     <string name="screenshots_off">Take a screenshot, paste it on your computer</string>

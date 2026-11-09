@@ -33,7 +33,6 @@
     <string name="connected">Connecté</string>
     <string name="offline">Hors ligne</string>
     <string name="forget">Oublier</string>
-    <string name="this_phone">Ce téléphone : %s…</string>
     <string name="screenshots_title">Envoyer les captures d\'écran</string>
     <string name="screenshots_on">Chaque capture va dans le presse-papiers de tes ordinateurs</string>
     <string name="screenshots_off">Fais une capture, colle-la sur ton ordinateur</string>
