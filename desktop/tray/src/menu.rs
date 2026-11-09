@@ -242,6 +242,8 @@ mod tests {
                     connected: *connected,
                 })
                 .collect(),
+            app_version: None,
+            control_version: None,
         }
     }
 

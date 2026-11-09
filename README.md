@@ -28,7 +28,11 @@ Downloads are on the [Releases](https://github.com/Nexoryx-business/paste-get/re
 
 **Windows 10/11:** run `paste-get_<version>_x64-setup.exe`. Windows SmartScreen may warn that
 the app is unknown, since it isn't code-signed yet: *More info → Run anyway*. paste-get then
-lives in the notification area (under `^` in the taskbar).
+lives in the notification area (under `^` in the taskbar). To update, run the new version's
+installer: it stops the running paste-get first.
+
+A newer paste-get started while an older one still runs (an AppImage replaced, a build from
+source) asks the older one to quit and takes its place.
 
 **Linux:**
 - AppImage: `chmod +x paste-get_<version>_amd64.AppImage` and run it.

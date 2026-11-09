@@ -3096,6 +3096,7 @@ dependencies = [
  "dirs",
  "pasteget-desktop",
  "qrcode",
+ "semver",
  "serde",
  "serde_json",
  "tauri",

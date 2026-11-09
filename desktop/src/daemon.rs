@@ -105,6 +105,8 @@ pub struct Daemon {
     local_addr: SocketAddr,
     _advertiser: Option<Advertiser>,
     _hotkeys: Option<Hotkeys>,
+    /// Set by [`Daemon::request_quit`].
+    quit: watch::Sender<bool>,
 }
 
 struct Shared {
@@ -226,7 +228,21 @@ impl Daemon {
             local_addr,
             _advertiser: advertiser,
             _hotkeys: hotkeys,
+            quit: watch::channel(false).0,
         })
+    }
+
+    /// Asks whatever runs this daemon (`pasteget daemon`, the tray) to stop it and exit: a newer
+    /// paste-get takes over. See [`Daemon::quit_signal`].
+    pub fn request_quit(&self) {
+        tracing::info!("asked to quit");
+        self.quit.send_replace(true);
+    }
+
+    /// Turns `true` once [`Daemon::request_quit`] was called. Holding it doesn't keep the daemon
+    /// alive.
+    pub fn quit_signal(&self) -> watch::Receiver<bool> {
+        self.quit.subscribe()
     }
 
     pub fn local_addr(&self) -> SocketAddr {

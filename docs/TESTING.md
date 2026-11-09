@@ -310,6 +310,10 @@ see its log). Keep the fake phone of section 2 running.
 | T20 | Quit, then open paste-get from the Start menu (a phone is paired) | A notification says where its icon is. At login (*Start at login* on), no such notification |
 | T21 | Open `%LOCALAPPDATA%\paste-get\logs\pasteget-tray.log` (Linux: `~/.local/share/paste-get/logs/`) | The tray's log, with "tray starting" for each start. Attach it to any report |
 | T14 | Windows: get a notification (an image from the phone, or a hotkey's) | It says it comes from **paste-get**, with its icon, not "Windows PowerShell". After uninstalling, paste-get is gone from Settings → System → Notifications |
+| T22 | `pasteget quit` while the tray runs its daemon | The icon disappears; `pasteget status` says the daemon is not running |
+| T23 | Run an older paste-get (a build from before this row existed, or with a lower `version` in `Cargo.toml`), then start this one | The older icon disappears and this one's shows, without the "already running" notice; the log says "an older paste-get runs for this profile: asking it to quit". With the same version, T19 instead |
+| T24 | Windows: with paste-get running (tray, and `pasteget daemon` in a terminal), run the installer of a newer version | No "paste-get is running" question: both are stopped before the files are copied. After *Finish*, one icon, and `pasteget status` shows the new version |
+| T25 | Windows: tick *Start at login*, then uninstall paste-get (Settings → Apps) | paste-get is no longer in Task Manager → *Startup apps*. Updating with the installer (T24) keeps it there |
 | T13 | Last: menu → the phone → *Forget this device* | The phone disappears from the menu within 2 s and can't reconnect. Within a few seconds the real phone shows "<PC> unpaired this phone" and drops the computer from its list. Pair again to go on |
 
 If paste-get doesn't start at all, Windows shows a box saying why, and the log has the details.

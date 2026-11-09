@@ -120,6 +120,10 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
   AppUserModelID is registered for the user, and removed by the uninstaller
 - [x] Received clips never go to the Windows cloud clipboard (Microsoft account sync); they stay
   in the local `Win+V` history unless sensitive
+- [x] Updates replace the running version: the installer stops paste-get first, and a newer
+  tray asks an older running one to quit (control request `quit`, `pasteget quit`), or ends
+  its processes if it's too old to know it (`TESTING.md`, T22–T25). The uninstaller also removes
+  *Start at login*
 
 ## v0.2 — "smart"
 History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart actions.

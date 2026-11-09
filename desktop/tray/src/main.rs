@@ -6,6 +6,9 @@
 //! `pasteget daemon`, for instance): then it only shows that one. Either way it talks to the
 //! daemon through the same control channel as the `pasteget` command, so the menu shows exactly
 //! what `pasteget status` and `pasteget recent` would.
+//!
+//! A newer tray replaces an older paste-get still running for the profile (after an update),
+//! and a tray asked to quit through the control channel exits.
 
 // No console window on Windows. Debug builds keep it, for the logs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -32,7 +35,7 @@ use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::{AppHandle, Manager, RunEvent, Runtime};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, watch};
 use tokio::task::JoinHandle;
 
 use crate::menu::{Command, Entry, State};
@@ -86,6 +89,8 @@ struct Tray {
 struct Hosted {
     _daemon: Arc<Daemon>,
     server: JoinHandle<()>,
+    /// [`Daemon::quit_signal`].
+    quit: watch::Receiver<bool>,
 }
 
 fn main() -> ExitCode {
@@ -104,6 +109,8 @@ fn main() -> ExitCode {
 
 fn run(cli: &Cli) -> Result<()> {
     let profile = Profile::open(&cli.profile)?;
+    let endpoint = Endpoint::for_profile(&profile);
+    tauri::async_runtime::block_on(startup::replace_older(&profile, &endpoint));
     // One tray per profile: a second one would show a second icon, and look like it did nothing.
     let Some(_lock) = startup::lock_profile(&profile)? else {
         tracing::info!("another tray already runs for this profile");
@@ -125,7 +132,7 @@ fn run(cli: &Cli) -> Result<()> {
         tracing::warn!(error = %format!("{e:#}"), "could not update starting at login");
     }
     let tray = Arc::new(Tray {
-        endpoint: Endpoint::for_profile(&profile),
+        endpoint,
         profile,
         hosted: Mutex::new(None),
         autostart,
@@ -298,8 +305,26 @@ async fn refresh_loop<R: Runtime>(app: AppHandle<R>, tray: Arc<Tray>) {
             shown = Some(wanted);
         }
 
-        let _ = tokio::time::timeout(REFRESH_EVERY, tray.refresh.notified()).await;
+        let quit = tray.quit_signal();
+        tokio::select! {
+            _ = tokio::time::timeout(REFRESH_EVERY, tray.refresh.notified()) => {}
+            () = asked_to_quit(quit) => {
+                tracing::info!("asked to quit: a newer paste-get takes over");
+                app.exit(0);
+                return;
+            }
+        }
     }
+}
+
+/// Resolves once the hosted daemon is asked to quit; never without one.
+async fn asked_to_quit(quit: Option<watch::Receiver<bool>>) {
+    if let Some(mut quit) = quit
+        && quit.wait_for(|quit| *quit).await.is_ok()
+    {
+        return;
+    }
+    std::future::pending().await
 }
 
 fn show<R: Runtime>(app: &AppHandle<R>, state: &State, entries: &[Entry]) -> Result<()> {
@@ -373,6 +398,14 @@ impl Tray {
             .is_some()
     }
 
+    fn quit_signal(&self) -> Option<watch::Receiver<bool>> {
+        self.hosted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map(|hosted| hosted.quit.clone())
+    }
+
     /// Runs the daemon in this process, on the system clipboard, like `pasteget daemon`.
     async fn start_hosted(&self) -> Result<()> {
         let settings = self.profile.settings()?;
@@ -384,6 +417,7 @@ impl Tray {
         let server = control::serve(Arc::clone(&daemon), &self.endpoint).await?;
         tracing::info!(profile = self.profile.name(), "daemon started in the tray");
         *self.hosted.lock().unwrap_or_else(PoisonError::into_inner) = Some(Hosted {
+            quit: daemon.quit_signal(),
             _daemon: daemon,
             server,
         });
