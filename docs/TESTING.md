@@ -459,7 +459,8 @@ Android 15 keeps hiding the codes.
 | C3 | Open `Win+V` (or Klipper) | The code is not in the clipboard history; the tray's *Recent* doesn't list it |
 | C4 | A code from an app's notification (bank, Google prompt, authenticator push) | Same as C2, with that app's name |
 | C5 | An SMS with an order number or an amount and no "code" word | Nothing is sent |
-| C6 | Turn off **Send 2FA codes**, get another code | Nothing is sent |
+| C6 | More than 5 minutes after C2, reply to that SMS, or get another message without a code in the same conversation | Nothing is sent: the old code doesn't go out again |
+| C7 | Turn off **Send 2FA codes**, get another code | Nothing is sent |
 
 If a code isn't found, report the shape of the message (with the digits changed) so the detector
 can learn it.
