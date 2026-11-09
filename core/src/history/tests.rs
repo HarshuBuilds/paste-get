@@ -1445,6 +1445,43 @@ fn the_folder_and_the_rows_agree_after_a_crash() {
 }
 
 #[test]
+fn a_leftover_that_cant_be_removed_doesnt_keep_the_history_closed() {
+    let test = Test::new();
+    let originals = test.dir.path().join(ORIGINALS_DIR);
+    let leftover = originals.join(format!("{}.png", "cd".repeat(32)));
+    std::fs::write(&leftover, b"orphan").unwrap();
+    // On Windows another program holds it open without sharing; on Unix its folder is
+    // read-only (as root, it is removed all the same).
+    #[cfg(windows)]
+    let held = {
+        use std::os::windows::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&leftover)
+            .unwrap()
+    };
+    #[cfg(unix)]
+    let set_mode = |mode| {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&originals, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+    #[cfg(unix)]
+    set_mode(0o500);
+
+    let mut test = test.reopen();
+    test.store.sweep().unwrap();
+    test.added("the history works");
+
+    #[cfg(windows)]
+    drop(held);
+    #[cfg(unix)]
+    set_mode(0o700);
+    let test = test.reopen();
+    assert!(test.originals().is_empty());
+}
+
+#[test]
 fn an_original_is_removed_if_its_row_is_not_committed() {
     let mut test = Test::new();
     // A trigger makes the insert fail after the file is written.

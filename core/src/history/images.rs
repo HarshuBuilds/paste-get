@@ -217,7 +217,11 @@ impl HistoryStore {
             let name = entry.file_name();
             let known = name.to_str().is_some_and(|name| expected.contains(name));
             if !known && entry.file_type()?.is_file() {
-                fs::remove_file(entry.path())?;
+                // Another program may hold it open (a viewer, an antivirus scan on Windows): the
+                // history opens anyway, and tries again next time.
+                if let Err(error) = fs::remove_file(entry.path()) {
+                    tracing::warn!(%error, "history: could not remove a leftover file");
+                }
             }
         }
         if !missing.is_empty() {
