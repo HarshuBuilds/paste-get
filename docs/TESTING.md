@@ -209,6 +209,7 @@ on the phone. Update both sides first, as in section 6.
 | C5 | PC: in a browser, right-click an image → **Copy image**. Phone: paste it as in C4 | The image is attached |
 | C6 | If you use Gboard: after C4, open its clipboard (the clipboard icon above the keys) | The screenshot is there; tapping it inserts it in apps that take images (Discord, for example) |
 | C7 | PC: copy a password from a password manager (KeePassXC on KDE Plasma or Hyprland; KeePass, KeePassXC, Bitwarden or 1Password on Windows). Phone: paste it | Pasted. The tray's *Recent* menu doesn't list it, and Android's clipboard preview hides it. `pasteget daemon` in a terminal logs `local copy` with `sensitive=true` |
+| C8 | Windows: send text from the phone to the PC (section 8). In the tray's *Settings…*, rename this computer and **Save** (paste-get restarts). Then press `Ctrl+Alt+Shift+V` (section 11) | It goes out as an ordinary clip: the tray's *Recent*, emptied by the restart, lists it as from this computer, and the tray's log (T21) says `clipboard sent` with `sensitive=false` |
 
 `adb logcat -s paste-get` shows "clip received: …, … bytes" for each clip. Images, and texts over
 256 KB (C2), go on the clipboard as a link to a file, since Android can't pass that much in one

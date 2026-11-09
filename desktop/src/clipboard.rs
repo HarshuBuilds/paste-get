@@ -196,20 +196,21 @@ pub trait ClipboardBackend: Send + 'static {
 /// On Linux, KeePassXC and KDE apps add this type to a secret, with "secret" as its data.
 /// Klipper, KDE's clipboard history, leaves such copies out.
 const KDE_PASSWORD_HINT: &str = "x-kde-passwordManagerHint";
-/// Windows formats that keep a copy out of clipboard history, viewers and the cloud clipboard,
-/// set by KeePass, KeePassXC, Bitwarden and 1Password. The first two count whatever their data.
+/// Windows formats that keep a copy out of clipboard history and viewers, set by KeePass,
+/// KeePassXC, Bitwarden and 1Password. The first two count whatever their data.
 const WINDOWS_EXCLUDE: &str = "ExcludeClipboardContentFromMonitorProcessing";
 const WINDOWS_VIEWER_IGNORE: &str = "Clipboard Viewer Ignore";
-/// These two hold a DWORD: 0 means "not in the history", "not in the cloud".
+/// Holds a DWORD: 0 means "not in the history". Its sibling CanUploadToCloudClipboard = 0 is not a
+/// mark: paste-get puts it on every clip it receives, and the password managers that set it also
+/// set one of these.
 const WINDOWS_HISTORY: &str = "CanIncludeInClipboardHistory";
-const WINDOWS_CLOUD: &str = "CanUploadToCloudClipboard";
 
 /// Whether a copy's formats, each with its data, mark it as a secret.
 fn marks_sensitive(formats: &[(&str, Vec<u8>)]) -> bool {
     formats.iter().any(|(name, data)| match *name {
         KDE_PASSWORD_HINT => data.trim_ascii() == b"secret",
         WINDOWS_EXCLUDE | WINDOWS_VIEWER_IGNORE => true,
-        WINDOWS_HISTORY | WINDOWS_CLOUD => data.starts_with(&[0; 4]),
+        WINDOWS_HISTORY => data.starts_with(&[0; 4]),
         _ => false,
     })
 }
@@ -309,24 +310,19 @@ fn windows_markers() -> Vec<(&'static str, Vec<u8>)> {
         tracing::debug!("could not open the clipboard to check for a password manager's mark");
         return Vec::new();
     };
-    [
-        WINDOWS_EXCLUDE,
-        WINDOWS_VIEWER_IGNORE,
-        WINDOWS_HISTORY,
-        WINDOWS_CLOUD,
-    ]
-    .into_iter()
-    .filter_map(|name| {
-        let format = clipboard_win::register_format(name)?.get();
-        if !clipboard_win::is_format_avail(format) {
-            return None;
-        }
-        let mut data = Vec::new();
-        // Some apps put no data in the first two: being there is what counts.
-        let _ = clipboard_win::raw::get_vec(format, &mut data);
-        Some((name, data))
-    })
-    .collect()
+    [WINDOWS_EXCLUDE, WINDOWS_VIEWER_IGNORE, WINDOWS_HISTORY]
+        .into_iter()
+        .filter_map(|name| {
+            let format = clipboard_win::register_format(name)?.get();
+            if !clipboard_win::is_format_avail(format) {
+                return None;
+            }
+            let mut data = Vec::new();
+            // Some apps put no data in the first two: being there is what counts.
+            let _ = clipboard_win::raw::get_vec(format, &mut data);
+            Some((name, data))
+        })
+        .collect()
 }
 
 /// Starts watching Wayland's clipboard change events. `None` on X11, or when the compositor
@@ -589,8 +585,8 @@ fn watch(
 ) {
     let mut last_seen = backend.read().ok().flatten().map(|raw| raw.fingerprint());
     // What this thread put on the clipboard last, and whether it was sensitive, until something
-    // else is copied. On Windows even a non-sensitive received clip carries
-    // CanUploadToCloudClipboard = 0, which would read back as a password manager's mark.
+    // else is copied. Where marks can't be read (X11, GNOME, macOS), a sensitive clip from a peer
+    // would otherwise read back as an ordinary one.
     let mut ours: Option<(u64, bool)> = None;
 
     loop {
@@ -784,6 +780,8 @@ mod tests {
         assert!(!shown.contains("hunter2"));
     }
 
+    const WINDOWS_CLOUD: &str = "CanUploadToCloudClipboard";
+
     fn dword(value: u32) -> Vec<u8> {
         value.to_le_bytes().to_vec()
     }
@@ -808,7 +806,11 @@ mod tests {
         // KeePassXC, Bitwarden, 1Password on Windows: any one of them is enough.
         assert!(marks_sensitive(&[(WINDOWS_EXCLUDE, dword(0))]));
         assert!(marks_sensitive(&[(WINDOWS_HISTORY, dword(0))]));
-        assert!(marks_sensitive(&[(WINDOWS_CLOUD, dword(0))]));
+        // Bitwarden on Windows.
+        assert!(marks_sensitive(&[
+            (WINDOWS_HISTORY, dword(0)),
+            (WINDOWS_CLOUD, dword(0)),
+        ]));
     }
 
     #[test]
@@ -826,6 +828,8 @@ mod tests {
             (WINDOWS_CLOUD, dword(1)),
         ]));
         assert!(!marks_sensitive(&[(WINDOWS_HISTORY, Vec::new())]));
+        // What paste-get puts on every clip it receives on Windows.
+        assert!(!marks_sensitive(&[(WINDOWS_CLOUD, dword(0))]));
     }
 
     #[tokio::test]
@@ -845,10 +849,10 @@ mod tests {
         assert!(watcher.read().await.unwrap().unwrap().sensitive);
     }
 
-    /// Marks every copy, as Windows' cloud-clipboard format reads on what paste-get wrote.
-    struct MarksEverything(MemoryClipboard);
+    /// Sees no marks, as on X11 or macOS.
+    struct MarksUnseen(MemoryClipboard);
 
-    impl ClipboardBackend for MarksEverything {
+    impl ClipboardBackend for MarksUnseen {
         fn read(&mut self) -> Result<Option<Raw>> {
             self.0.read()
         }
@@ -856,9 +860,12 @@ mod tests {
         fn write(&mut self, raw: &Raw, sensitive: bool) -> Result<()> {
             self.0.write(raw, sensitive)
         }
+    }
 
-        fn marked_sensitive(&mut self) -> bool {
-            true
+    fn sensitive_text(text: &str) -> Content {
+        Content {
+            sensitive: true,
+            ..Content::from_raw(Raw::Text(text.into())).unwrap()
         }
     }
 
@@ -866,16 +873,19 @@ mod tests {
     async fn what_it_wrote_reads_back_as_written() {
         let clipboard = MemoryClipboard::default();
         let (tx, mut changes) = async_mpsc::channel(8);
-        let backend = MarksEverything(clipboard.clone());
+        let backend = MarksUnseen(clipboard.clone());
         let watcher = ClipboardWatcher::spawn(backend, POLL, tx).unwrap();
+
+        watcher.write(sensitive_text("2FA code"), |_| {}).unwrap();
+        assert!(watcher.read().await.unwrap().unwrap().sensitive);
 
         let received = Content::from_raw(Raw::Text("from the phone".into())).unwrap();
         watcher.write(received, |_| {}).unwrap();
         assert!(!watcher.read().await.unwrap().unwrap().sensitive);
 
-        // Copied in another app since: its marks count again.
+        // Copied in another app since: what the backend sees counts.
         clipboard.set(Raw::Text("copied here".into()));
-        assert!(next_change(&mut changes).await.unwrap().sensitive);
+        assert!(!next_change(&mut changes).await.unwrap().sensitive);
     }
 
     #[tokio::test]

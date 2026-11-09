@@ -478,7 +478,7 @@ impl Shared {
         };
         self.remember_clip(&clip, None);
         let sent_to = self.peers.broadcast(&clip, None);
-        tracing::info!(mime_type = %clip.mime_type, len = clip.data.len(), sent_to, "clipboard sent");
+        tracing::info!(mime_type = %clip.mime_type, len = clip.data.len(), sensitive = clip.sensitive, sent_to, "clipboard sent");
         Ok(sent_to)
     }
 
