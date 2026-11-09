@@ -4,10 +4,11 @@ Copy on your phone, paste on your PC. No tap, no cloud.
 
 paste-get keeps the clipboard of your Android phone and your computer in sync over your own
 Wi-Fi. You copy a line on the phone, press `Ctrl+V` on the PC, and it's there. A screenshot
-taken on the phone is in the PC's clipboard less than a second later.
+taken on the phone is in the PC's clipboard a moment later.
 
-It's in beta. It's used daily on a POCO M8 5G and a Samsung with Windows 11, and it runs on
-Linux (KDE Plasma, Hyprland). Bug reports are welcome.
+It's in beta (0.1.0, see [`CHANGELOG.md`](CHANGELOG.md)). It's used daily on a POCO M8 5G and a
+Samsung with Windows 11. On Linux (KDE Plasma, Hyprland) it is built and tested by CI, but not
+yet checked day to day on a real desktop. Bug reports are welcome.
 
 ## What it does
 
@@ -24,7 +25,9 @@ Linux (KDE Plasma, Hyprland). Bug reports are welcome.
 
 ## Install
 
-Downloads are on the [Releases](https://github.com/Nexoryx-business/paste-get/releases) page.
+Downloads are on the [Releases](https://github.com/Nexoryx-business/paste-get/releases) page,
+with a `SHA256SUMS` file to check them against (`sha256sum -c SHA256SUMS --ignore-missing`, or
+`Get-FileHash` on Windows).
 
 **Windows 10/11:** run `paste-get_<version>_x64-setup.exe`. Windows SmartScreen may warn that
 the app is unknown, since it isn't code-signed yet: *More info → Run anyway*. paste-get then
@@ -41,7 +44,9 @@ source) asks the older one to quit and takes its place.
 - Arch: two PKGBUILDs, soon on the AUR: [`paste-get-bin`](packaging/aur/paste-get-bin/PKGBUILD)
   installs the release's .deb, [`paste-get-git`](packaging/aur/paste-get-git/PKGBUILD) builds the
   latest code from source. Until then: `cd packaging/aur/paste-get-git && makepkg -si`.
-- Any other distribution: `chmod +x paste-get_<version>_amd64.AppImage` and run it.
+- Any other distribution: `chmod +x paste-get_<version>_amd64.AppImage` and run it. The
+  AppImage has the tray only, no `pasteget` command; it does the hotkeys' actions itself
+  (`--action toggle-pause` or `--action send-clipboard`).
 - No Flatpak: its sandbox hides the clipboard from apps in the background on KDE Plasma and
   Hyprland ([why](docs/RELEASING.md#why-there-is-no-flatpak-yet)).
 - The tray icon needs a tray: KDE Plasma has one; on Hyprland, use a bar with a tray (Waybar's
@@ -56,7 +61,9 @@ source) asks the older one to quit and takes its place.
 
 **Android 10+:** install `paste-get_<version>_foss.apk`. If Google Play Protect blocks it, that's
 because the 2FA feature reads notifications: Play Store → your profile picture → Play Protect →
-⚙ → turn off *Scan apps with Play Protect*, install, then turn it back on.
+⚙ → turn off *Scan apps with Play Protect*, install, then turn it back on. If you had a test
+build from CI (`app-foss-debug.apk`), uninstall it first: Android doesn't update an app signed
+with another key. Pair the phone again afterwards.
 
 ## Getting started
 
@@ -66,7 +73,7 @@ The first time, the phone's app guides you through these steps, and ends with a 
    minutes while the window is open. The window also shows where to download the phone app.
 2. On the phone, tap **Scan the code** (later: Devices → **Pair a computer**), then tap **Pair**
    if the code is the one on your PC's screen. Both must be on the same Wi-Fi (if it
-   doesn't find the PC, see below).
+   doesn't find the PC, see *Troubleshooting* below).
 3. To send copies automatically, turn on **Send what you copy** and follow the set-up's four
    steps, once: each one ticks itself as you do it in Android's settings (Wi-Fi, Developer
    options, Wireless debugging, then a pairing code).
@@ -74,7 +81,9 @@ The first time, the phone's app guides you through these steps, and ends with a 
 
 On the PC, the tray menu has **Settings…** for the computer's name, notifications and hotkeys.
 
-## If the phone doesn't find the PC
+## Troubleshooting
+
+### The phone doesn't find the PC
 
 The phone connects straight to the PC, on TCP port 47290, and finds it on the network with mDNS
 (UDP port 5353). Something on the way is usually blocking one of them:
@@ -96,8 +105,27 @@ The phone connects straight to the PC, on TCP port 47290, and finds it on the ne
   (with the AppImage: `--add-port=47290/tcp --add-service=mdns` instead of
   `--add-service=paste-get`). With ufw (Ubuntu, when turned on):
   `sudo ufw allow 47290/tcp && sudo ufw allow 5353/udp`.
+- **Different versions.** If the PC says "<phone> runs another version of paste-get", update
+  both to the same release.
 - **Still nothing?** `pasteget status` shows the port the PC listens on (47290 unless changed).
   Pairing again (*Pair a phone…* in the tray menu) gives the phone the PC's current address.
+
+### Copies stop arriving after a while
+
+Android stops apps in the background to save battery, and Xiaomi's HyperOS even more. In
+paste-get, open the gear → **Keep paste-get running** and do each item; on a Xiaomi, POCO or
+Redmi phone, see [`docs/devices/xiaomi-hyperos.md`](docs/devices/xiaomi-hyperos.md). After the
+phone restarts, the automatic copy needs Wi-Fi to start again (with Shizuku instead: start
+Shizuku again).
+
+### No icon, or paste-get doesn't start
+
+- Windows hides new icons under `^` in the taskbar. On Linux, see *Install* above for the tray
+  each desktop needs; paste-get says so in a notification when none can show its icon.
+- If paste-get can't start, it says why: a box on Windows, a notification on Linux. "Port 47290
+  is taken" means another paste-get, or another program, uses it.
+- The log is in `%LOCALAPPDATA%\paste-get\logs` on Windows and `~/.local/share/paste-get/logs`
+  on Linux. It never contains what you copy: attach it to a bug report.
 
 ## Privacy
 

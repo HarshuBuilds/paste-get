@@ -26,6 +26,7 @@ make trust decisions. In order of risk:
 | `desktop/src/daemon.rs` | `handle_incoming`: known device → session, unknown → pairing only while a window is open | part |
 | `desktop/src/control.rs` | Local control channel: Unix socket in a 0700 directory, Windows named pipe | ~550 |
 | `desktop/src/config.rs` | Key file permissions (0600), profile names (path traversal) | part |
+| `desktop/tray/src/pairing.rs`, `desktop/tray/dist/*.js` | The tray's windows: what reaches the page from paired devices and the daemon | ~400 |
 | `ffi/src/lib.rs` | The same decisions on the phone side, through the core | part |
 | `android/…/OneTimeCodes.kt` | Notification listener for 2FA codes: what it reads, what it sends | ~170 |
 | `ffi/src/wireless_adb/` | ADB client for the phone's own wireless debugging: pairing (TLS 1.3 + BoringSSL SPAKE2 + AES-GCM), `exec:` over TLS | ~700 |
@@ -154,6 +155,15 @@ Each line is a claim to check. "→" points at where it's enforced.
     retention. Retention never deletes a pinned item. → `core/src/history/retention.rs`,
     tests `a_deleted_clip_leaves_nothing_behind` and
     `an_expired_code_is_hidden_then_leaves_nothing_behind`
+
+### Desktop windows
+32. The tray's windows show text from paired devices (their names) and from the daemon only as
+    text: inside JSON in the script that drives the pairing page, then with `textContent`. The
+    only HTML put in a page is the QR code's SVG, drawn by the tray from its own invite. The
+    pages' CSP allows their own scripts and nothing else (`default-src 'none'`), and the
+    addresses they show (the Releases page, the source, a firewall rule) are text to copy, never
+    links: nothing in them goes online. → `pairing.rs` (`script`), `dist/pair.js`,
+    `dist/copy.js`, `tauri.conf.json`
 
 ## Known gaps (not bugs to report, but worth an opinion)
 

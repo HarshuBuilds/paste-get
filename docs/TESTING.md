@@ -3,9 +3,14 @@
 Automated tests use in-memory clipboards. Only real machines can show whether the **system
 clipboard** works. Sections 1–4 test the desktop daemon on its own; section 5 adds the phone,
 section 6 automatic screenshots, section 7 the way back, from the PC to the phone, section 8
-the automatic copy on the phone, section 9 the tray app, section 10 starting at login and
-section 11 the hotkeys, and section 12 the copy on the phone without Shizuku. Section 16 is
-GNOME, which is tier 2.
+the automatic copy on the phone with Shizuku, and section 12 without it (the built-in mode).
+Section 9 is the tray app (with a Waybar module), section 10 starting at login, section 11 the
+hotkeys. Sections 13–15 are links, 2FA codes, and copies made while a device is away. Section 16
+is GNOME, which is tier 2.
+
+To test a release instead of a build, install its packages (see the README) and skip section 1:
+`pasteget` is then on the `PATH` (with the AppImage, use the .deb, .rpm or AUR package for the
+terminal rows).
 
 The trick: on one computer, run the real daemon (system clipboard) **and** a second "fake phone"
 daemon with a private in-memory clipboard. Whatever reaches the fake phone came out of your real
@@ -22,7 +27,6 @@ Logs never contain clipboard contents (only types and sizes), so they're safe to
    ```powershell
    git clone https://github.com/Nexoryx-business/paste-get
    cd paste-get
-   git checkout ccr-8ee1704b-80slpz   # until this branch is merged
    cargo build --release
    ```
 3. The program is `target\release\pasteget.exe`. Below, `pasteget` means that file.
@@ -40,7 +44,6 @@ sudo pacman -S --needed rustup git base-devel webkit2gtk-4.1 libayatana-appindic
 rustup default stable
 git clone https://github.com/Nexoryx-business/paste-get
 cd paste-get
-git checkout ccr-8ee1704b-80slpz   # until this branch is merged
 cargo build --release
 alias pasteget="$PWD/target/release/pasteget"
 ```
@@ -48,7 +51,8 @@ Or install it as a package, which also puts the tray in the application menu:
 ```sh
 cd packaging/aur/paste-get-git && makepkg -si
 ```
-(it builds the default branch, so until this branch is merged, use the `cargo build` above).
+(it builds the repository's default branch; to test another branch, use the `cargo build`
+above).
 The daemon needs no other library: Wayland and X11 are spoken directly. The two extra packages
 are for the tray app (section 9). Without them, build only the daemon and the command:
 `cargo build --release -p pasteget-desktop`.
@@ -126,9 +130,11 @@ clipboard. Sections 6 to 8 add screenshots, the way back from the PC, and the au
 
 ### Install the app
 
-The CI builds a debug APK on every push. On GitHub: **Actions** → latest **CI** run →
-**Artifacts** → `paste-get-android-debug`. Unzip it, copy the `.apk` to the phone and open it
-(allow installing from that source when asked).
+A release's `paste-get_<version>_foss.apk` (README, *Install*), or the debug APK the CI builds
+on every push: on GitHub, **Actions** → latest **CI** run → **Artifacts** →
+`paste-get-android-debug`. Unzip it, copy the `.apk` to the phone and open it (allow installing
+from that source when asked). The two are signed with different keys: uninstall one before
+installing the other.
 
 With `adb` and USB debugging instead: `adb install -r app-foss-debug.apk`.
 
