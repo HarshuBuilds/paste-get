@@ -503,14 +503,19 @@ land over it.
 
 ## 16. Clipboard history on the PC (v0.2)
 
-Off by default. To turn it on, add these lines at the end of `settings.toml`
-(`%APPDATA%\paste-get\default\` on Windows, `~/.config/paste-get/default/` on Linux), then
-restart paste-get (or save the tray's *Settings…* window, which applies it at once):
+Off by default. To turn it on, open `settings.toml` (`%APPDATA%\paste-get\default\` on
+Windows, `~/.config/paste-get/default/` on Linux) and set `enabled = true` under `[history]`.
+paste-get writes that table, with `enabled = false`, when it creates the file or saves the tray's
+*Settings…* window: change that line rather than adding a second `[history]`, which makes the
+file invalid. Only a `settings.toml` without the table (from an older version) needs it added:
 
 ```toml
 [history]
 enabled = true
 ```
+
+Then restart paste-get, or open the tray's *Settings…* window and save it, which applies it at
+once.
 
 Use the two daemons of section 2.
 
