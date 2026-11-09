@@ -475,7 +475,8 @@ A copy made while the other side is off or out of range waits, and arrives as so
 connects again. That includes a connection that died without closing (a PC asleep, a phone that
 just left the Wi-Fi), which still looks alive for up to 90 s: a copy waits until the other side
 confirms it got it. Only the last one waits (text or image), in memory only. Passwords and 2FA
-codes never wait: a code would be stale by then.
+codes never wait: a code would be stale by then. Nor does the copy made before one, which would
+land over it.
 
 | # | Do this | Expected |
 |---|---|---|
@@ -483,7 +484,7 @@ codes never wait: a code would be stale by then.
 | Q2 | Start paste-get on the PC again | Within a few seconds the line is in the PC's clipboard; the log says "sending the clip it missed" |
 | Q3 | PC off, copy two lines on the phone one after the other, start the PC | Only the second one arrives |
 | Q4 | Phone's Wi-Fi off, and right away copy something on the PC (the tray may still show the phone connected), turn Wi-Fi back on | The copy is in the phone's clipboard once it reconnects, once |
-| Q5 | PC off, copy a password from a password manager on the phone (or get a 2FA code), start the PC | Nothing arrives |
+| Q5 | PC off, copy a line on the phone, then a password from a password manager (or get a 2FA code), start the PC | Nothing arrives, not even the line |
 | Q6 | PC off, copy on the phone, force-stop paste-get on the phone, start both | Nothing arrives: the copy was only in memory |
 | Q7 | Put the PC to sleep. Within a minute, copy a line on the phone (it may still say it went to 1 computer), then wake the PC | The line is in the PC's clipboard once the phone reconnects |
 | Q8 | With both connected, copy a line on the PC; once it's on the phone, turn the phone's Wi-Fi off and on | The line is not sent a second time when the phone reconnects |
@@ -495,7 +496,8 @@ codes never wait: a code would be stale by then.
   mDNS. Devices that can't receive mDNS (some guest or office networks block it) still need a
   new pairing.
 - Only the last copy made while a device is away waits for it, in memory: it's lost if the
-  sending side restarts first. Passwords and 2FA codes never wait.
+  sending side restarts first. Passwords and 2FA codes never wait, nor does the copy made
+  before one.
 - The phone shows nothing of its own when a clip from the PC arrives (Android 13 and later may
   show their clipboard preview); its home screen says what came last.
 - Only text copied on the phone is sent automatically, not images or files: share those.

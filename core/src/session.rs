@@ -182,7 +182,8 @@ impl Peers {
     /// Until it acknowledges the clip, a paired device gets it again when it connects, if it's
     /// still the last clip by then: one that isn't connected, and one whose session is dead but
     /// hasn't timed out yet (a PC asleep, a phone that just left the Wi-Fi), which queues it for
-    /// nothing. Secrets don't wait: a password or a code shouldn't turn up hours later.
+    /// nothing. Secrets don't wait: a password or a code shouldn't turn up hours later. The clip
+    /// before a secret doesn't wait either: it would land over the secret.
     pub fn broadcast(&self, clip: &Clip, except: Option<DeviceId>) -> usize {
         let clip = Numbered {
             number: self.next_clip.fetch_add(1, Ordering::Relaxed),
@@ -191,11 +192,10 @@ impl Peers {
         // Held throughout, so that a session starting meanwhile gets the clip exactly once:
         // queued, or waiting for it.
         let queues = self.lock();
-        if !clip.clip.sensitive {
-            for (id, unacknowledged) in lock(&self.waiting).iter_mut() {
-                if Some(*id) != except && *id != clip.clip.origin {
-                    *unacknowledged = Some(clip.clone());
-                }
+        let waits = (!clip.clip.sensitive).then(|| clip.clone());
+        for (id, unacknowledged) in lock(&self.waiting).iter_mut() {
+            if Some(*id) != except && *id != clip.clip.origin {
+                unacknowledged.clone_from(&waits);
             }
         }
         let mut queued = 0;
@@ -1208,12 +1208,9 @@ mod tests {
         );
         peers.expect(pc);
 
-        // While the PC is off: only the last copy waits, secrets don't.
+        // While the PC is off: only the last copy waits.
         assert_eq!(peers.broadcast(&Clip::text("first", origin), None), 0);
         assert_eq!(peers.broadcast(&Clip::text("last", origin), None), 0);
-        let mut secret = Clip::text("hunter2", origin);
-        secret.sensitive = true;
-        peers.broadcast(&secret, None);
 
         let (sender, mut received) = mpsc::channel(4);
         peers.register(pc, sender);
@@ -1234,6 +1231,32 @@ mod tests {
         let (other, mut none) = mpsc::channel(4);
         peers.register(stranger, other);
         assert!(none.try_recv().is_err());
+    }
+
+    /// Both clips reached the PC, but neither ack came back: the copy before the secret must not
+    /// be sent again over it.
+    #[tokio::test]
+    async fn a_secret_stops_the_clip_before_it_from_waiting() {
+        let peers = Peers::new();
+        let origin = Identity::generate().unwrap().device_id();
+        let pc = Identity::generate().unwrap().device_id();
+        peers.expect(pc);
+        let (dead, _lost) = mpsc::channel(4);
+        peers.register(pc, dead);
+
+        assert_eq!(peers.broadcast(&Clip::text("copied", origin), None), 1);
+        let mut secret = Clip::text("hunter2", origin);
+        secret.sensitive = true;
+        assert_eq!(peers.broadcast(&secret, None), 1);
+
+        let (sender, mut received) = mpsc::channel(4);
+        peers.register(pc, sender);
+        assert!(received.try_recv().is_err());
+        // The next copy waits as usual.
+        peers.broadcast(&Clip::text("next", origin), None);
+        let (sender, mut received) = mpsc::channel(4);
+        peers.register(pc, sender);
+        assert_eq!(next_clip(&mut received).unwrap().clip.data, b"next");
     }
 
     fn next_clip(queue: &mut mpsc::Receiver<Outgoing>) -> Option<Numbered> {
