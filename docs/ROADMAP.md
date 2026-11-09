@@ -134,6 +134,18 @@ History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart ac
   the built-in mode or Shizuku (`TESTING.md`, section 14)
 - [x] A copy made while a paired device is away waits for it and is sent when it connects
   again: the last one only, in memory, never a sensitive clip (`TESTING.md`, section 15)
+- [ ] Clipboard history, on the phone first, then on each PC. Off by default; passwords, codes,
+  keys and card numbers never reach the disk. The store is in the core, so both sides share it:
+  - [x] Shelves and secrets: `detect::category` (link, email, phone number, colour, code,
+    JSON) and `detect::looks_secret` (private keys, `otpauth://`, API tokens, card numbers,
+    generated passwords), with `detect::bare_code` for numbers kept a short while only
+  - [ ] Store skeleton (`core/src/history`, feature `history`): SQLite with FTS5
+  - [ ] Recording text: dedupe, secrets refused and counted, long texts
+  - [ ] Pages and search: any part of a word, accents ignored, filters
+  - [ ] Images: originals, thumbnails, gallery references
+  - [ ] Retention, delete and stats
+  - [ ] Phone: recording through `ffi`, then the Android screens
+  - [ ] PC: history in the daemon, `pasteget history`, the tray's history window
 Desktop identity key in the OS keystore when one is available (M2 stores it in a user-only file,
 like SSH keys, because Hyprland setups often run no Secret Service).
 
