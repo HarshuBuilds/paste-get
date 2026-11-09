@@ -27,8 +27,24 @@ env:
   TAURI_CLI_VERSION: "2.12.4"
 
 jobs:
+  version:
+    name: The version matches everywhere
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Cargo.toml, build.gradle.kts, the metainfo and CHANGELOG.md agree, and a tag names that
+      # version: a v0.1.1 tag on a 0.1.0 tree builds nothing.
+      - name: Check the version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            packaging/check-version.sh "$GITHUB_REF_NAME"
+          else
+            packaging/check-version.sh
+          fi
+
   windows:
     name: Windows installer
+    needs: version
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,6 +64,7 @@ jobs:
     name: AppImage, .deb and .rpm
     # The oldest supported Ubuntu: an AppImage runs on systems at least as new as the one it
     # was built on. The .deb and .rpm then need glibc 2.35 or newer too.
+    needs: version
     runs-on: ubuntu-22.04
     env:
       # linuxdeploy is itself an AppImage; runners have no FUSE.
@@ -65,14 +82,6 @@ jobs:
         run: packaging/build-desktop.sh appimage,deb,rpm
       - name: Check what the .deb and .rpm install
         run: packaging/linux/check-packages.sh target/release/bundle
-      - name: The AppStream metainfo lists this version
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          grep -qF "<release version=\"$version\"" packaging/linux/io.github.nexoryx.pasteget.metainfo.xml || {
-            echo "::error::add a <release> for $version to the metainfo: see docs/RELEASING.md"
-            exit 1
-          }
       - name: Name the packages
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
@@ -125,6 +134,7 @@ jobs:
 
   android:
     name: Android APK
+    needs: version
     runs-on: ubuntu-latest
     env:
       # Secrets can't be tested in `if:` directly.
@@ -183,6 +193,7 @@ jobs:
 
   aur:
     name: AUR package (makepkg on Arch)
+    needs: version
     runs-on: ubuntu-latest
     container: archlinux:latest
     steps:

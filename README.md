@@ -119,6 +119,7 @@ second, in-memory daemon instead of a phone.
 | | |
 |---|---|
 | [`docs/PROTOCOL.md`](docs/PROTOCOL.md) | Wire protocol: transport, pairing, messages |
+| [`CHANGELOG.md`](CHANGELOG.md) | What changed in each version |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | What's done and what's next |
 | [`docs/TESTING.md`](docs/TESTING.md) | Testing on real devices |
 | [`docs/RELEASING.md`](docs/RELEASING.md) | How the packages are built |

@@ -317,7 +317,7 @@ see its log). Keep the fake phone of section 2 running.
 
 | # | Do this | Expected |
 |---|---|---|
-| T1 | Click (or right-click) the icon | A menu: "paste-get · <this PC>", "Syncing with 1 device", the paired devices with ● (connected) or ○, *Recent*, *Pause syncing*, *Quit* |
+| T1 | Click (or right-click) the icon | A menu: "paste-get · <this PC>", "Syncing with 1 device", the paired devices with ● (connected) or ○, *Recent*, *Pause syncing*, *Settings…*, *About paste-get …*, *Quit* |
 | T2 | Copy text on the PC, then open *Recent* | The text is first, "· this computer, just now" |
 | T3 | `pasteget --profile phone send "from the phone"`, open *Recent* | It's first, with the fake phone's name |
 | T4 | Copy something else, then click the T2 entry in *Recent*; `Ctrl+V` | The T2 text is pasted. The fake phone logs nothing (it had it already) |
@@ -344,6 +344,7 @@ see its log). Keep the fake phone of section 2 running.
 | T26 | Developers: build paste-get with another `PROTOCOL_VERSION` (`core/src/proto.rs`) for the phone or the PC, and let the phone connect | One notification on the PC: "<phone> runs another version of paste-get: update both", not repeated while the phone retries |
 | T27 | With other profiles running (`pasteget-tray --profile work`, this version, and `pasteget --profile test daemon --memory-clipboard --port 47299` in a terminal), run an older paste-get for the default profile, then start this one | The older default one makes way as in T23. The `work` icon stays, and the `test` daemon keeps running |
 | T28 | Developers: with two builds that both know `pasteget quit` (the older one with a lower `version` in `Cargo.toml`), run the older `pasteget daemon` in a terminal, then the older tray (it only shows that daemon), then start the newer tray | The terminal's daemon quits; the older tray starts a daemon of its own, which is asked to quit too, and the older icon disappears. One icon is left, the newer one's; the log says "the older paste-get quit", nothing was ended |
+| T29 | Menu → *About paste-get 0.1.0* (the version of this build) | A small window with the version, the licence (GPL-3.0-or-later) and the source address. **Copy** puts the address on the clipboard; nothing opens a browser or goes online. In French: *À propos de paste-get* |
 | T13 | Last: menu → the phone → *Forget this device* | The phone disappears from the menu within 2 s and can't reconnect. Right away (or, if it was not connected, when it next connects) the real phone shows "<PC> unpaired this phone" and drops the computer from its list. Pair again to go on |
 
 If paste-get doesn't start at all, Windows shows a box saying why, and the log has the details.

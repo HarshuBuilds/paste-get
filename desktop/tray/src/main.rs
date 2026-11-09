@@ -13,6 +13,7 @@
 // No console window on Windows. Debug builds keep it, for the logs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod about;
 mod linux_tray;
 mod menu;
 mod pairing;
@@ -150,7 +151,8 @@ fn run(cli: &Cli) -> Result<()> {
         .invoke_handler(tauri::generate_handler![
             load_settings,
             save_settings,
-            close_window
+            close_window,
+            app_info
         ])
         .setup(move |app| {
             // A tray app: no Dock icon on macOS.
@@ -208,6 +210,12 @@ fn on_command<R: Runtime>(app: &AppHandle<R>, tray: &Arc<Tray>, command: Command
         Command::Settings => {
             if let Err(e) = settings::open(app) {
                 tracing::warn!(error = %format!("{e:#}"), "could not open the settings");
+            }
+            return;
+        }
+        Command::About => {
+            if let Err(e) = about::open(app) {
+                tracing::warn!(error = %format!("{e:#}"), "could not open the About window");
             }
             return;
         }
@@ -470,6 +478,12 @@ fn login_launch(profile: &str) -> Result<Launch> {
 #[tauri::command]
 fn close_window(window: tauri::WebviewWindow) {
     let _ = window.close();
+}
+
+/// paste-get's version, licence and addresses, for the windows that show them.
+#[tauri::command]
+fn app_info() -> about::Info {
+    about::Info::of_this_build()
 }
 
 /// The settings window asks for the current values.

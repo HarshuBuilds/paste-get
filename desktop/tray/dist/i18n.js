@@ -34,6 +34,14 @@ window.pastegetFr = {
   saving: "Enregistrement…",
   badKey: "Un raccourci utilise une lettre, un chiffre ou F1 à F24, avec Ctrl, Alt ou Super.",
   outsideApp: "cette page ne marche que dans paste-get",
+  // about.html
+  aboutTagline: "Copie sur ton téléphone, colle sur ton PC.",
+  aboutLicence: "Logiciel libre sous licence publique générale GNU, version 3 ou ultérieure (GPL-3.0-or-later). Il est fourni sans aucune garantie.",
+  aboutSource: "Code source",
+  aboutOffline: "paste-get ne va jamais sur internet de lui-même : colle l'adresse dans ton navigateur.",
+  // copy.js
+  copy: "Copier",
+  copied: "Copié",
 };
 
 // French text for `key`, or `english`.

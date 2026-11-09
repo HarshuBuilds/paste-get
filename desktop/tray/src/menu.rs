@@ -11,6 +11,7 @@ pub const PAIR: &str = "pair";
 pub const SETTINGS: &str = "settings";
 pub const PAUSE: &str = "pause";
 pub const START_AT_LOGIN: &str = "start-at-login";
+pub const ABOUT: &str = "about";
 pub const QUIT: &str = "quit";
 const RECENT_PREFIX: &str = "recent:";
 const FORGET_PREFIX: &str = "forget:";
@@ -85,6 +86,7 @@ pub enum Command {
     Settings,
     TogglePause,
     ToggleStartAtLogin,
+    About,
     CopyRecent(u64),
     /// Unpair the device with this ID.
     Forget(String),
@@ -98,6 +100,7 @@ impl Command {
             SETTINGS => Some(Self::Settings),
             PAUSE => Some(Self::TogglePause),
             START_AT_LOGIN => Some(Self::ToggleStartAtLogin),
+            ABOUT => Some(Self::About),
             QUIT => Some(Self::Quit),
             _ => {
                 if let Some(device) = id.strip_prefix(FORGET_PREFIX) {
@@ -126,6 +129,10 @@ pub fn entries(state: &State, start_at_login: Option<bool>) -> Vec<Entry> {
             checked,
         });
     }
+    entries.push(Entry::Action {
+        id: ABOUT.into(),
+        label: crate::about::menu_label(),
+    });
     entries.push(Entry::Action {
         id: QUIT.into(),
         label: tr("Quit", "Quitter").into(),
@@ -288,6 +295,7 @@ mod tests {
                 clip(6, None, None),
             ],
         };
+        let about = format!("About paste-get {}", env!("CARGO_PKG_VERSION"));
 
         assert_eq!(
             labels(&entries(&state, Some(true))),
@@ -305,6 +313,7 @@ mod tests {
                 "---",
                 "Settings…",
                 "[x] Start at login",
+                about.as_str(),
                 "Quit",
             ]
         );
@@ -357,6 +366,7 @@ mod tests {
         assert_eq!(Command::from_id(QUIT), Some(Command::Quit));
         assert_eq!(Command::from_id(PAIR), Some(Command::Pair));
         assert_eq!(Command::from_id(SETTINGS), Some(Command::Settings));
+        assert_eq!(Command::from_id(ABOUT), Some(Command::About));
         assert_eq!(
             Command::from_id(START_AT_LOGIN),
             Some(Command::ToggleStartAtLogin)

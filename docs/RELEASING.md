@@ -215,14 +215,25 @@ notification in view.
 ## Making a release
 
 1. Everything for the version is merged on `main`, and CI is green.
-2. The Android release key is set up (see above). Bump the version in `Cargo.toml` (`[workspace.package] version`) and in
-   `android/app/build.gradle.kts` (`versionName`, and `versionCode` + 1). Add a
-   `<release version="…" date="YYYY-MM-DD">` at the top of `<releases>` in
-   `packaging/linux/io.github.nexoryx.pasteget.metainfo.xml` (a tag without one fails; for 0.1.0,
-   one is there already: set its date). Commit.
-3. Tag and push: `git tag v0.1.0 && git push origin v0.1.0`.
+2. The Android release key is set up (see above). Set the version:
+   - `Cargo.toml`, `[workspace.package] version`. The daemon, the tray, the phone's Rust core
+     and the Windows and Linux packages all take it from there (`desktop/tray/tauri*.json` set
+     none on purpose);
+   - `android/app/build.gradle.kts`: the same `versionName`, and `versionCode` = major × 10000
+     + minor × 100 + patch (0.1.0 is 100, 0.2.0 is 200, 1.0.3 is 10003), so a newer version
+     always has a higher code, as Android requires to update;
+   - a `<release version="…" date="YYYY-MM-DD">` at the top of `<releases>` in
+     `packaging/linux/io.github.nexoryx.pasteget.metainfo.xml`;
+   - a `## <version> (YYYY-MM-DD)` section at the top of `CHANGELOG.md`, in plain words for
+     the people who use paste-get. It is the base of the release notes.
+
+   `packaging/check-version.sh` checks that they agree (CI runs it on every push); for 0.1.0
+   they are there already: set the dates. Commit.
+3. Tag and push: `git tag v0.1.0 && git push origin v0.1.0`. The *Release* workflow first runs
+   `packaging/check-version.sh v0.1.0`: a tag that doesn't name the version of the tree fails
+   before anything is built.
 4. Wait for the *Release* workflow, then open the draft release on GitHub. Install each package
    on a real machine (Windows 11, Arch) and run `docs/TESTING.md`, sections 9–11.
 5. The security review of `docs/REVIEW.md` is done for this version, or the release notes say it
    isn't.
-6. Write the release notes (what works, what's known not to), then publish.
+6. Write the release notes from `CHANGELOG.md` (what works, what's known not to), then publish.

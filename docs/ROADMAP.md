@@ -116,6 +116,11 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
     README section for when the phone doesn't find the PC (Wi-Fi, Windows and Linux firewalls)
   - [x] Release APK, signed in CI with a key kept in repository secrets (creating the key and
     the secrets is a one-time step for the maintainer, `RELEASING.md`)
+- [x] Version 0.1.0 everywhere: `Cargo.toml` for the PC and the phone's core, the APK's
+  `versionName` (and `versionCode` 100, major × 10000 + minor × 100 + patch), the metainfo and
+  `CHANGELOG.md`, checked by `packaging/check-version.sh` on every push; a release tag that
+  doesn't match fails first. The tray's *About paste-get 0.1.0* shows the version, the licence
+  and the source address, as text (`TESTING.md`, T29)
 - [x] `SECURITY.md` draft: threat model, known gaps, private reporting
 - [ ] README demo GIF: needs the real devices; how to record it is in `RELEASING.md`
 - [ ] Human review of crypto and protocol code: `docs/REVIEW.md` lists the files and the
