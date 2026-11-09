@@ -168,6 +168,7 @@ Windows have one built in.
 |---|---|---|
 | S1 | Take a screenshot on the phone, then `Ctrl+V` in Discord (or Paint, GIMP) on the PC | The screenshot is pasted, upright. The PC shows "Image from POCO M8 5G ✓" |
 | S2 | Look at the app's home screen, under **Recent** | "Screenshot, … kB", and under it "<PC> in … ms" |
+| S2b | Settings → Apps → paste-get → Permissions → Photos → *Allow limited access*, back to paste-get | The Screenshots row says "One step left"; its screen checks *Only selected photos*, says why that hides new screenshots and offers **Open settings** |
 | S3 | Share a photo from the gallery with **Send to PC**, paste on the PC | The photo is pasted the right way up, even if taken in portrait |
 | S4 | Turn Wi-Fi off on the phone for a minute, then on again | "Connected to 1 computer" again within a few seconds |
 | S5 | Restart the PC into the other OS (Windows ↔ Arch), start `pasteget daemon` there (pair it once if it isn't yet) | The phone connects to it within a few seconds, without a new QR code |
@@ -452,18 +453,20 @@ shows "Code from <app> (<phone>) ✓", never the code.
 
 It needs notification access, and on Android 15 (the POCO) the right to see codes, which Android
 otherwise hides from apps that read notifications. With the built-in mode (or Shizuku) running,
-**Allow (one tap)** grants both. Without, the card opens Settings → Notification access, and
+**Allow (one tap)** on the **Send 2FA codes** screen grants both. Without, it opens Settings →
+Notification access, and
 Android 15 keeps hiding the codes.
 
 | # | Do this | Expected |
 |---|---|---|
-| C1 | With the built-in mode running, turn on **Send 2FA codes**, tap **Allow (one tap)** | "Allowed"; the card says "Waiting for a code" |
+| C1 | With the built-in mode running, turn on **Send 2FA codes**, open its screen, tap **Allow (one tap)** | "Allowed"; both items under *Access* are checked (the second only on Android 15) and the row says "On" |
 | C2 | Get a code by SMS (log in to a site that texts one, or have someone send "Your code is 482913") | Within a second or two, the PC shows "Code from Messages (<phone>) ✓"; `Ctrl+V` pastes 482913 |
 | C3 | Open `Win+V` (or Klipper) | The code is not in the clipboard history; the tray's *Recent* doesn't list it |
 | C4 | A code from an app's notification (bank, Google prompt, authenticator push) | Same as C2, with that app's name |
 | C5 | An SMS with an order number or an amount and no "code" word | Nothing is sent |
 | C6 | More than 5 minutes after C2, reply to that SMS, or get another message without a code in the same conversation | Nothing is sent: the old code doesn't go out again |
 | C7 | Turn off **Send 2FA codes**, get another code | Nothing is sent |
+| C8 | Before C1, without the built-in mode or Shizuku: turn on **Send 2FA codes** and open its screen | *Read notifications* is unchecked, with **Open notification access** and what to do if Android says the setting is restricted (**Open App info**). On Android 15, once allowed, *See the codes Android 15 hides* stays unchecked and the screen offers to set up the automatic copy |
 
 If a code isn't found, report the shape of the message (with the digits changed) so the detector
 can learn it.

@@ -23,8 +23,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
+import io.github.nexoryx.pasteget.R
 
 /**
  * A title, a line under it and a switch, as one control: the whole row toggles, and TalkBack
@@ -69,5 +71,31 @@ fun TonalIcon(
         contentAlignment = Alignment.Center,
     ) {
         Icon(painterResource(icon), contentDescription = null, tint = content, modifier = Modifier.size(24.dp))
+    }
+}
+
+/**
+ * One item of a checklist: a check when [done] (read as [doneLabel]), an empty circle
+ * otherwise, then a title and a line under it. TalkBack reads it as one.
+ */
+@Composable
+fun CheckedRow(title: String, text: String, done: Boolean, doneLabel: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {},
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        if (done) {
+            Icon(painterResource(R.drawable.ic_check_circle), contentDescription = doneLabel, tint = MaterialTheme.colorScheme.primary)
+        } else {
+            Icon(
+                painterResource(R.drawable.ic_radio_button_unchecked),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Column {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }

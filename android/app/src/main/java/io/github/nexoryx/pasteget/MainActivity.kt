@@ -35,7 +35,7 @@ import io.github.nexoryx.pasteget.ui.AppViewModel
 import io.github.nexoryx.pasteget.ui.CopiesActions
 import io.github.nexoryx.pasteget.ui.CopiesState
 import io.github.nexoryx.pasteget.ui.CodesActions
-import io.github.nexoryx.pasteget.ui.CodesCardState
+import io.github.nexoryx.pasteget.ui.CodesState
 import io.github.nexoryx.pasteget.ui.NativeComputers
 import io.github.nexoryx.pasteget.ui.PasteGetUi
 import io.github.nexoryx.pasteget.ui.Route
@@ -92,7 +92,6 @@ class MainActivity : ComponentActivity() {
         val builtIn by pasteGet.autoCopy.builtIn.state.collectAsStateWithLifecycle()
         val shizuku by pasteGet.autoCopy.shizuku.state.collectAsStateWithLifecycle()
         val logs by pasteGet.autoCopy.logs.state.collectAsStateWithLifecycle()
-        val lastCode by OneTimeCodes.last.collectAsStateWithLifecycle()
         // Set up, and granting what hides the notices, as it changes.
         LaunchedEffect(builtIn.status) { model.builtInChanged() }
 
@@ -132,7 +131,13 @@ class MainActivity : ComponentActivity() {
                     canNotify = model.canNotify,
                     setUp = model.builtInSetUp,
                 ),
-                codes = CodesCardState(model.codesOn, model.codeAccess, shellReady, lastCode),
+                codes = CodesState(
+                    model.codesOn,
+                    model.codeAccess,
+                    shellReady,
+                    last = activity.firstOrNull { it.kind == ActivityKind.CODE },
+                    codesHidden = Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM,
+                ),
                 thisPhone = model.thisPhone,
                 unpairedBy = model.unpaired,
                 refreshing = model.refreshing,
@@ -174,6 +179,7 @@ class MainActivity : ComponentActivity() {
             onChange = model::setSendCodes,
             onAllow = ::allowCodes,
             onOpenSettings = ::openNotificationAccess,
+            onOpenAppInfo = ::openAppSettings,
         ),
     )
 

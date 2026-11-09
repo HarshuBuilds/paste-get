@@ -67,7 +67,15 @@ private fun Shell(state: AppState, actions: AppActions, backStack: MutableList<N
                 }
                 entry<Route.Copies> { CopiesScreen(state.autoCopy, actions.autoCopy, onBack = { back(backStack) }) }
                 entry<Route.Screenshots> { ScreenshotsScreen(state, actions, onBack = { back(backStack) }) }
-                entry<Route.Codes> { CodesScreen(state, actions, onBack = { back(backStack) }) }
+                entry<Route.Codes> {
+                    CodesScreen(
+                        state.codes,
+                        actions.codes,
+                        names = state.computers.associate { it.deviceId to it.name },
+                        onBack = { back(backStack) },
+                        onOpenCopies = { open(backStack, Route.Copies) },
+                    )
+                }
                 entry<Route.History> { HistoryScreen(state.activity, state.computers, onSettings = settings) }
                 entry<Route.Devices> {
                     DevicesScreen(state, actions, onSettings = settings, onOpen = { open(backStack, Route.Device(it)) })

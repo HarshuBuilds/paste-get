@@ -17,9 +17,6 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.os.BundleCompat
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import uniffi.pasteget_ffi.findOneTimeCode
 import java.util.concurrent.Executors
 
@@ -44,11 +41,6 @@ object OneTimeCodes {
     /** `Notification.EXTRA_BUILDER_APPLICATION_INFO`, hidden: the posting app, set by Android. */
     private const val EXTRA_APP_INFO = "android.appInfo"
 
-    private val lastState = MutableStateFlow<LastCode?>(null)
-
-    /** The last code sent, for the home screen. */
-    val last: StateFlow<LastCode?> = lastState.asStateFlow()
-
     private val recent = RecentCodes()
     private val conversations = Conversations()
     private val worker = Executors.newSingleThreadExecutor()
@@ -69,7 +61,6 @@ object OneTimeCodes {
             Log.i(TAG, "one-time code from ${notification.packageName} sent to $sentTo computers")
             // Its length is what the computers acknowledge; the code itself is never kept.
             app.pasteGet.activity.sent(ActivityKind.CODE, code.encodeToByteArray().size, sentTo, automatic = true, sensitive = true, app = name)
-            lastState.value = LastCode(System.currentTimeMillis(), name, sentTo)
         }
     }
 
@@ -134,9 +125,6 @@ object OneTimeCodes {
 data class CodeAccess(val listening: Boolean, val seesCodes: Boolean?) {
     val ready: Boolean get() = listening && seesCodes != false
 }
-
-/** A code sent at [atMillis] (wall clock), from the app [app], to [sentTo] computers. */
-data class LastCode(val atMillis: Long, val app: String, val sentTo: Int)
 
 /**
  * The codes sent in the last [forMillis]: an SMS app posts a notification again when the

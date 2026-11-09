@@ -18,7 +18,7 @@ data class AppState(
     val screenshots: ScreenshotSetting,
     val photoRequestDenied: Boolean,
     val autoCopy: CopiesState,
-    val codes: CodesCardState,
+    val codes: CodesState,
     /** `null` until read from the Rust client. */
     val thisPhone: ThisPhone? = null,
     /** The computer that last unpaired this phone, until the user pairs again or closes the notice. */

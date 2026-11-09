@@ -68,7 +68,7 @@ object AppFixtures {
                 canNotify = canNotify,
                 setUp = copiesSetUp,
             ),
-            codes = CodesCardState(codesOn, codeAccess, shellReady = false, last = null),
+            codes = CodesState(codesOn, codeAccess, shellReady = false, last = null, codesHidden = true),
             thisPhone = phone,
         )
     }
