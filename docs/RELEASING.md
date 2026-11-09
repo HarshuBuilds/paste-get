@@ -7,16 +7,24 @@ How the packages are built, and the steps of a release. CI does the building
 
 | Package | Built by | Where it ends up |
 |---|---|---|
-| Windows installer, `paste-get_<version>_x64-setup.exe` | `packaging/build-desktop.sh nsis` on `windows-latest` | Installs for the current user (no admin prompt) in `%LOCALAPPDATA%\paste-get`, with a Start menu entry and an uninstaller. `pasteget.exe` is installed next to `pasteget-tray.exe`. Installing and uninstalling first stop both if they run (`desktop/tray/installer-hooks.nsh`); uninstalling also removes *Start at login*, for every profile |
+| Windows installer, `paste-get_<version>_x64-setup.exe` | `packaging/build-desktop.sh nsis` on `windows-2025` | Installs for the current user (no admin prompt) in `%LOCALAPPDATA%\paste-get`, with a Start menu entry and an uninstaller. `pasteget.exe` is installed next to `pasteget-tray.exe`. Installing and uninstalling first stop both if they run (`desktop/tray/installer-hooks.nsh`); uninstalling also removes *Start at login*, for every profile |
 | Linux AppImage, `paste-get_<version>_amd64.AppImage` | `packaging/build-desktop.sh appimage,deb,rpm` on Ubuntu 22.04 | One file; runs on distributions at least as new as Ubuntu 22.04. Contains `pasteget` too, but only the tray is started from outside |
 | Debian/Ubuntu package, `paste-get_<version>_amd64.deb` | the same run | `/usr/bin/pasteget` and `pasteget-tray`, a desktop entry, an icon, the AppStream metainfo and a firewalld service (`packaging/linux/firewalld/paste-get.xml`: TCP 47290, UDP 5353; not turned on by the package). Depends on the system's WebKitGTK 4.1, GTK 3 and libayatana-appindicator3 (the tray icon). Ubuntu 22.04, Debian 12 or newer |
 | Fedora/openSUSE package, `paste-get_<version>_x86_64.rpm` | the same run (Tauri names it `paste-get-<version>-1.x86_64.rpm`; the workflow renames it) | The same files. Requires the same libraries by their file names (`libwebkit2gtk-4.1.so.0()(64bit)` and so on), which works across RPM distributions |
-| Android APK, `paste-get_<version>_foss.apk` | `./gradlew assembleFossRelease` on `ubuntu-latest` | Signed with the release key, for both phone ABIs (`arm64-v8a`, `x86_64`). Without the key (forks, before it's set up) it comes out as `…_foss-unsigned.apk`, which Android won't install; a tag refuses to release without it |
+| Android APK, `paste-get_<version>_foss.apk` | `./gradlew assembleFossRelease` on `ubuntu-24.04` | Signed with the release key, for both phone ABIs (`arm64-v8a`, `x86_64`). Without the key (forks, before it's set up) it comes out as `…_foss-unsigned.apk`, which Android won't install; a tag refuses to release without it |
 | Arch package `paste-get-bin` | `packaging/aur/paste-get-bin/PKGBUILD`, tested with `makepkg` in an Arch container on the .deb above | The .deb's files, unpacked. Points at a published release's .deb, so it's updated after each release (see below) |
 | Arch package `paste-get-git` | `packaging/aur/paste-get-git/PKGBUILD`, tested with `makepkg` in an Arch container | `/usr/bin/pasteget` and `pasteget-tray`, a desktop entry, an icon and the metainfo. Built from source on the user's machine |
 
 Every push that changes the packaging builds them all, without releasing: they're in the run's
-artifacts. A `v*` tag builds them and puts them, with a `SHA256SUMS` file, in a **draft**
+artifacts.
+
+The workflows name their runner images (`ubuntu-24.04`, `windows-2025`, and `ubuntu-22.04` for
+the Linux packages, whose glibc sets the oldest system they run on) rather than `…-latest`, so
+a release isn't built on a different system than the last test run without anyone deciding
+it. Move them on purpose, in a commit of their own, before GitHub retires one. The actions they
+use run on Node.js 24 (`actions/checkout@v7`, `upload-artifact@v7`, `download-artifact@v8`,
+`setup-java@v6`, `gradle/actions/setup-gradle@v6` with its open-source `basic` cache,
+`actions-rust-lang/setup-rust-toolchain@v2`); Dependabot proposes new major versions weekly. A `v*` tag builds them and puts them, with a `SHA256SUMS` file, in a **draft**
 GitHub release.
 
 Before that, CI checks the Linux packages: `packaging/linux/check-packages.sh` lists what the
