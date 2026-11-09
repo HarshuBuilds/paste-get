@@ -58,6 +58,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import io.github.nexoryx.pasteget.ui.AppStatus
+import io.github.nexoryx.pasteget.ui.appStatus
+import io.github.nexoryx.pasteget.ui.codesHealth
+import io.github.nexoryx.pasteget.ui.copiesHealth
+import io.github.nexoryx.pasteget.ui.screenshotsHealth
+import io.github.nexoryx.pasteget.ui.shellReady
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -116,11 +122,22 @@ class MainActivity : ComponentActivity() {
                         message = getString(R.string.unpaired_title, it.name)
                     }
                 }
-                val shellReady = builtIn.status == BuiltInStatus.WATCHING || shizuku.status == ShizukuStatus.WATCHING
+                val shellReady = shellReady(builtIn, shizuku)
+                val status = appStatus(
+                    computers,
+                    connected,
+                    unpaired,
+                    listOf(
+                        copiesHealth(copiesOn, builtIn, shizuku, logs, fallback),
+                        screenshotsHealth(screenshots.wanted, screenshots.access),
+                        codesHealth(codesOn, codeAccess, shellReady),
+                    ),
+                )
                 // The built-in mode grants the permission that lets the app hide the notices.
                 LaunchedEffect(builtIn.status) { notices = AccessNotices.of(this@MainActivity) }
                 HomeScreen(
                     deviceId = pasteGet.client.deviceId(),
+                    status = status,
                     computers = computers,
                     connected = connected,
                     message = message,
@@ -394,6 +411,19 @@ private fun PasteGetTheme(content: @Composable () -> Unit) {
     }
 }
 
+/** The app's state in one line. */
+@Composable
+private fun statusTitle(status: AppStatus): String = when (status) {
+    AppStatus.NoComputer -> stringResource(R.string.status_no_computer)
+    is AppStatus.Unpaired -> stringResource(R.string.unpaired_title, status.name)
+    is AppStatus.Looking -> stringResource(R.string.notification_connecting)
+    is AppStatus.NeedsStep -> connectedText(status.connected.size)
+    is AppStatus.Working -> connectedText(status.connected.size)
+}
+
+@Composable
+private fun connectedText(count: Int): String = pluralStringResource(R.plurals.notification_connected, count, count)
+
 /** Whether the user wants screenshots sent, and whether the app can see them. */
 private data class ScreenshotSetting(val wanted: Boolean, val access: PhotoAccess) {
     val on: Boolean
@@ -403,6 +433,7 @@ private data class ScreenshotSetting(val wanted: Boolean, val access: PhotoAcces
 @Composable
 private fun HomeScreen(
     deviceId: String,
+    status: AppStatus,
     computers: List<PairedComputer>,
     connected: Set<String>,
     message: String?,
@@ -428,18 +459,7 @@ private fun HomeScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineLarge)
-        Text(
-            text = when {
-                computers.isEmpty() -> stringResource(R.string.status_no_computer)
-                connected.isEmpty() -> stringResource(R.string.notification_connecting)
-                else -> pluralStringResource(
-                    R.plurals.notification_connected,
-                    connected.size,
-                    connected.size,
-                )
-            },
-            style = MaterialTheme.typography.titleMedium,
-        )
+        Text(statusTitle(status), style = MaterialTheme.typography.titleMedium)
 
         Button(onClick = onPair, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.pair_button))
@@ -598,12 +618,13 @@ private fun AutoCopyCard(state: AutoCopyCardState, actions: AutoCopyActions) {
 
 /** The health of the automatic copy in one line: how copies are read right now. */
 @Composable
-private fun modeText(state: AutoCopyCardState): String = when (CopyMode.of(state.builtIn, state.shizuku, state.logs)) {
-    CopyMode.BUILT_IN -> stringResource(R.string.mode_builtin)
-    CopyMode.SHIZUKU -> stringResource(R.string.mode_shizuku, state.shizuku.detail.orEmpty())
-    CopyMode.LOGS -> stringResource(R.string.mode_logs)
-    CopyMode.MANUAL -> stringResource(R.string.mode_manual)
-}
+private fun modeText(state: AutoCopyCardState): String =
+    when (copiesHealth(state.on, state.builtIn, state.shizuku, state.logs, state.fallback).mode) {
+        CopyMode.BUILT_IN -> stringResource(R.string.mode_builtin)
+        CopyMode.SHIZUKU -> stringResource(R.string.mode_shizuku, state.shizuku.detail.orEmpty())
+        CopyMode.LOGS -> stringResource(R.string.mode_logs)
+        CopyMode.MANUAL, null -> stringResource(R.string.mode_manual)
+    }
 
 /** The built-in mode: set it up, or what keeps it from running. */
 @Composable
