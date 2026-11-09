@@ -242,10 +242,46 @@ pub async fn run_session<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let peer = connection.peer();
     let their_hello = timeout(HANDSHAKE_TIMEOUT, connection.exchange_hello(hello))
         .await
         .map_err(|_| SessionError::Timeout("Hello exchange"))??;
+    run(connection, their_hello, peers, events).await
+}
+
+/// Like [`run_session`], for the accepting side once it has read the device's Hello
+/// ([`crate::pairing::read_opening`]): answers with `hello`, checks the device's version, then
+/// runs the session.
+pub async fn answer_session<S>(
+    mut connection: Connection<S>,
+    their_hello: Hello,
+    hello: Hello,
+    peers: &Peers,
+    events: &dyn SessionEvents,
+) -> Result<(), SessionError>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let ours = Envelope {
+        payload: Some(Payload::Hello(hello)),
+    };
+    timeout(HANDSHAKE_TIMEOUT, connection.send(&ours))
+        .await
+        .map_err(|_| SessionError::Timeout("Hello exchange"))??;
+    let their_hello = transport::checked_hello(their_hello)?;
+    run(connection, their_hello, peers, events).await
+}
+
+/// A session once both Hellos went through.
+async fn run<S>(
+    connection: Connection<S>,
+    their_hello: Hello,
+    peers: &Peers,
+    events: &dyn SessionEvents,
+) -> Result<(), SessionError>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let peer = connection.peer();
     let (reader, writer) = connection.into_split();
     let (sender, queue) = mpsc::channel(OUTGOING_QUEUE);
     let awaiting = AwaitingAck::default();
@@ -736,6 +772,44 @@ mod tests {
         phone_session.abort();
         let _ = pc_session.await;
         assert!(pc_peers.connected().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_accepting_side_answers_a_hello_it_read_first() {
+        let (phone, pc) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (phone_io, pc_io) = duplex(64 * 1024);
+        let (client, server) = tokio::join!(
+            transport::connect(phone_io, &phone, pc.device_id()),
+            async { transport::accept(pc_io, &pc).await?.authorize(|_| true) }
+        );
+        let (mut client, server) = (client.unwrap(), server.unwrap());
+        let mut newer = hello("phone");
+        newer.protocol_version = PROTOCOL_VERSION + 1;
+        let peers = Peers::new();
+
+        let (theirs, ended) = tokio::join!(client.exchange_hello(newer), async {
+            let Ok(crate::pairing::Opening::Hello(connection, read_first)) =
+                crate::pairing::read_opening(server).await
+            else {
+                panic!("expected a Hello");
+            };
+            answer_session(
+                connection,
+                read_first,
+                hello("pc"),
+                &peers,
+                &Recorder::default(),
+            )
+            .await
+        });
+
+        // A newer device still learns this one's version, to talk down if it can.
+        assert_eq!(theirs.unwrap().protocol_version, PROTOCOL_VERSION);
+        assert!(matches!(
+            ended,
+            Err(SessionError::Transport(TransportError::VersionMismatch(v))) if v == PROTOCOL_VERSION + 1
+        ));
+        assert!(peers.connected().is_empty());
     }
 
     #[tokio::test]

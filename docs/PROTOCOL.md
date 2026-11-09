@@ -48,7 +48,9 @@ ignored, and the certificate may be regenerated at any time without changing the
 - **The accepting side** requires a client certificate and lets TLS verify the client holds its
   key, but accepts any key at the TLS level, because an unknown device may be pairing (section 5).
   Right after the handshake it looks up the client's device ID:
-  - **paired device** → normal session;
+  - **paired device** → it reads the client's first message before sending anything: a `Hello`
+    starts a normal session, a `PairRequest` means the device forgot this one and pairs again
+    (section 5.2);
   - **pairing window open** → the client must complete pairing (section 5) as its first message;
   - **otherwise** → send a `Refusal` with reason `NOT_PAIRED` and close the connection, without
     acting on anything the client sent. (It reads and discards what arrives for a moment before
@@ -103,7 +105,8 @@ Inside the TLS stream, each message is one frame:
 ### 4.1 `Hello`
 
 Each side sends `Hello` first, right after the TLS handshake, and must not send anything else
-before it.
+before it. The connecting side sends its `Hello` without waiting for the other's: the accepting
+side reads it first (section 2.3), then answers with its own.
 
 | Field | Meaning |
 |---|---|
@@ -113,7 +116,8 @@ before it.
 | `platform` | `ANDROID`, `WINDOWS`, `LINUX` or `MACOS` |
 
 If the versions differ, the side with the higher version decides whether it can talk down;
-otherwise it closes the connection. Version 0 implementations close on any mismatch.
+otherwise it closes the connection. Version 0 implementations close on any mismatch, after
+sending their own `Hello`, so that the other side learns their version.
 
 `device_name` is untrusted: receivers sanitize it as in section 5.1.
 
@@ -219,6 +223,14 @@ Rules for readers:
    device_name }`. Both sides close the connection.
 6. If accepted, each side stores the other's device ID and name. From then on they connect with
    ordinary pinned TLS.
+
+**Pairing again.** A phone that forgot a PC can scan a new code while the PC still knows it. The
+PC then reads the `PairRequest` where it expects a `Hello` (section 2.3) and handles it as in
+steps 5 and 6, with the same window: on success it updates the stored name and ends any session
+it still has with that device. Without an open window it answers `accepted = false`.
+
+A device that isn't paired and connects while no window is open gets the `Refusal` of section
+2.3 instead of a `PairResponse`: the phone then says the code is no longer shown.
 
 ### 5.3 Security properties
 

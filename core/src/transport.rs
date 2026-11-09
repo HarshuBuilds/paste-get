@@ -229,14 +229,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
         .await?;
         match self.recv().await? {
             Some(Envelope {
-                payload: Some(Payload::Hello(mut theirs)),
-            }) => {
-                if theirs.protocol_version != PROTOCOL_VERSION {
-                    return Err(TransportError::VersionMismatch(theirs.protocol_version));
-                }
-                theirs.device_name = sanitize_device_name(&theirs.device_name);
-                Ok(theirs)
-            }
+                payload: Some(Payload::Hello(theirs)),
+            }) => checked_hello(theirs),
             Some(Envelope {
                 payload: Some(Payload::Refusal(refusal)),
             }) => Err(match refusal.reason() {
@@ -253,6 +247,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
         self.io.inner.shutdown().await?;
         Ok(())
     }
+}
+
+/// The peer's [`Hello`], if it speaks our version, with its device name sanitized.
+pub(crate) fn checked_hello(mut theirs: Hello) -> Result<Hello, TransportError> {
+    if theirs.protocol_version != PROTOCOL_VERSION {
+        return Err(TransportError::VersionMismatch(theirs.protocol_version));
+    }
+    theirs.device_name = sanitize_device_name(&theirs.device_name);
+    Ok(theirs)
 }
 
 /// Receiving side of a connection: decodes frames from a byte stream.

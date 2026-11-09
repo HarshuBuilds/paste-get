@@ -10,6 +10,8 @@
 //!    the new device could see the QR code.
 //!
 //! Each side then stores the other's [`PairedDevice`]; later connections are ordinary pinned TLS.
+//! A device that forgot the accepting one, which still knows it, can pair again the same way: the
+//! accepting side finds its request with [`read_opening`].
 
 use std::fmt;
 use std::net::SocketAddr;
@@ -23,8 +25,8 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use zeroize::Zeroizing;
 
 use crate::identity::{DeviceId, Identity};
-use crate::proto::{Envelope, PairRequest, PairResponse, envelope::Payload};
-use crate::transport::{self, TransportError, UnverifiedConnection};
+use crate::proto::{Envelope, Hello, PairRequest, PairResponse, envelope::Payload};
+use crate::transport::{self, Connection, TransportError, UnverifiedConnection};
 
 /// How long a pairing QR code stays valid.
 pub const PAIRING_TTL: Duration = Duration::from_secs(5 * 60);
@@ -55,6 +57,9 @@ pub enum PairingError {
     WrongSecret,
     #[error("the other device refused to pair")]
     Rejected,
+    /// It refused the connection: its pairing code expired, was used or was closed.
+    #[error("the other device is not showing this pairing code any more: show a new one")]
+    NoLongerShown,
     #[error("the other device broke the pairing protocol")]
     Protocol,
 }
@@ -226,7 +231,7 @@ impl PairingWindow {
     }
 
     /// Checks a secret. A match closes the window: each code pairs one device.
-    fn check(&mut self, candidate: &[u8], now: Instant) -> Result<(), PairingError> {
+    pub fn check(&mut self, candidate: &[u8], now: Instant) -> Result<(), PairingError> {
         if self.closed {
             return Err(PairingError::Closed);
         }
@@ -287,11 +292,16 @@ where
                     accepted: false, ..
                 })),
         }) => Err(PairingError::Rejected),
+        // Its window closed: it refuses us as any device it doesn't know.
+        Some(Envelope {
+            payload: Some(Payload::Refusal(_)),
+        }) => Err(PairingError::NoLongerShown),
         _ => Err(PairingError::Protocol),
     }
 }
 
-/// Accepting side: handles a connection from a device that is not paired yet.
+/// Accepting side: handles a connection from a device that is not paired yet, checking its
+/// secret against `window`.
 ///
 /// Call it only for peers that failed [`UnverifiedConnection::authorize`] while `window` is open.
 pub async fn accept_pairing<S>(
@@ -302,31 +312,111 @@ pub async fn accept_pairing<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    read_request(connection)
+        .await?
+        .answer(|secret| window.check(secret, Instant::now()), device_name)
+        .await
+}
+
+/// Accepting side: reads the pairing request of a device that is not paired yet. Anything else
+/// as its first message is a protocol error.
+///
+/// Call it only for peers that failed [`UnverifiedConnection::authorize`] while a pairing window
+/// is open.
+pub async fn read_request<S>(
+    connection: UnverifiedConnection<S>,
+) -> Result<PairingRequest<S>, PairingError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let mut connection = connection.into_pairing();
-    let peer = connection.peer();
-    let Some(Envelope {
-        payload: Some(Payload::PairRequest(request)),
-    }) = connection.recv().await?
-    else {
-        return Err(PairingError::Protocol);
-    };
+    match connection.recv().await? {
+        Some(Envelope {
+            payload: Some(Payload::PairRequest(request)),
+        }) => Ok(PairingRequest::new(connection, request)),
+        _ => Err(PairingError::Protocol),
+    }
+}
 
-    let secret = Zeroizing::new(request.secret);
-    let verdict = window.check(&secret, Instant::now());
-    connection
-        .send(&Envelope {
-            payload: Some(Payload::PairResponse(PairResponse {
-                accepted: verdict.is_ok(),
-                device_name: sanitize_device_name(device_name),
-            })),
+/// What a paired device sends first to the accepting side.
+pub enum Opening<S> {
+    /// Its Hello, with the name sanitized: answer with [`crate::session::answer_session`].
+    Hello(Connection<S>, Hello),
+    /// A pairing request: the device forgot this one and scanned its pairing code again.
+    PairRequest(PairingRequest<S>),
+}
+
+/// Accepting side: reads the first message of a paired device, before sending anything.
+pub async fn read_opening<S>(mut connection: Connection<S>) -> Result<Opening<S>, TransportError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    match connection.recv().await? {
+        Some(Envelope {
+            payload: Some(Payload::Hello(mut hello)),
+        }) => {
+            // The version is checked once ours is sent: a newer device needs it to talk down.
+            hello.device_name = sanitize_device_name(&hello.device_name);
+            Ok(Opening::Hello(connection, hello))
+        }
+        Some(Envelope {
+            payload: Some(Payload::PairRequest(request)),
+        }) => Ok(Opening::PairRequest(PairingRequest::new(
+            connection, request,
+        ))),
+        Some(_) => Err(TransportError::UnexpectedMessage { expected: "Hello" }),
+        None => Err(TransportError::Closed),
+    }
+}
+
+/// A pairing request a device sent, not answered yet.
+pub struct PairingRequest<S> {
+    connection: Connection<S>,
+    secret: Zeroizing<Vec<u8>>,
+    device_name: String,
+}
+
+impl<S> PairingRequest<S> {
+    fn new(connection: Connection<S>, request: PairRequest) -> Self {
+        Self {
+            connection,
+            secret: Zeroizing::new(request.secret),
+            device_name: sanitize_device_name(&request.device_name),
+        }
+    }
+
+    /// The device ID the device proved it owns.
+    pub fn peer(&self) -> DeviceId {
+        self.connection.peer()
+    }
+}
+
+impl<S: AsyncRead + AsyncWrite + Unpin> PairingRequest<S> {
+    /// Checks the secret with `check` (a [`PairingWindow::check`]), tells the device whether it
+    /// is accepted, and closes the connection. `check` runs before anything is sent, so a lock
+    /// it takes is never held across network I/O.
+    pub async fn answer(
+        mut self,
+        check: impl FnOnce(&[u8]) -> Result<(), PairingError>,
+        device_name: &str,
+    ) -> Result<PairedDevice, PairingError> {
+        let verdict = check(&self.secret);
+        self.connection
+            .send(&Envelope {
+                payload: Some(Payload::PairResponse(PairResponse {
+                    accepted: verdict.is_ok(),
+                    device_name: sanitize_device_name(device_name),
+                })),
+            })
+            .await?;
+        let peer = self.connection.peer();
+        let _ = self.connection.close().await;
+
+        verdict.map(|()| PairedDevice {
+            device_id: peer,
+            device_name: self.device_name,
         })
-        .await?;
-    let _ = connection.close().await;
-
-    verdict.map(|()| PairedDevice {
-        device_id: peer,
-        device_name: sanitize_device_name(&request.device_name),
-    })
+    }
 }
 
 /// Removes control characters, trims, and caps the length of a name received from a peer.
@@ -501,6 +591,79 @@ mod tests {
         );
         assert!(client.is_ok());
         assert!(server.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_paired_device_can_pair_again_or_start_a_session() {
+        use crate::proto::{PROTOCOL_VERSION, Platform};
+        let (pc, mut window, invite) = sample_invite();
+        let phone = Identity::generate().unwrap();
+        let accept_paired = |io| {
+            let pc = &pc;
+            async move {
+                let incoming = transport::accept(io, pc).await?;
+                let connection = incoming.authorize(|_| true)?;
+                read_opening(connection).await
+            }
+        };
+
+        // A device that forgot the PC sends a pairing request as its first message.
+        let (phone_io, pc_io) = duplex(64 * 1024);
+        let (phone_result, pc_result) =
+            tokio::join!(pair_with(phone_io, &phone, &invite, "POCO M8 5G"), async {
+                let Opening::PairRequest(request) = accept_paired(pc_io).await? else {
+                    panic!("expected a pairing request");
+                };
+                assert_eq!(request.peer(), phone.device_id());
+                request
+                    .answer(|secret| window.check(secret, Instant::now()), "PC")
+                    .await
+            });
+        assert_eq!(pc_result.unwrap().device_name, "POCO M8 5G");
+        assert_eq!(phone_result.unwrap().device_name, "PC");
+
+        // Any other device sends its Hello, read before the PC sends anything.
+        let (phone_io, pc_io) = duplex(64 * 1024);
+        let ours = Hello {
+            protocol_version: PROTOCOL_VERSION,
+            device_name: "POCO\u{7}".into(),
+            app_version: "test".into(),
+            platform: Platform::Android.into(),
+        };
+        let (_phone, opening) = tokio::join!(
+            async {
+                let mut connection = transport::connect(phone_io, &phone, pc.device_id()).await?;
+                connection
+                    .send(&Envelope {
+                        payload: Some(Payload::Hello(ours)),
+                    })
+                    .await?;
+                Ok::<_, TransportError>(connection)
+            },
+            accept_paired(pc_io)
+        );
+        let Ok(Opening::Hello(_, hello)) = opening else {
+            panic!("expected a Hello");
+        };
+        assert_eq!(hello.device_name, "POCO");
+    }
+
+    #[tokio::test]
+    async fn a_code_no_longer_shown_says_so() {
+        let (pc, _, invite) = sample_invite();
+        let phone = Identity::generate().unwrap();
+        let (phone_io, pc_io) = duplex(64 * 1024);
+
+        let (phone_result, refused) =
+            tokio::join!(pair_with(phone_io, &phone, &invite, "POCO M8 5G"), async {
+                transport::accept(pc_io, &pc)
+                    .await?
+                    .refuse(crate::proto::RefusalReason::NotPaired)
+                    .await
+            });
+
+        refused.unwrap();
+        assert!(matches!(phone_result, Err(PairingError::NoLongerShown)));
     }
 
     #[tokio::test]

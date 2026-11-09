@@ -266,6 +266,38 @@ fn forgetting_a_computer_disconnects_it() {
     ));
 }
 
+/// The phone forgot the PC, which still knows it: scanning a new code pairs them again.
+#[test]
+fn a_phone_that_forgot_the_pc_pairs_again() {
+    let pc = start_pc();
+    let phone = connected_phone(&pc, "POCO");
+    let pc_id = pc.daemon.device_id().to_string();
+    phone.client.forget(pc_id.clone()).unwrap();
+    wait_until("the PC to see the phone leave", || {
+        let status = pc.runtime.block_on(pc.daemon.status());
+        status.devices.iter().all(|d| !d.connected)
+    });
+    assert_eq!(pc.runtime.block_on(pc.daemon.status()).devices.len(), 1);
+
+    let qr_code = pc
+        .runtime
+        .block_on(pc.daemon.open_pairing())
+        .unwrap()
+        .to_uri();
+    let computer = phone.client.pair(qr_code).unwrap();
+
+    assert_eq!(computer.device_id, pc_id);
+    assert_eq!(phone.client.paired_computers(), [computer]);
+    wait_until("the new connection", || phone.client.connected_count() == 1);
+    let status = pc.runtime.block_on(pc.daemon.status());
+    assert_eq!(status.devices.len(), 1);
+    assert!(!status.pairing_open);
+    assert_eq!(phone.client.send_text("paired again".into()), 1);
+    wait_until("the text on the PC clipboard", || {
+        pc.clipboard.get() == Some(Raw::Text("paired again".into()))
+    });
+}
+
 /// The PC unpairs the phone: the phone hears it on its next dial, forgets the PC and says so.
 #[test]
 fn a_phone_unpaired_on_the_pc_forgets_it_and_says_so() {

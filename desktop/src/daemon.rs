@@ -22,7 +22,9 @@ use pasteget_core::clip::{Clip, Kind, mime};
 use pasteget_core::detect;
 use pasteget_core::echo::EchoGuard;
 use pasteget_core::identity::{DeviceId, Identity};
-use pasteget_core::pairing::{self, PairingInvite, PairingWindow};
+use pasteget_core::pairing::{
+    self, Opening, PairedDevice, PairingError, PairingInvite, PairingWindow,
+};
 use pasteget_core::proto::{Hello, PROTOCOL_VERSION, Platform, RefusalReason};
 use pasteget_core::session::{self, HANDSHAKE_TIMEOUT, Peers, RECONNECT_MIN, SessionEvents};
 use pasteget_core::transport;
@@ -532,6 +534,31 @@ impl Shared {
         known.insert(device);
         self.profile.save_known_devices(&known)
     }
+
+    /// Stores a device that just paired, or paired again, and says so.
+    fn paired(&self, result: Result<PairedDevice, PairingError>) -> Result<()> {
+        let paired = match result {
+            Ok(paired) => paired,
+            Err(e) => {
+                let _ = self.events.send(Event::PairingFailed(e.to_string()));
+                return Err(e.into());
+            }
+        };
+        // Paired again: it keeps its addresses, if this computer dials it.
+        let known = lock(&self.known).get(&paired.device_id).cloned();
+        let again = known.is_some();
+        let device = match known {
+            Some(known) => KnownDevice {
+                name: paired.device_name,
+                ..known
+            },
+            None => KnownDevice::accepted(paired),
+        };
+        self.remember(device.clone())?;
+        tracing::info!(device = %device.name, id = %device.id, again, "paired");
+        let _ = self.events.send(Event::Paired(device));
+        Ok(())
+    }
 }
 
 /// Received clips go to the clipboard and on to the other devices.
@@ -665,8 +692,35 @@ async fn handle_incoming(shared: Arc<Shared>, socket: TcpStream) -> Result<()> {
 
     if lock(&shared.known).contains(&peer) {
         let connection = unverified.authorize(|id| lock(&shared.known).contains(id))?;
-        session::run_session(connection, shared.hello(), &shared.peers, &*shared).await?;
-        return Ok(());
+        let opening = timeout(HANDSHAKE_TIMEOUT, pairing::read_opening(connection))
+            .await
+            .context("the device sent nothing in time")??;
+        return match opening {
+            Opening::Hello(connection, hello) => {
+                session::answer_session(connection, hello, shared.hello(), &shared.peers, &*shared)
+                    .await?;
+                Ok(())
+            }
+            // It forgot this computer and scanned its pairing code: it pairs again.
+            Opening::PairRequest(request) => {
+                let mut slot = shared.pairing.lock().await;
+                let result = request
+                    .answer(
+                        |secret| {
+                            let verdict = check_secret(&mut slot, secret);
+                            if verdict.is_ok() {
+                                // A session it may still have here ends: it starts a new one.
+                                shared.peers.disconnect(&peer);
+                            }
+                            verdict
+                        },
+                        &shared.device_name,
+                    )
+                    .await;
+                drop(slot);
+                shared.paired(result)
+            }
+        };
     }
 
     let mut slot = shared.pairing.lock().await;
@@ -680,33 +734,35 @@ async fn handle_incoming(shared: Arc<Shared>, socket: TcpStream) -> Result<()> {
         .await;
         bail!("refused device {peer}: not paired and no pairing code is shown");
     }
-    let Some(window) = slot.as_mut() else {
-        bail!("the pairing window just closed");
-    };
-    let result = timeout(
-        PAIRING_REQUEST_TIMEOUT,
-        pairing::accept_pairing(unverified, window, &shared.device_name),
-    )
+    let result = timeout(PAIRING_REQUEST_TIMEOUT, async {
+        pairing::read_request(unverified)
+            .await?
+            .answer(
+                |secret| check_secret(&mut slot, secret),
+                &shared.device_name,
+            )
+            .await
+    })
     .await;
-    if !window.is_open(Instant::now()) {
-        *slot = None;
-    }
     drop(slot);
 
     match result {
-        Ok(Ok(paired)) => {
-            let device = KnownDevice::accepted(paired);
-            shared.remember(device.clone())?;
-            tracing::info!(device = %device.name, id = %device.id, "paired");
-            let _ = shared.events.send(Event::Paired(device));
-            Ok(())
-        }
-        Ok(Err(e)) => {
-            let _ = shared.events.send(Event::PairingFailed(e.to_string()));
-            Err(e.into())
-        }
+        Ok(result) => shared.paired(result),
         Err(_) => bail!("device {peer} did not send its pairing request in time"),
     }
+}
+
+/// Checks a pairing secret against the window, which closes once used or expired.
+fn check_secret(slot: &mut Option<PairingWindow>, secret: &[u8]) -> Result<(), PairingError> {
+    let now = Instant::now();
+    let verdict = match slot.as_mut() {
+        Some(window) => window.check(secret, now),
+        None => Err(PairingError::Closed),
+    };
+    if !slot.as_ref().is_some_and(|window| window.is_open(now)) {
+        *slot = None;
+    }
+    verdict
 }
 
 /// Keeps a connection to a device we joined, redialing with backoff.
@@ -983,6 +1039,83 @@ mod tests {
         sleep(Duration::from_millis(300)).await;
         assert!(!connected(&pc.daemon).await);
         assert!(laptop.daemon.status().await.devices.is_empty());
+    }
+
+    async fn pair_as(
+        pc: &Daemon,
+        device: &Identity,
+        invite: &PairingInvite,
+        name: &str,
+    ) -> Result<PairedDevice, PairingError> {
+        let socket = TcpStream::connect(pc.local_addr()).await.unwrap();
+        pairing::pair_with(socket, device, invite, name).await
+    }
+
+    struct NoEvents;
+
+    impl SessionEvents for NoEvents {
+        fn clip_received(&self, _peer: DeviceId, _clip: Clip) {}
+    }
+
+    #[tokio::test]
+    async fn a_device_that_forgot_this_one_pairs_again() {
+        let pc = start("pc").await;
+        let phone = Identity::generate().unwrap();
+        let invite = pc.daemon.open_pairing().await.unwrap();
+        pair_as(&pc.daemon, &phone, &invite, "Old name")
+            .await
+            .unwrap();
+        let socket = TcpStream::connect(pc.daemon.local_addr()).await.unwrap();
+        let connection = transport::connect(socket, &phone, pc.daemon.device_id())
+            .await
+            .unwrap();
+        let old_session = tokio::spawn(async move {
+            let hello = Hello {
+                protocol_version: PROTOCOL_VERSION,
+                device_name: "Old name".into(),
+                ..Hello::default()
+            };
+            session::run_session(connection, hello, &Peers::new(), &NoEvents).await
+        });
+        assert!(wait_for_async(|| connected(&pc.daemon)).await);
+
+        // The phone forgot the PC, which still knows it, and scans a new code.
+        let mut events = pc.daemon.subscribe();
+        let invite = pc.daemon.open_pairing().await.unwrap();
+        let paired = pair_as(&pc.daemon, &phone, &invite, "New name").await;
+
+        assert_eq!(paired.unwrap().device_id, pc.daemon.device_id());
+        assert!(matches!(events.recv().await, Ok(Event::Paired(d)) if d.name == "New name"));
+        let status = pc.daemon.status().await;
+        assert_eq!(status.devices.len(), 1);
+        assert_eq!(status.devices[0].device.name, "New name");
+        assert!(!status.pairing_open);
+        // Its old session ended.
+        assert!(timeout(Duration::from_secs(5), old_session).await.is_ok());
+        // The code was used: it doesn't pair it a third time.
+        assert!(matches!(
+            pair_as(&pc.daemon, &phone, &invite, "Third").await,
+            Err(PairingError::Rejected)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_used_code_says_to_show_a_new_one() {
+        let pc = start("pc").await;
+        let invite = pc.daemon.open_pairing().await.unwrap();
+        pair_as(&pc.daemon, &Identity::generate().unwrap(), &invite, "first")
+            .await
+            .unwrap();
+
+        let second = pair_as(
+            &pc.daemon,
+            &Identity::generate().unwrap(),
+            &invite,
+            "second",
+        )
+        .await;
+
+        assert!(matches!(second, Err(PairingError::NoLongerShown)));
     }
 
     #[tokio::test]
