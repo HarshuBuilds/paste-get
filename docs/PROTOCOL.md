@@ -264,7 +264,9 @@ Rules for readers:
 ### 5.2 Exchange
 
 1. The PC opens a **pairing window**: a fresh secret, valid for **5 minutes**, for **one**
-   successful pairing, and closed after **3 wrong secrets**.
+   successful pairing, and closed after **1000 wrong secrets**. A few wrong ones don't close it:
+   anyone on the network can send a `PairRequest`, and could otherwise close every window as it
+   opens.
 2. The phone connects to the addresses it may dial (section 5.1), **pinning the device ID from
    the QR code** (section 2.3). It may try them all at once and keep the first that pairs: a window pairs one device
    once, so two attempts that both reach the PC can't both succeed.
@@ -290,7 +292,10 @@ A device that isn't paired and connects while no window is open gets the `Refusa
   device ID, and TLS fails for any other key.
 - **The PC only pairs with a device that saw its screen**: the secret is only in the QR code and
   only travels inside TLS.
-- **Guessing is useless**: 128-bit secret, 3 attempts, 5 minutes.
+- **Guessing is useless**: a 128-bit secret, 1000 attempts at most in 5 minutes, which gives a
+  guesser a chance of 1000 in 2¹²⁸.
+- **Not closed by junk**: a device on the network can't close the window with a few wrong
+  secrets. To close it, it has to send 1000 within the 5 minutes; the PC then needs a new code.
 - **A link can't send the phone across the Internet**: only addresses on the local network are
   dialed (section 5.1), so a pairing link on a web page can't make the phone pair with a server
   of the attacker's, and one opened by another app can't make it pair with that app.

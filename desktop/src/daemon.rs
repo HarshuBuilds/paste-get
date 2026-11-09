@@ -651,7 +651,7 @@ impl Shared {
     }
 
     /// Answers a pairing request from the open window. The window is locked only to check the
-    /// secret, never across network I/O, so the 3 wrong tries and the single use still hold
+    /// secret, never across network I/O, so the limit on wrong tries and the single use still hold
     /// when requests come in at once.
     async fn answer_pairing<S>(&self, request: PairingRequest<S>) -> Result<()>
     where
@@ -1743,7 +1743,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wrong_secrets_close_the_window_and_a_code_pairs_once() {
+    async fn wrong_secrets_leave_the_window_open_and_a_code_pairs_once() {
         let pc = start("pc").await;
         let invite = pc.daemon.open_pairing().await.unwrap();
         let mut guess = PairingWindow::open(Instant::now()).unwrap().invite(
@@ -1753,7 +1753,8 @@ mod tests {
         );
         guess.device_id = invite.device_id;
 
-        // Three wrong secrets at once: all refused, and the window closes.
+        // Three wrong secrets at once, as anyone on the network could send: all refused, and
+        // the window stays open.
         let guesser = Identity::generate().unwrap();
         let (a, b, c) = tokio::join!(
             pair_as(&pc.daemon, &guesser, &guess, "guess"),
@@ -1763,12 +1764,9 @@ mod tests {
         for result in [a, b, c] {
             assert!(matches!(result, Err(PairingError::Rejected)), "{result:?}");
         }
-        assert!(!pc.daemon.status().await.pairing_open);
-        let late = pair_as(&pc.daemon, &Identity::generate().unwrap(), &invite, "late").await;
-        assert!(matches!(late, Err(PairingError::NoLongerShown)), "{late:?}");
+        assert!(pc.daemon.status().await.pairing_open);
 
-        // Two devices with the right secret at once: one pairs.
-        let invite = pc.daemon.open_pairing().await.unwrap();
+        // Then two devices with the right secret at once: one pairs.
         let (first, second) = (Identity::generate().unwrap(), Identity::generate().unwrap());
         let (a, b) = tokio::join!(
             pair_as(&pc.daemon, &first, &invite, "first"),

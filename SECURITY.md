@@ -25,7 +25,8 @@ Supported versions: only the latest release, while paste-get is below 1.0.
   other's key is one it paired with; there are no certificate authorities. TLS 1.2 is off.
 - **Pairing**: the PC shows a QR code with its device ID, its addresses and a one-time 128-bit
   secret. The phone connects pinning that device ID and sends the secret inside TLS. The secret
-  works once, for 5 minutes, and 3 wrong tries close the window.
+  works once, for 5 minutes, and 1000 wrong tries close the window (a few junk requests from
+  someone on the network don't).
 - **No server, no account, no telemetry.** Clips go straight from one device to another on the
   local network.
 

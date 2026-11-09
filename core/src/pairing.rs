@@ -40,8 +40,9 @@ use crate::transport::{self, Connection, TransportError, UnverifiedConnection};
 /// How long a pairing QR code stays valid.
 pub const PAIRING_TTL: Duration = Duration::from_secs(5 * 60);
 
-/// Wrong secrets tolerated before the window closes.
-pub const MAX_ATTEMPTS: u8 = 3;
+/// Wrong secrets tolerated before the window closes. Many, so that a device on the network can't
+/// close it with a few junk requests; guessing a 128-bit secret is hopeless anyway.
+pub const MAX_ATTEMPTS: u16 = 1000;
 
 /// Longest device name kept, in characters.
 pub const MAX_DEVICE_NAME_CHARS: usize = 64;
@@ -242,7 +243,7 @@ pub struct PairedDevice {
 pub struct PairingWindow {
     secret: PairingSecret,
     expires_at: Instant,
-    wrong_attempts: u8,
+    wrong_attempts: u16,
     closed: bool,
 }
 
@@ -289,7 +290,7 @@ impl PairingWindow {
             self.closed = true;
             return Ok(());
         }
-        self.wrong_attempts += 1;
+        self.wrong_attempts = self.wrong_attempts.saturating_add(1);
         if self.wrong_attempts >= MAX_ATTEMPTS {
             self.closed = true;
         }
@@ -714,17 +715,33 @@ mod tests {
     }
 
     #[test]
-    fn window_closes_after_too_many_wrong_secrets() {
+    fn wrong_secrets_leave_the_window_open_until_too_many() {
         let now = Instant::now();
         let mut window = PairingWindow::open(now).unwrap();
         let secret = window.secret.clone();
 
-        for _ in 0..MAX_ATTEMPTS {
+        // A few junk requests don't close it: the right secret still pairs.
+        for _ in 0..3 {
             assert!(matches!(
                 window.check(&[0; SECRET_LEN], now),
                 Err(PairingError::WrongSecret)
             ));
         }
+        assert!(window.is_open(now));
+        assert!(window.check(secret.0.as_slice(), now).is_ok());
+
+        // The 1000th wrong secret closes it, and the 1001st request, right or not, is refused.
+        let mut window = PairingWindow::open(now).unwrap();
+        let secret = window.secret.clone();
+        for _ in 1..MAX_ATTEMPTS {
+            assert!(window.check(&[0; SECRET_LEN], now).is_err());
+        }
+        assert!(window.is_open(now));
+        assert!(matches!(
+            window.check(&[1; SECRET_LEN], now),
+            Err(PairingError::WrongSecret)
+        ));
+        assert!(!window.is_open(now));
         assert!(matches!(
             window.check(secret.0.as_slice(), now),
             Err(PairingError::Closed)
