@@ -4,7 +4,8 @@ Automated tests use in-memory clipboards. Only real machines can show whether th
 clipboard** works. Sections 1–4 test the desktop daemon on its own; section 5 adds the phone,
 section 6 automatic screenshots, section 7 the way back, from the PC to the phone, section 8
 the automatic copy on the phone, section 9 the tray app, section 10 starting at login and
-section 11 the hotkeys, and section 12 the copy on the phone without Shizuku.
+section 11 the hotkeys, and section 12 the copy on the phone without Shizuku. Section 16 is
+GNOME, which is tier 2.
 
 The trick: on one computer, run the real daemon (system clipboard) **and** a second "fake phone"
 daemon with a private in-memory clipboard. Whatever reaches the fake phone came out of your real
@@ -478,6 +479,34 @@ never wait: a code would be stale by then.
 | Q5 | PC off, copy a password from a password manager on the phone (or get a 2FA code), start the PC | Nothing arrives |
 | Q6 | PC off, copy on the phone, force-stop paste-get on the phone, start both | Nothing arrives: the copy was only in memory |
 | Q7 | Phone's Wi-Fi off, copy a password on the PC as in C7, turn Wi-Fi back on | Nothing arrives |
+
+## 16. GNOME (tier 2)
+
+GNOME (the default desktop of Ubuntu and Fedora) is best effort: it lacks the two things paste-get
+relies on elsewhere on Linux.
+
+- **No tray area.** The icon needs the "AppIndicator and KStatusNotifierItem Support" extension.
+  Ubuntu ships it on by default ("Ubuntu AppIndicators"); on Fedora and Arch, install
+  `gnome-shell-extension-appindicator`, log out and back in, and turn it on in the *Extensions*
+  app. Without it, paste-get runs with no icon, and about 15 s after starting says so in a
+  notification ("paste-get is running, but its icon can't be shown"); the log says
+  `no system tray (StatusNotifierItem host) on the session bus`.
+- **No clipboard-control protocol.** Mutter, GNOME's compositor, has no data-control protocol,
+  so on Wayland paste-get uses the X11 clipboard through XWayland (the log says
+  `no Wayland clipboard change events`, section 2). What that sees of copies made in Wayland
+  apps, and whether received clips paste in them, is what this section finds out *(verify)*.
+  With XWayland turned off, paste-get has no clipboard at all. Every poll reads the clipboard,
+  and password managers' marks aren't seen (Known limitations).
+- **Hotkeys:** if the log says `hotkeys not available`, add them in *Settings* → *Keyboard* →
+  *Custom Shortcuts*, with the commands of section 11.
+
+| # | Do this | Expected |
+|---|---|---|
+| G1 | Without the extension, start `pasteget-tray` from a terminal | No icon. Within about 15 s, the notification above, and the log line |
+| G2 | Turn the extension on, quit (`pkill pasteget-tray`) and start it again | The icon is in the top bar; no such notification |
+| G3 | Rows 1–5 of section 3, copying and pasting in a Wayland app (GNOME Text Editor), then in an X11 app (`xterm`) | Report which rows pass in each |
+| G4 | Section 9, T1–T8 | The menu opens from the top-bar icon |
+| G5 | *Start at login*, log out and in | The icon comes back (`~/.config/autostart` works on GNOME) |
 
 ## Known limitations
 

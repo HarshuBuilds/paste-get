@@ -10,6 +10,7 @@
 // No console window on Windows. Debug builds keep it, for the logs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod linux_tray;
 mod menu;
 mod pairing;
 mod settings;
@@ -182,6 +183,7 @@ fn setup<R: Runtime>(app: &AppHandle<R>, tray: Arc<Tray>) -> Result<()> {
             }
         })
         .build(app)?;
+    linux_tray::warn_if_no_tray();
     tauri::async_runtime::spawn(refresh_loop(app.clone(), tray));
     Ok(())
 }

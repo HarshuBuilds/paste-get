@@ -92,6 +92,9 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
   `exec-once` on Hyprland, which ignores XDG autostart)
 - [x] Hotkeys: `RegisterHotKey` (Windows), GlobalShortcuts portal (KDE), `bind … exec pasteget …` (Hyprland).
   Pause/resume and "send the clipboard now" (`pasteget send --clipboard`), set in `settings.toml`
+- [x] Linux: when no tray can show the icon (GNOME without the AppIndicator extension, a bar
+  without a tray), the tray says so once per start in a notification and in its log
+  (`desktop/tray/src/linux_tray.rs`). GNOME stays tier 2 (`TESTING.md`, section 16)
 - [ ] Verified on Windows 11, KDE Plasma 6 Wayland and Hyprland (`TESTING.md`, sections 9–11)
 
 ### M8 — Release 0.1

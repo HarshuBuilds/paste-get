@@ -42,6 +42,11 @@ lives in the notification area (under `^` in the taskbar).
   latest code from source. Until then: `cd packaging/aur/paste-get-git && makepkg -si`.
 - The tray icon needs a tray: KDE Plasma has one; on Hyprland, use a bar with a tray (Waybar's
   `tray` module).
+- GNOME (best effort): the icon needs the "AppIndicator and KStatusNotifierItem Support"
+  extension. Ubuntu has it already; on Fedora or Arch, install
+  `gnome-shell-extension-appindicator`, then turn it on in the *Extensions* app. paste-get tells
+  you if no tray can show its icon. GNOME has no clipboard-control protocol, so the clipboard
+  goes through XWayland ([details](docs/TESTING.md#16-gnome-tier-2)).
 
 **Android 10+:** install `paste-get_<version>_foss.apk`. If Google Play Protect blocks it, that's
 because the 2FA feature reads notifications: Play Store → your profile picture → Play Protect →

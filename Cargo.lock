@@ -3094,6 +3094,7 @@ dependencies = [
  "anyhow",
  "clap",
  "dirs",
+ "futures-util",
  "pasteget-desktop",
  "qrcode",
  "serde",
@@ -3105,6 +3106,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "windows-sys 0.61.2",
+ "zbus",
 ]
 
 [[package]]
