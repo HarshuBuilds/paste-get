@@ -24,7 +24,8 @@ pub enum State {
         status: StatusReply,
         recent: Vec<RecentReply>,
     },
-    /// The daemon isn't running and couldn't be started.
+    /// The daemon isn't running and couldn't be started, and why, in the user's language
+    /// ([`start_error`], [`down_reason`]).
     Down(String),
 }
 
@@ -147,7 +148,7 @@ fn daemon_entries(state: &State) -> Vec<Entry> {
         )],
         State::Down(reason) => vec![
             Entry::Info(tr("paste-get is not running", "paste-get ne tourne pas").into()),
-            Entry::Info(text(&down_reason(reason))),
+            Entry::Info(text(reason)),
         ],
         State::Running { status, recent } => {
             let mut entries = vec![
@@ -187,38 +188,64 @@ fn daemon_entries(state: &State) -> Vec<Entry> {
 }
 
 /// The notice when the daemon can't start: "paste-get could not start: Port 47290 is taken…".
+/// `reason` is already in the user's language ([`start_error`]).
 pub fn start_failed(reason: &str) -> String {
     format!(
-        "{} {}",
+        "{} {reason}",
         tr(
             "paste-get could not start:",
             "paste-get n'a pas pu démarrer :"
-        ),
-        down_reason(reason)
+        )
     )
 }
 
-/// Why the daemon couldn't start or be reached, in the user's language for the reasons the tray
-/// knows. Others (the system's words) are shown as they are, for a report; the log has them all.
-fn down_reason(reason: &str) -> String {
-    if let Some(at) = reason.find("could not listen on ") {
-        // "could not listen on 0.0.0.0:47290: Address already in use (os error 98)"
-        let address = reason[at + "could not listen on ".len()..]
-            .split(": ")
-            .next()
-            .unwrap_or_default();
-        let port = address.rsplit(':').next().unwrap_or(address);
-        if french() {
-            format!("Le port {port} est déjà pris : un autre paste-get tourne-t-il ?")
-        } else {
-            format!("Port {port} is taken: is another paste-get running?")
-        }
-    } else if reason.contains("already running") {
-        tr(
-            "Another paste-get already runs for this profile.",
-            "Un autre paste-get tourne déjà pour ce profil.",
-        )
-        .into()
+/// Why the daemon this tray runs couldn't start, in the user's language when the tray knows the
+/// reason. A port is said taken only when the system says so; other errors (no permission, a
+/// path too long for a socket) keep the system's words, for a report.
+pub fn start_error(e: &anyhow::Error) -> String {
+    let in_use = e.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|e| e.kind() == std::io::ErrorKind::AddrInUse)
+    });
+    // "could not listen on 0.0.0.0:47290" (the daemon's port) or "… on /run/…/control.sock"
+    // (its control channel), the error's own words.
+    let listening_on = e.chain().find_map(|cause| {
+        cause
+            .to_string()
+            .strip_prefix("could not listen on ")
+            .map(str::to_owned)
+    });
+    match (in_use, listening_on) {
+        (true, Some(address)) => match address.parse::<std::net::SocketAddr>() {
+            Ok(address) if french() => format!(
+                "Le port {} est déjà pris : un autre paste-get tourne-t-il ?",
+                address.port()
+            ),
+            Ok(address) => format!(
+                "Port {} is taken: is another paste-get running?",
+                address.port()
+            ),
+            // Its control channel's socket: two started at once.
+            Err(_) => already_running().into(),
+        },
+        _ => down_reason(&format!("{e:#}")),
+    }
+}
+
+fn already_running() -> &'static str {
+    tr(
+        "Another paste-get already runs for this profile.",
+        "Un autre paste-get tourne déjà pour ce profil.",
+    )
+}
+
+/// Why the daemon couldn't be reached (an error of the control channel), in the user's language
+/// for the reasons the tray knows. Others are shown as they are, for a report; the log has them
+/// all.
+pub fn down_reason(reason: &str) -> String {
+    if reason.contains("already running") {
+        already_running().into()
     } else if reason.contains("did not answer") {
         tr(
             "It doesn't answer: quit paste-get and start it again.",
@@ -391,7 +418,7 @@ mod tests {
     #[test]
     fn a_stopped_daemon_still_offers_quit() {
         pasteget_desktop::i18n::force(pasteget_desktop::i18n::Lang::En);
-        let state = State::Down("could not listen on 0.0.0.0:47290: address in use".into());
+        let state = State::Down("Port 47290 is taken: is another paste-get running?".into());
 
         let entries = entries(&state, Some(false));
         assert!(!state.paused());
@@ -410,15 +437,56 @@ mod tests {
         assert!(labels(&entries).contains(&"[ ] Start at login".to_owned()));
     }
 
+    /// What `Daemon::start` and `control::serve` fail with: the error's words, then the
+    /// system's.
+    fn listen_error(kind: std::io::ErrorKind, on: &str) -> anyhow::Error {
+        anyhow::Error::new(std::io::Error::from(kind)).context(format!("could not listen on {on}"))
+    }
+
     #[test]
-    fn reasons_the_tray_knows_are_explained_and_others_kept() {
+    fn a_port_is_said_taken_only_when_it_is() {
+        use std::io::ErrorKind::{AddrInUse, InvalidInput, PermissionDenied};
         pasteget_desktop::i18n::force(pasteget_desktop::i18n::Lang::En);
+
         assert_eq!(
-            down_reason(
-                "paste-get could not restart: could not listen on 0.0.0.0:47291: os error 10048"
+            start_error(&listen_error(AddrInUse, "0.0.0.0:47290")),
+            "Port 47290 is taken: is another paste-get running?"
+        );
+        // From a restart after new settings.
+        assert_eq!(
+            start_error(
+                &listen_error(AddrInUse, "0.0.0.0:47291").context("paste-get could not restart")
             ),
             "Port 47291 is taken: is another paste-get running?"
         );
+        // Not allowed (Linux EACCES, Windows WSAEACCES 10013): the system's words stay.
+        let denied = start_error(&listen_error(PermissionDenied, "0.0.0.0:80"));
+        assert!(
+            denied.starts_with("could not listen on 0.0.0.0:80: "),
+            "{denied}"
+        );
+        assert!(!denied.contains("taken"), "{denied}");
+        // The control channel's socket, not a port.
+        let socket = "/home/me/.config/paste-get/default/control.sock";
+        let too_long = start_error(&listen_error(InvalidInput, socket));
+        assert!(too_long.starts_with(&format!("could not listen on {socket}: ")));
+        assert_eq!(
+            start_error(&listen_error(AddrInUse, socket)),
+            "Another paste-get already runs for this profile."
+        );
+        assert_eq!(
+            start_error(&anyhow::anyhow!("no D-Bus session")),
+            "no D-Bus session"
+        );
+        assert_eq!(
+            start_failed(&start_error(&listen_error(AddrInUse, "0.0.0.0:47290"))),
+            "paste-get could not start: Port 47290 is taken: is another paste-get running?"
+        );
+    }
+
+    #[test]
+    fn reasons_the_tray_knows_are_explained_and_others_kept() {
+        pasteget_desktop::i18n::force(pasteget_desktop::i18n::Lang::En);
         assert_eq!(
             down_reason("a daemon is already running for this profile"),
             "Another paste-get already runs for this profile."
@@ -428,10 +496,6 @@ mod tests {
             "It doesn't answer: quit paste-get and start it again."
         );
         assert_eq!(down_reason("no D-Bus session"), "no D-Bus session");
-        assert_eq!(
-            start_failed("could not listen on 0.0.0.0:47290: in use"),
-            "paste-get could not start: Port 47290 is taken: is another paste-get running?"
-        );
         assert_eq!(
             labels(&entries(&State::Starting, None))[0],
             "paste-get is starting…"

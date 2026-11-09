@@ -332,12 +332,13 @@ async fn refresh_loop<R: Runtime>(app: AppHandle<R>, tray: Arc<Tray>) {
                 Ok(()) => state = fetch(&tray.endpoint).await,
                 Err(e) => {
                     tracing::warn!(error = %format!("{e:#}"), "could not start the daemon");
-                    state = State::Down(format!("{e:#}"));
+                    let reason = menu::start_error(&e);
                     next_start = Instant::now() + RESTART_EVERY;
                     if !told_down {
                         told_down = true;
-                        DesktopNotifier::start().notice(menu::start_failed(&format!("{e:#}")));
+                        DesktopNotifier::start().notice(menu::start_failed(&reason));
                     }
+                    state = State::Down(reason);
                 }
             }
         }
@@ -409,7 +410,7 @@ async fn fetch(endpoint: &Endpoint) -> State {
     let status = match ask(endpoint, &Request::Status).await {
         Ok(Response::Status(status)) => status,
         Ok(_) => return State::Down("unexpected answer from the daemon".into()),
-        Err(e) => return State::Down(format!("{e:#}")),
+        Err(e) => return State::Down(menu::down_reason(&format!("{e:#}"))),
     };
     let recent = match ask(endpoint, &Request::Recent).await {
         Ok(Response::Recent { clips }) => clips,
