@@ -105,9 +105,12 @@ fun SetUpScreen(state: AppState, actions: AppActions, onBack: () -> Unit) {
     }
 }
 
-/** The set-up's column, also a page of the first-run guide. [onDone] leaves it once set up. */
+/**
+ * The set-up's column, also a page of the first-run guide. [onDone] leaves it once set up; the
+ * guide has its own Next instead (`null`).
+ */
 @Composable
-fun ColumnScope.SetUpContent(state: AppState, actions: AppActions, onDone: () -> Unit) {
+fun ColumnScope.SetUpContent(state: AppState, actions: AppActions, onDone: (() -> Unit)?) {
     val copies = state.autoCopy
     val current = setUpStep(copies.checks, copies.canNotify, copies.splitScreen, copies.builtIn, copies.setUp)
     Text(stringResource(R.string.setup_intro), style = MaterialTheme.typography.bodyLarge)
@@ -455,7 +458,7 @@ private fun SplitScreenHelp() {
 
 /** Set up: what that means now, the notice switch it makes possible, and the way out. */
 @Composable
-private fun Done(copies: CopiesState, actions: CopiesActions, onDone: () -> Unit) {
+private fun Done(copies: CopiesState, actions: CopiesActions, onDone: (() -> Unit)?) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.extraLarge,
@@ -490,7 +493,7 @@ private fun Done(copies: CopiesState, actions: CopiesActions, onDone: () -> Unit
                 }
                 else -> {}
             }
-            Button(onClick = onDone) { Text(stringResource(R.string.setup_done_button)) }
+            if (onDone != null) Button(onClick = onDone) { Text(stringResource(R.string.setup_done_button)) }
         }
     }
     // Possible now: the built-in mode granted what changes it.

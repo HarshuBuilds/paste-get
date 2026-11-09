@@ -25,17 +25,26 @@ import androidx.navigation3.ui.NavDisplay
 fun PasteGetUi(state: AppState, actions: AppActions, backStack: MutableList<NavKey>) {
     val tab = currentTab(backStack)
     val settings = { open(backStack, Route.Settings) }
-    // What just happened ("Paired with HP-AIO", "Sent to 1 computer"), for a few seconds.
-    val snackbar = remember { SnackbarHostState() }
-    LaunchedEffect(state.message) {
-        val message = state.message ?: return@LaunchedEffect
-        snackbar.showSnackbar(message)
-        actions.onMessageShown(message)
-    }
+    val snackbar = rememberMessages(state.message, actions.onMessageShown)
     CompositionLocalProvider(LocalSnackbarHost provides snackbar) {
         Shell(state, actions, backStack, tab, settings)
     }
     PairingFlow(state.pairing, state.computers, actions.onConfirmPairing, actions.onCancelPairing)
+}
+
+/**
+ * What just happened ("Paired with HP-AIO", "Sent to 1 computer"), as a Snackbar for a few
+ * seconds; then [onShown].
+ */
+@Composable
+fun rememberMessages(message: String?, onShown: (String) -> Unit): SnackbarHostState {
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(message) {
+        val shown = message ?: return@LaunchedEffect
+        snackbar.showSnackbar(shown)
+        onShown(shown)
+    }
+    return snackbar
 }
 
 @Composable

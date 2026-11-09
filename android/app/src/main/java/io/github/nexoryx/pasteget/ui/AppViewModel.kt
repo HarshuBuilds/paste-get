@@ -47,6 +47,13 @@ class AppViewModel(
     /** `null` until read for the first time. */
     var paired by mutableStateOf<List<PairedComputer>?>(null)
         private set
+
+    /**
+     * Whether the first-run guide shows instead of the tabs: `null` until the paired computers
+     * are read. Decided once, so pairing during the guide doesn't end it.
+     */
+    var onboarding by mutableStateOf<Boolean?>(null)
+        private set
     var message by mutableStateOf<String?>(null)
         private set
     var pairing by mutableStateOf<PairingState>(PairingState.Idle)
@@ -152,9 +159,24 @@ class AppViewModel(
 
     private fun refreshComputers() {
         viewModelScope.launch {
-            paired = withContext(io) { computers.paired() }
+            val read = withContext(io) { computers.paired() }
+            if (onboarding == null) decideOnboarding(read)
+            paired = read
             if (thisPhone == null) thisPhone = withContext(io) { computers.thisPhone() }
         }
+    }
+
+    /** First run only: a phone paired before the guide existed never sees it. */
+    private fun decideOnboarding(computers: List<PairedComputer>) {
+        val done = Preferences.onboardingDone(app)
+        if (!done && computers.isNotEmpty()) Preferences.setOnboardingDone(app)
+        onboarding = !done && computers.isEmpty()
+    }
+
+    /** The guide was finished or skipped: the tabs, from now on. */
+    fun finishOnboarding() {
+        Preferences.setOnboardingDone(app)
+        onboarding = false
     }
 
     /**

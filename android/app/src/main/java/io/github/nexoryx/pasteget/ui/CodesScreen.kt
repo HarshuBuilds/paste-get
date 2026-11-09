@@ -68,31 +68,7 @@ fun CodesScreen(state: CodesState, actions: CodesActions, names: Map<String, Str
         Text(stringResource(R.string.codes_privacy), style = MaterialTheme.typography.bodyMedium)
         if (!state.on) return@ScreenScaffold
 
-        Text(
-            stringResource(R.string.codes_access_title),
-            style = MaterialTheme.typography.titleSmall,
-            modifier = Modifier.semantics { heading() },
-        )
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                CheckedRow(
-                    title = stringResource(R.string.codes_step_listen),
-                    text = stringResource(R.string.codes_needs_access),
-                    done = state.access.listening,
-                    doneLabel = stringResource(R.string.step_done),
-                )
-                if (state.codesHidden) {
-                    CheckedRow(
-                        title = stringResource(R.string.codes_step_see),
-                        text = stringResource(R.string.codes_hidden),
-                        // Unknown (an Android that names it differently) counts as allowed.
-                        done = state.access.seesCodes != false,
-                        doneLabel = stringResource(R.string.step_done),
-                    )
-                }
-            }
-        }
-        NextAccessStep(state, actions, onOpenCopies)
+        CodesAccess(state, actions, onOpenCopies)
 
         Text(
             stringResource(R.string.codes_last),
@@ -106,6 +82,36 @@ fun CodesScreen(state: CodesState, actions: CodesActions, names: Map<String, Str
             ActivityRow(last, names)
         }
     }
+}
+
+/** The access codes need, as a checklist, and the one thing to do next. Also in the first-run guide. */
+@Composable
+fun CodesAccess(state: CodesState, actions: CodesActions, onOpenCopies: () -> Unit) {
+    Text(
+        stringResource(R.string.codes_access_title),
+        style = MaterialTheme.typography.titleSmall,
+        modifier = Modifier.semantics { heading() },
+    )
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            CheckedRow(
+                title = stringResource(R.string.codes_step_listen),
+                text = stringResource(R.string.codes_needs_access),
+                done = state.access.listening,
+                doneLabel = stringResource(R.string.step_done),
+            )
+            if (state.codesHidden) {
+                CheckedRow(
+                    title = stringResource(R.string.codes_step_see),
+                    text = stringResource(R.string.codes_hidden),
+                    // Unknown (an Android that names it differently) counts as allowed.
+                    done = state.access.seesCodes != false,
+                    doneLabel = stringResource(R.string.step_done),
+                )
+            }
+        }
+    }
+    NextAccessStep(state, actions, onOpenCopies)
 }
 
 /** The one thing to do next, if anything is missing. */

@@ -42,6 +42,8 @@ because the 2FA feature reads notifications: Play Store → your profile picture
 
 ## Getting started
 
+The first time, the phone's app guides you through these steps, and ends with a test copy.
+
 1. Start paste-get on the PC. The first time, it shows a QR code.
 2. On the phone, tap **Scan the code** (later: Devices → **Pair a computer**), then tap **Pair**
    if the code is the one on your PC's screen. Both must be on the same Wi-Fi.

@@ -16,6 +16,7 @@ object Preferences {
     private const val WALLPAPER_COLORS = "wallpaper_colors"
     private const val AUTOSTART_TICKED = "autostart_ticked"
     private const val BATTERY_SAVER_TICKED = "battery_saver_ticked"
+    private const val ONBOARDING_DONE = "onboarding_done"
 
     /** Off until the user turns it on and grants photo access. */
     fun sendScreenshots(context: Context): Boolean =
@@ -73,6 +74,14 @@ object Preferences {
 
     fun setAutostartTicked(context: Context, ticked: Boolean) {
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit { putBoolean(AUTOSTART_TICKED, ticked) }
+    }
+
+    /** The first-run guide was finished or skipped, or the phone had pairings already. */
+    fun onboardingDone(context: Context): Boolean =
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getBoolean(ONBOARDING_DONE, false)
+
+    fun setOnboardingDone(context: Context) {
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit { putBoolean(ONBOARDING_DONE, true) }
     }
 
     /** The user said they set Xiaomi's own battery saver to No restrictions, which no API reads. */

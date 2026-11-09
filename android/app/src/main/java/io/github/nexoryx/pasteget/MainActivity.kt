@@ -7,6 +7,7 @@ import android.annotation.SuppressLint
 import android.app.StatusBarManager
 import android.app.UiModeManager
 import android.content.ActivityNotFoundException
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Intent
@@ -56,6 +57,7 @@ import io.github.nexoryx.pasteget.ui.CopiesState
 import io.github.nexoryx.pasteget.ui.KeepAliveActions
 import io.github.nexoryx.pasteget.ui.KeepAliveState
 import io.github.nexoryx.pasteget.ui.NativeComputers
+import io.github.nexoryx.pasteget.ui.OnboardingScreen
 import io.github.nexoryx.pasteget.ui.PasteGetUi
 import io.github.nexoryx.pasteget.ui.Route
 import io.github.nexoryx.pasteget.ui.SettingsActions
@@ -116,6 +118,7 @@ class MainActivity : ComponentActivity() {
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
             // The service runs either way; without the permission its notification is hidden.
             SyncService.start(this)
+            model.refresh()
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -193,46 +196,47 @@ class MainActivity : ComponentActivity() {
             openTab?.let { selectTab(backStack, it) }
             openTab = null
         }
-        PasteGetUi(
-            state = AppState(
-                status = status,
-                computers = computers,
-                connected = connected,
-                message = model.message,
-                pairing = model.pairing,
-                activity = activity,
-                screenshots = model.screenshots,
-                photoRequestDenied = model.photoRequestDenied,
-                autoCopy = CopiesState(
-                    model.copiesOn,
-                    builtIn,
-                    shizuku,
-                    logs,
-                    model.fallback,
-                    model.notices,
-                    lastCopy = activity.firstOrNull { it.sent && it.automatic && it.kind == ActivityKind.TEXT },
-                    canNotify = model.canNotify,
-                    setUp = model.builtInSetUp,
-                    checks = model.setUpChecks,
-                    vendor = VENDOR,
-                    splitScreen = splitScreen,
-                ),
-                codes = CodesState(
-                    model.codesOn,
-                    model.codeAccess,
-                    shellReady,
-                    last = activity.firstOrNull { it.kind == ActivityKind.CODE },
-                    codesHidden = Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM,
-                ),
-                thisPhone = model.thisPhone,
-                unpairedBy = model.unpaired,
-                refreshing = model.refreshing,
-                settings = SettingsState(model.appearance, model.wallpaperColors),
-                keepAlive = KeepAliveState(model.keepAlive, VENDOR, model.autostartTicked, model.batterySaverTicked),
+        val state = AppState(
+            status = status,
+            computers = computers,
+            connected = connected,
+            message = model.message,
+            pairing = model.pairing,
+            activity = activity,
+            screenshots = model.screenshots,
+            photoRequestDenied = model.photoRequestDenied,
+            autoCopy = CopiesState(
+                model.copiesOn,
+                builtIn,
+                shizuku,
+                logs,
+                model.fallback,
+                model.notices,
+                lastCopy = activity.firstOrNull { it.sent && it.automatic && it.kind == ActivityKind.TEXT },
+                canNotify = model.canNotify,
+                setUp = model.builtInSetUp,
+                checks = model.setUpChecks,
+                vendor = VENDOR,
+                splitScreen = splitScreen,
             ),
-            actions = actions,
-            backStack = backStack,
+            codes = CodesState(
+                model.codesOn,
+                model.codeAccess,
+                shellReady,
+                last = activity.firstOrNull { it.kind == ActivityKind.CODE },
+                codesHidden = Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM,
+            ),
+            thisPhone = model.thisPhone,
+            unpairedBy = model.unpaired,
+            refreshing = model.refreshing,
+            settings = SettingsState(model.appearance, model.wallpaperColors),
+            keepAlive = KeepAliveState(model.keepAlive, VENDOR, model.autostartTicked, model.batterySaverTicked),
         )
+        if (model.onboarding == true) {
+            OnboardingScreen(state, actions, onFinish = model::finishOnboarding)
+        } else {
+            PasteGetUi(state, actions, backStack)
+        }
     }
 
     private fun appActions() = AppActions(
@@ -244,6 +248,8 @@ class MainActivity : ComponentActivity() {
         onDismissUnpaired = model::dismissUnpaired,
         onRefresh = model::refreshConnections,
         onMessageShown = model::messageShown,
+        onRequestNotifications = ::requestNotifications,
+        onTryIt = ::tryIt,
         onScreenshotsChange = ::toggleScreenshots,
         onOpenAppSettings = ::openAppSettings,
         autoCopy = CopiesActions(
@@ -395,15 +401,37 @@ class MainActivity : ComponentActivity() {
         intent?.dataString?.let(model::offerPairing)
     }
 
+    /** The first run asks for notifications on its own page, once it has said why. */
     private fun startSyncService() {
-        val needsPermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
-        if (needsPermission) {
+        if (needsNotificationPermission() && Preferences.onboardingDone(this)) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
             SyncService.start(this)
         }
+    }
+
+    private fun needsNotificationPermission(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+
+    /** Android's question where it still asks; their settings otherwise. */
+    private fun requestNotifications() {
+        if (needsNotificationPermission()) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            openNotificationSettings()
+        }
+    }
+
+    /**
+     * The first-run guide's test: [text] on the clipboard, where the automatic copy sees it as
+     * any copy. Without it ([byHand]), sent the way the tile sends.
+     */
+    private fun tryIt(text: String, byHand: Boolean) {
+        val clip = ClipData.newPlainText(getString(R.string.app_name), text)
+        getSystemService(ClipboardManager::class.java).setPrimaryClip(clip)
+        if (byHand) model.sendClipboard(clip)
     }
 
     private fun scan() {

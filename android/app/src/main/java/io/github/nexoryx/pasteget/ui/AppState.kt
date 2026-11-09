@@ -47,6 +47,10 @@ class AppActions(
     val onRefresh: () -> Unit = {},
     /** The Snackbar showed this message and went away. */
     val onMessageShown: (String) -> Unit = {},
+    /** Android 13+'s question, from the first-run guide. */
+    val onRequestNotifications: () -> Unit = {},
+    /** The first-run guide's test: copies the text; sends it by hand too if asked. */
+    val onTryIt: (text: String, byHand: Boolean) -> Unit = { _, _ -> },
     val onScreenshotsChange: (Boolean) -> Unit = {},
     /** paste-get's page in the system settings, where photo access is. */
     val onOpenAppSettings: () -> Unit = {},

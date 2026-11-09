@@ -68,7 +68,7 @@ fun ScreenshotsScreen(state: AppState, actions: AppActions, onBack: () -> Unit) 
 
 /** The three answers Android's photo dialog can give, the current one checked, and the fix. */
 @Composable
-private fun PhotoAccessCard(setting: ScreenshotSetting, denied: Boolean, actions: AppActions) {
+fun PhotoAccessCard(setting: ScreenshotSetting, denied: Boolean, actions: AppActions) {
     Text(
         stringResource(R.string.photo_access_title),
         style = MaterialTheme.typography.titleSmall,
