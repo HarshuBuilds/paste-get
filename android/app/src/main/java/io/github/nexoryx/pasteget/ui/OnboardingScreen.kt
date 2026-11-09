@@ -384,16 +384,10 @@ private fun OnTheComputer() {
     )
 }
 
-/** The scan, then the pairing sheet over the page; a check and a buzz once paired. */
+/** The scan, then the pairing sheet over the page (which buzzes once paired), then a check. */
 @Composable
 private fun PairPage(state: AppState, actions: AppActions) {
     val paired = state.computers.isNotEmpty()
-    val haptics = LocalHapticFeedback.current
-    var wasPaired by remember { mutableStateOf(paired) }
-    LaunchedEffect(paired) {
-        if (paired && !wasPaired) haptics.performHapticFeedback(HapticFeedbackType.Confirm)
-        wasPaired = paired
-    }
     Title(R.string.hero_pair_title)
     Body(stringResource(R.string.onboarding_pair_text))
     if (paired) {

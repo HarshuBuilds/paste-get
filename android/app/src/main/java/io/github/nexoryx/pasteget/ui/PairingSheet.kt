@@ -22,14 +22,18 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -50,6 +54,13 @@ import uniffi.pasteget_ffi.PairedComputer
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PairingFlow(pairing: PairingState, computers: List<PairedComputer>, onConfirm: () -> Unit, onCancel: () -> Unit) {
+    // Paired: from Busy back to Idle (a failure goes to Failed). Felt as well as read.
+    val haptics = LocalHapticFeedback.current
+    var wasBusy by remember { mutableStateOf(false) }
+    LaunchedEffect(pairing) {
+        if (wasBusy && pairing == PairingState.Idle) haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+        wasBusy = pairing == PairingState.Busy
+    }
     when (pairing) {
         PairingState.Idle -> {}
         is PairingState.Confirm -> PairingSheet(
