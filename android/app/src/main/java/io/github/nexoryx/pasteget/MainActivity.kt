@@ -11,81 +11,51 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.text.format.DateFormat
-import android.text.format.Formatter
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.material3.lightColorScheme
+import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.pluralStringResource
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.remember
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
-import io.github.nexoryx.pasteget.ui.AppStatus
+import io.github.nexoryx.pasteget.ui.AutoCopyActions
+import io.github.nexoryx.pasteget.ui.AutoCopyCardState
+import io.github.nexoryx.pasteget.ui.CodesActions
+import io.github.nexoryx.pasteget.ui.CodesCardState
+import io.github.nexoryx.pasteget.ui.HomeActions
+import io.github.nexoryx.pasteget.ui.HomeScreen
+import io.github.nexoryx.pasteget.ui.HomeState
+import io.github.nexoryx.pasteget.ui.HomeViewModel
+import io.github.nexoryx.pasteget.ui.NativeComputers
 import io.github.nexoryx.pasteget.ui.appStatus
 import io.github.nexoryx.pasteget.ui.codesHealth
 import io.github.nexoryx.pasteget.ui.copiesHealth
 import io.github.nexoryx.pasteget.ui.screenshotsHealth
 import io.github.nexoryx.pasteget.ui.shellReady
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import uniffi.pasteget_ffi.PairedComputer
-import uniffi.pasteget_ffi.PastegetException
-import java.util.Date
+import io.github.nexoryx.pasteget.ui.theme.PasteGetTheme
 
+/**
+ * The home screen. Its state lives in [HomeViewModel]; this activity asks for permissions and
+ * opens the system settings and other apps.
+ */
 class MainActivity : ComponentActivity() {
-    private var computers by mutableStateOf(emptyList<PairedComputer>())
-    private var message by mutableStateOf<String?>(null)
-    private var screenshots by mutableStateOf(ScreenshotSetting(wanted = false, access = PhotoAccess.NONE))
-    private var photoRequestDenied by mutableStateOf(false)
-    private var copiesOn by mutableStateOf(false)
-    private var fallback by mutableStateOf(FallbackAccess(readLogs = false, overlay = false))
-    private var notices by mutableStateOf(AccessNotices(supported = false, hidden = null, canChange = false))
-    private var codesOn by mutableStateOf(false)
-    private var codeAccess by mutableStateOf(CodeAccess(listening = false, seesCodes = null))
+    private val model: HomeViewModel by viewModels {
+        viewModelFactory { initializer { HomeViewModel(application, NativeComputers(pasteGet)) } }
+    }
 
     private val photoPermission =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-            val granted = PhotoAccess.of(this) == PhotoAccess.FULL
-            photoRequestDenied = !granted
-            setSendScreenshots(granted)
+            model.photoAccessAnswered()
         }
 
     private val scanner = registerForActivityResult(ScanContract()) { result ->
@@ -99,95 +69,96 @@ class MainActivity : ComponentActivity() {
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        // Before anything is drawn: the start screen, then Theme.PasteGet.
-        installSplashScreen()
+        // Before anything is drawn: the start screen, then Theme.PasteGet. It stays until the
+        // paired computers are read (off the main thread), so the screen doesn't first say there
+        // are none.
+        installSplashScreen().setKeepOnScreenCondition { model.paired == null }
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        computers = pasteGet.client.pairedComputers()
         setContent {
-            PasteGetTheme {
-                val connected by pasteGet.connected.collectAsStateWithLifecycle()
-                val lastDelivery by pasteGet.lastDelivery.collectAsStateWithLifecycle()
-                val builtIn by pasteGet.autoCopy.builtIn.state.collectAsStateWithLifecycle()
-                val shizuku by pasteGet.autoCopy.shizuku.state.collectAsStateWithLifecycle()
-                val logs by pasteGet.autoCopy.logs.state.collectAsStateWithLifecycle()
-                val lastCopy by pasteGet.autoCopy.lastCopy.collectAsStateWithLifecycle()
-                val lastReceived by ReceivedClips.last.collectAsStateWithLifecycle()
-                val lastCode by OneTimeCodes.last.collectAsStateWithLifecycle()
-                val unpaired by pasteGet.unpaired.collectAsStateWithLifecycle()
-                LaunchedEffect(unpaired) {
-                    unpaired?.let {
-                        computers = pasteGet.client.pairedComputers()
-                        message = getString(R.string.unpaired_title, it.name)
-                    }
-                }
-                val shellReady = shellReady(builtIn, shizuku)
-                val status = appStatus(
-                    computers,
-                    connected,
-                    unpaired,
-                    listOf(
-                        copiesHealth(copiesOn, builtIn, shizuku, logs, fallback),
-                        screenshotsHealth(screenshots.wanted, screenshots.access),
-                        codesHealth(codesOn, codeAccess, shellReady),
-                    ),
-                )
-                // The built-in mode grants the permission that lets the app hide the notices.
-                LaunchedEffect(builtIn.status) { notices = AccessNotices.of(this@MainActivity) }
-                HomeScreen(
-                    status = status,
-                    computers = computers,
-                    connected = connected,
-                    message = message,
-                    onPair = ::scan,
-                    onSendClipboard = ::sendClipboard,
-                    onForget = ::forget,
-                    lastDelivery = lastDelivery,
-                    lastReceived = lastReceived,
-                    screenshots = screenshots,
-                    photoRequestDenied = photoRequestDenied,
-                    onScreenshotsChange = ::toggleScreenshots,
-                    onOpenSettings = ::openAppSettings,
-                    autoCopy = AutoCopyCardState(copiesOn, builtIn, shizuku, logs, fallback, notices, lastCopy),
-                    autoCopyActions = AutoCopyActions(
-                        onChange = ::setSendCopies,
-                        onSetUpBuiltIn = ::setUpBuiltIn,
-                        onOpenWirelessDebugging = ::openWirelessDebugging,
-                        onRetryBuiltIn = pasteGet.autoCopy.builtIn::retry,
-                        onResetBuiltIn = pasteGet.autoCopy.builtIn::reset,
-                        onAllowShizuku = pasteGet.autoCopy.shizuku::requestPermission,
-                        onOpenShizuku = ::openShizuku,
-                        onGetShizuku = ::getShizuku,
-                        onGrantFallback = ::grantFallback,
-                        onAllowOverlay = ::openOverlaySettings,
-                        onRetryLogs = pasteGet.autoCopy.logs::retry,
-                        onHideNotices = ::hideNotices,
-                        onOpenPrivacySettings = ::openPrivacySettings,
-                    ),
-                    codes = CodesCardState(codesOn, codeAccess, shellReady, lastCode),
-                    codesActions = CodesActions(
-                        onChange = ::setSendCodes,
-                        onAllow = ::allowCodes,
-                        onOpenSettings = ::openNotificationAccess,
-                    ),
-                )
-            }
+            PasteGetTheme { Home() }
         }
         startSyncService()
         handlePairingLink(intent)
     }
 
-    /** Photo access may have changed in the system settings meanwhile. */
+    @Composable
+    private fun Home() {
+        val connected by pasteGet.connected.collectAsStateWithLifecycle()
+        val lastDelivery by pasteGet.lastDelivery.collectAsStateWithLifecycle()
+        val builtIn by pasteGet.autoCopy.builtIn.state.collectAsStateWithLifecycle()
+        val shizuku by pasteGet.autoCopy.shizuku.state.collectAsStateWithLifecycle()
+        val logs by pasteGet.autoCopy.logs.state.collectAsStateWithLifecycle()
+        val lastCopy by pasteGet.autoCopy.lastCopy.collectAsStateWithLifecycle()
+        val lastReceived by ReceivedClips.last.collectAsStateWithLifecycle()
+        val lastCode by OneTimeCodes.last.collectAsStateWithLifecycle()
+        val unpaired by pasteGet.unpaired.collectAsStateWithLifecycle()
+        LaunchedEffect(unpaired) { unpaired?.let(model::unpairedBy) }
+        // The built-in mode grants the permission that lets the app hide the notices.
+        LaunchedEffect(builtIn.status) { model.refreshNotices() }
+
+        val computers = model.paired.orEmpty()
+        val shellReady = shellReady(builtIn, shizuku)
+        val status = appStatus(
+            computers,
+            connected,
+            unpaired,
+            listOf(
+                copiesHealth(model.copiesOn, builtIn, shizuku, logs, model.fallback),
+                screenshotsHealth(model.screenshots.wanted, model.screenshots.access),
+                codesHealth(model.codesOn, model.codeAccess, shellReady),
+            ),
+        )
+        val actions = remember { homeActions() }
+        HomeScreen(
+            state = HomeState(
+                status = status,
+                computers = computers,
+                connected = connected,
+                message = model.message,
+                lastDelivery = lastDelivery,
+                lastReceived = lastReceived,
+                screenshots = model.screenshots,
+                photoRequestDenied = model.photoRequestDenied,
+                autoCopy = AutoCopyCardState(model.copiesOn, builtIn, shizuku, logs, model.fallback, model.notices, lastCopy),
+                codes = CodesCardState(model.codesOn, model.codeAccess, shellReady, lastCode),
+            ),
+            actions = actions,
+        )
+    }
+
+    private fun homeActions() = HomeActions(
+        onPair = ::scan,
+        onSendClipboard = ::sendClipboard,
+        onForget = model::forget,
+        onScreenshotsChange = ::toggleScreenshots,
+        onOpenAppSettings = ::openAppSettings,
+        autoCopy = AutoCopyActions(
+            onChange = model::setSendCopies,
+            onSetUpBuiltIn = ::setUpBuiltIn,
+            onOpenWirelessDebugging = ::openWirelessDebugging,
+            onRetryBuiltIn = pasteGet.autoCopy.builtIn::retry,
+            onResetBuiltIn = pasteGet.autoCopy.builtIn::reset,
+            onAllowShizuku = pasteGet.autoCopy.shizuku::requestPermission,
+            onOpenShizuku = ::openShizuku,
+            onGetShizuku = ::getShizuku,
+            onGrantFallback = model::grantFallback,
+            onAllowOverlay = ::openOverlaySettings,
+            onRetryLogs = pasteGet.autoCopy.logs::retry,
+            onHideNotices = model::hideNotices,
+            onOpenPrivacySettings = ::openPrivacySettings,
+        ),
+        codes = CodesActions(
+            onChange = model::setSendCodes,
+            onAllow = ::allowCodes,
+            onOpenSettings = ::openNotificationAccess,
+        ),
+    )
+
+    /** Photo access, notification access and more may have changed in the system settings meanwhile. */
     override fun onResume() {
         super.onResume()
-        // A computer may have unpaired this phone meanwhile.
-        computers = pasteGet.client.pairedComputers()
-        refreshScreenshots()
-        copiesOn = Preferences.sendCopies(this)
-        fallback = FallbackAccess.of(this)
-        notices = AccessNotices.of(this)
-        codesOn = Preferences.sendCodes(this)
-        codeAccess = OneTimeCodes.access(this)
+        model.refresh()
         // Android 13+ asks for log access only while the app is in front (mode B).
         pasteGet.autoCopy.setInFront(true)
     }
@@ -229,58 +200,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun pair(scanned: String) {
-        val code = PairingCode.extract(scanned)
-        if (code == null) {
-            message = getString(R.string.not_a_pairing_code)
-            return
-        }
-        message = getString(R.string.pairing)
-        lifecycleScope.launch {
-            message = try {
-                val computer = withContext(Dispatchers.IO) { pasteGet.client.pair(code) }
-                computers = pasteGet.client.pairedComputers()
-                SyncService.start(this@MainActivity)
-                getString(R.string.paired_with, computer.name)
-            } catch (e: PastegetException) {
-                e.message
-            }
-        }
-    }
-
-    private fun forget(computer: PairedComputer) {
-        try {
-            pasteGet.client.forget(computer.deviceId)
-            pasteGet.setConnected(computer.deviceId, false)
-        } catch (e: PastegetException) {
-            message = e.message
-        }
-        computers = pasteGet.client.pairedComputers()
-    }
-
-    private fun refreshScreenshots() {
-        screenshots = ScreenshotSetting(Preferences.sendScreenshots(this), PhotoAccess.of(this))
+        val code = PairingCode.extract(scanned) ?: return model.showMessage(getString(R.string.not_a_pairing_code))
+        model.pair(code)
     }
 
     private fun toggleScreenshots(on: Boolean) {
         if (on && PhotoAccess.of(this) != PhotoAccess.FULL) {
             photoPermission.launch(PhotoAccess.permissions())
         } else {
-            setSendScreenshots(on)
+            model.setSendScreenshots(on)
         }
-    }
-
-    private fun setSendScreenshots(on: Boolean) {
-        Preferences.setSendScreenshots(this, on)
-        refreshScreenshots()
-        // The service picks up the change.
-        SyncService.start(this)
-    }
-
-    private fun setSendCopies(on: Boolean) {
-        Preferences.setSendCopies(this, on)
-        copiesOn = on
-        // The service picks up the change.
-        SyncService.start(this)
     }
 
     /** Shows the code notification, then Settings, where the user asks for a pairing code. */
@@ -305,38 +234,9 @@ class MainActivity : ComponentActivity() {
         packageManager.getLaunchIntentForPackage(SHIZUKU_PACKAGE)?.let(::startActivity)
     }
 
-    /** Android may restart the app to apply the log permission: the screen then comes back fresh. */
-    private fun grantFallback() {
-        message = getString(R.string.fallback_granting)
-        pasteGet.autoCopy.shizuku.grantFallback { failed ->
-            runOnUiThread {
-                fallback = FallbackAccess.of(this)
-                message = failed?.let { getString(R.string.fallback_failed, it) } ?: getString(R.string.fallback_granted)
-            }
-        }
-    }
-
-    private fun setSendCodes(on: Boolean) {
-        Preferences.setSendCodes(this, on)
-        codesOn = on
-        codeAccess = OneTimeCodes.access(this)
-    }
-
-    /** Through the shell user: notification access, and on Android 15+ seeing the codes. */
+    /** One tap through the shell when one runs, otherwise Settings. */
     private fun allowCodes() {
-        val shell = pasteGet.autoCopy.shell() ?: return openNotificationAccess()
-        message = getString(R.string.codes_allowing)
-        lifecycleScope.launch {
-            val failed = withContext(Dispatchers.IO) {
-                try {
-                    shell.grantCodeAccess().ifEmpty { null }
-                } catch (e: Exception) {
-                    e.message ?: e.javaClass.simpleName
-                }
-            }
-            codeAccess = OneTimeCodes.access(this@MainActivity)
-            message = failed?.let { getString(R.string.codes_allow_failed, it) } ?: getString(R.string.codes_allowed)
-        }
+        if (!model.allowCodes()) openNotificationAccess()
     }
 
     /** paste-get's own page in Notification access, where the phone has one. */
@@ -352,12 +252,6 @@ class MainActivity : ComponentActivity() {
         } catch (e: ActivityNotFoundException) {
             startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
         }
-    }
-
-    /** Only when the user asks: it applies to every app. */
-    private fun hideNotices(hide: Boolean) {
-        if (!AccessNotices.set(this, hide)) message = getString(R.string.notices_failed)
-        notices = AccessNotices.of(this)
     }
 
     /** Where "Show clipboard access" is. Some vendors move it: then the main settings. */
@@ -383,454 +277,11 @@ class MainActivity : ComponentActivity() {
 
     /** This activity has focus, so it may read the clipboard directly. */
     private fun sendClipboard() {
-        val clip = getSystemService(ClipboardManager::class.java).primaryClip
-        lifecycleScope.launch { message = Sender.send(this@MainActivity, clip) }
+        model.sendClipboard(getSystemService(ClipboardManager::class.java).primaryClip)
     }
 
     private companion object {
         const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
         const val SHIZUKU_DOWNLOAD = "https://shizuku.rikka.app/download/"
     }
-}
-
-@Composable
-private fun PasteGetTheme(content: @Composable () -> Unit) {
-    val context = LocalContext.current
-    val dark = isSystemInDarkTheme()
-    // Material You colors exist from Android 12.
-    val colors = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && dark -> dynamicDarkColorScheme(context)
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> dynamicLightColorScheme(context)
-        dark -> darkColorScheme()
-        else -> lightColorScheme()
-    }
-    MaterialTheme(colorScheme = colors) {
-        Surface(modifier = Modifier.fillMaxSize(), content = content)
-    }
-}
-
-/** The app's state in one line. */
-@Composable
-private fun statusTitle(status: AppStatus): String = when (status) {
-    AppStatus.NoComputer -> stringResource(R.string.status_no_computer)
-    is AppStatus.Unpaired -> stringResource(R.string.unpaired_title, status.name)
-    is AppStatus.Looking -> stringResource(R.string.notification_connecting)
-    is AppStatus.NeedsStep -> connectedText(status.connected.size)
-    is AppStatus.Working -> connectedText(status.connected.size)
-}
-
-@Composable
-private fun connectedText(count: Int): String = pluralStringResource(R.plurals.notification_connected, count, count)
-
-/** Whether the user wants screenshots sent, and whether the app can see them. */
-private data class ScreenshotSetting(val wanted: Boolean, val access: PhotoAccess) {
-    val on: Boolean
-        get() = wanted && access == PhotoAccess.FULL
-}
-
-@Composable
-private fun HomeScreen(
-    status: AppStatus,
-    computers: List<PairedComputer>,
-    connected: Set<String>,
-    message: String?,
-    onPair: () -> Unit,
-    onSendClipboard: () -> Unit,
-    onForget: (PairedComputer) -> Unit,
-    lastDelivery: LastDelivery?,
-    lastReceived: LastReceived?,
-    screenshots: ScreenshotSetting,
-    photoRequestDenied: Boolean,
-    onScreenshotsChange: (Boolean) -> Unit,
-    onOpenSettings: () -> Unit,
-    autoCopy: AutoCopyCardState,
-    autoCopyActions: AutoCopyActions,
-    codes: CodesCardState,
-    codesActions: CodesActions,
-) {
-    Column(
-        modifier = Modifier
-            .safeDrawingPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineLarge)
-        Text(statusTitle(status), style = MaterialTheme.typography.titleMedium)
-
-        Button(onClick = onPair, modifier = Modifier.fillMaxWidth()) {
-            Text(stringResource(R.string.pair_button))
-        }
-        OutlinedButton(
-            onClick = onSendClipboard,
-            enabled = connected.isNotEmpty(),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(stringResource(R.string.send_clipboard_button))
-        }
-        message?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
-
-        ScreenshotsCard(screenshots, photoRequestDenied, onScreenshotsChange, onOpenSettings)
-        lastDelivery?.let { LastDeliveryText(it) }
-        lastReceived?.let { LastReceivedText(it) }
-        AutoCopyCard(autoCopy, autoCopyActions)
-        CodesCard(codes, codesActions)
-        SupportCard()
-
-        if (computers.isNotEmpty()) {
-            Text(stringResource(R.string.paired_computers), style = MaterialTheme.typography.titleSmall)
-        }
-        computers.forEach { computer ->
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Row(
-                    modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    val isConnected = computer.deviceId in connected
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(computer.name, style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            stringResource(if (isConnected) R.string.connected else R.string.offline),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                    TextButton(onClick = { onForget(computer) }) {
-                        Text(stringResource(R.string.forget))
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ScreenshotsCard(
-    setting: ScreenshotSetting,
-    photoRequestDenied: Boolean,
-    onChange: (Boolean) -> Unit,
-    onOpenSettings: () -> Unit,
-) {
-    val problem = when {
-        setting.access == PhotoAccess.PARTIAL -> R.string.screenshots_partial
-        setting.access == PhotoAccess.NONE && (setting.wanted || photoRequestDenied) -> R.string.screenshots_denied
-        else -> null
-    }
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.screenshots_title), style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        stringResource(if (setting.on) R.string.screenshots_on else R.string.screenshots_off),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                Switch(checked = setting.on, onCheckedChange = onChange)
-            }
-            if (problem != null) {
-                Text(stringResource(problem), style = MaterialTheme.typography.bodySmall)
-                TextButton(onClick = onOpenSettings) { Text(stringResource(R.string.open_settings)) }
-            }
-        }
-    }
-}
-
-/** How long the last clip took to reach a computer: the latency the roadmap aims to keep under a second. */
-@Composable
-private fun LastDeliveryText(delivery: LastDelivery) {
-    val text = if (delivery.accepted) {
-        val size = Formatter.formatShortFileSize(LocalContext.current, delivery.bytes)
-        val format = if (delivery.screenshot) R.string.last_screenshot else R.string.last_send
-        stringResource(format, size, delivery.millis)
-    } else {
-        stringResource(R.string.last_refused)
-    }
-    Text(text, style = MaterialTheme.typography.bodySmall)
-}
-
-/** What the automatic copy card shows. */
-private data class AutoCopyCardState(
-    val on: Boolean,
-    val builtIn: BuiltInState,
-    val shizuku: ShizukuState,
-    val logs: LogStatus,
-    val fallback: FallbackAccess,
-    val notices: AccessNotices,
-    val lastCopy: LastCopy?,
-)
-
-private class AutoCopyActions(
-    val onChange: (Boolean) -> Unit,
-    val onSetUpBuiltIn: () -> Unit,
-    val onOpenWirelessDebugging: () -> Unit,
-    val onRetryBuiltIn: () -> Unit,
-    val onResetBuiltIn: () -> Unit,
-    val onAllowShizuku: () -> Unit,
-    val onOpenShizuku: () -> Unit,
-    val onGetShizuku: () -> Unit,
-    val onGrantFallback: () -> Unit,
-    val onAllowOverlay: () -> Unit,
-    val onRetryLogs: () -> Unit,
-    val onHideNotices: (Boolean) -> Unit,
-    val onOpenPrivacySettings: () -> Unit,
-)
-
-/** The automatic copy: on or off, how it works right now, and what to do if it doesn't. */
-@Composable
-private fun AutoCopyCard(state: AutoCopyCardState, actions: AutoCopyActions) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.copies_title), style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        if (state.on) modeText(state) else stringResource(R.string.copies_off),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                Switch(checked = state.on, onCheckedChange = actions.onChange)
-            }
-            if (state.on) {
-                // What isn't working yet, and the step that fixes it.
-                val builtInSetUp = state.builtIn.status != BuiltInStatus.NOT_SET_UP &&
-                    state.builtIn.status != BuiltInStatus.PAIRING && state.builtIn.status != BuiltInStatus.OFF
-                if (state.builtIn.status != BuiltInStatus.WATCHING) {
-                    BuiltInLine(state.builtIn, actions)
-                    if (!builtInSetUp && state.shizuku.status != ShizukuStatus.WATCHING) ShizukuLine(state.shizuku, actions)
-                    if (state.shizuku.status != ShizukuStatus.WATCHING) LogLine(state.logs, actions)
-                }
-                if (!builtInSetUp) FallbackLine(state.shizuku, state.fallback, actions)
-                state.lastCopy?.let { LastCopyText(it) }
-                if (state.notices.supported) NoticesLine(state.notices, actions)
-            }
-        }
-    }
-}
-
-/** The health of the automatic copy in one line: how copies are read right now. */
-@Composable
-private fun modeText(state: AutoCopyCardState): String =
-    when (copiesHealth(state.on, state.builtIn, state.shizuku, state.logs, state.fallback).mode) {
-        CopyMode.BUILT_IN -> stringResource(R.string.mode_builtin)
-        CopyMode.SHIZUKU -> stringResource(R.string.mode_shizuku, state.shizuku.detail.orEmpty())
-        CopyMode.LOGS -> stringResource(R.string.mode_logs)
-        CopyMode.MANUAL, null -> stringResource(R.string.mode_manual)
-    }
-
-/** The built-in mode: set it up, or what keeps it from running. */
-@Composable
-private fun BuiltInLine(builtIn: BuiltInState, actions: AutoCopyActions) {
-    val detail = builtIn.detail.orEmpty()
-    when (builtIn.status) {
-        BuiltInStatus.OFF, BuiltInStatus.WATCHING -> {}
-        BuiltInStatus.NOT_SET_UP -> {
-            Text(stringResource(R.string.builtin_offer), style = MaterialTheme.typography.bodySmall)
-            TextButton(onClick = actions.onSetUpBuiltIn) { Text(stringResource(R.string.builtin_set_up)) }
-        }
-        BuiltInStatus.PAIRING -> {
-            Text(stringResource(R.string.builtin_pairing_steps), style = MaterialTheme.typography.bodySmall)
-            if (detail.isNotEmpty()) Text(detail, style = MaterialTheme.typography.bodySmall)
-            Row {
-                TextButton(onClick = actions.onOpenWirelessDebugging) { Text(stringResource(R.string.builtin_open_settings)) }
-                TextButton(onClick = actions.onResetBuiltIn) { Text(stringResource(R.string.builtin_cancel)) }
-            }
-        }
-        BuiltInStatus.STARTING -> Text(stringResource(R.string.builtin_starting), style = MaterialTheme.typography.bodySmall)
-        BuiltInStatus.NEEDS_WIFI -> Text(stringResource(R.string.builtin_needs_wifi), style = MaterialTheme.typography.bodySmall)
-        BuiltInStatus.FAILED -> {
-            Text(stringResource(R.string.builtin_failed, detail), style = MaterialTheme.typography.bodySmall)
-            Row {
-                TextButton(onClick = actions.onRetryBuiltIn) { Text(stringResource(R.string.builtin_retry)) }
-                TextButton(onClick = actions.onResetBuiltIn) { Text(stringResource(R.string.builtin_pair_again)) }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ShizukuLine(shizuku: ShizukuState, actions: AutoCopyActions) {
-    val text = when (shizuku.status) {
-        ShizukuStatus.OFF, ShizukuStatus.CONNECTING -> stringResource(R.string.shizuku_connecting)
-        ShizukuStatus.NOT_INSTALLED -> stringResource(R.string.shizuku_not_installed)
-        ShizukuStatus.NOT_RUNNING -> stringResource(R.string.shizuku_not_running)
-        ShizukuStatus.NO_PERMISSION -> stringResource(R.string.shizuku_no_permission)
-        ShizukuStatus.WATCHING -> stringResource(R.string.shizuku_watching, shizuku.detail.orEmpty())
-        ShizukuStatus.FAILED -> stringResource(R.string.shizuku_failed, shizuku.detail.orEmpty())
-    }
-    Text(text, style = MaterialTheme.typography.bodySmall)
-    when (shizuku.status) {
-        ShizukuStatus.NOT_INSTALLED ->
-            TextButton(onClick = actions.onGetShizuku) { Text(stringResource(R.string.shizuku_get)) }
-        ShizukuStatus.NOT_RUNNING ->
-            TextButton(onClick = actions.onOpenShizuku) { Text(stringResource(R.string.shizuku_open)) }
-        ShizukuStatus.NO_PERMISSION ->
-            TextButton(onClick = actions.onAllowShizuku) { Text(stringResource(R.string.shizuku_allow)) }
-        else -> {}
-    }
-}
-
-/** The permissions that keep copies going when Shizuku stops, and how to get them. */
-@Composable
-private fun FallbackLine(shizuku: ShizukuState, fallback: FallbackAccess, actions: AutoCopyActions) {
-    val watching = shizuku.status == ShizukuStatus.WATCHING
-    when {
-        fallback.ready -> if (watching) Text(stringResource(R.string.fallback_ready), style = MaterialTheme.typography.bodySmall)
-        watching -> {
-            Text(stringResource(R.string.fallback_offer), style = MaterialTheme.typography.bodySmall)
-            TextButton(onClick = actions.onGrantFallback) { Text(stringResource(R.string.fallback_grant)) }
-        }
-        fallback.readLogs -> {
-            Text(stringResource(R.string.fallback_needs_overlay), style = MaterialTheme.typography.bodySmall)
-            TextButton(onClick = actions.onAllowOverlay) { Text(stringResource(R.string.fallback_allow_overlay)) }
-        }
-        else -> {}
-    }
-}
-
-/**
- * Android's "Shell pasted from your clipboard" after each copy: an opt-in switch to hide it (for
- * every app, as the system's own switch does), or the way to that switch.
- */
-@Composable
-private fun NoticesLine(notices: AccessNotices, actions: AutoCopyActions) {
-    if (notices.switchable) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.notices_title), style = MaterialTheme.typography.bodyMedium)
-                Text(stringResource(R.string.notices_text), style = MaterialTheme.typography.bodySmall)
-            }
-            Switch(checked = notices.hidden == true, onCheckedChange = actions.onHideNotices)
-        }
-    } else if (notices.hidden != true) {
-        Text(stringResource(R.string.notices_by_hand), style = MaterialTheme.typography.bodySmall)
-        TextButton(onClick = actions.onOpenPrivacySettings) { Text(stringResource(R.string.notices_open_settings)) }
-    }
-}
-
-/** Mode B, while Shizuku isn't watching. */
-@Composable
-private fun LogLine(logs: LogStatus, actions: AutoCopyActions) {
-    val text = when (logs) {
-        LogStatus.OFF, LogStatus.NEEDS_PERMISSIONS -> return
-        LogStatus.WAITING_FOR_APP -> R.string.logs_waiting
-        LogStatus.STARTING -> R.string.logs_starting
-        LogStatus.RUNNING -> R.string.logs_running
-    }
-    Text(stringResource(text), style = MaterialTheme.typography.bodySmall)
-    if (logs == LogStatus.STARTING) {
-        TextButton(onClick = actions.onRetryLogs) { Text(stringResource(R.string.logs_retry)) }
-    }
-}
-
-/** A link to donations, when the build has one (`donate_url`). */
-@Composable
-private fun SupportCard() {
-    val url = stringResource(R.string.donate_url)
-    if (url.isBlank()) return
-    val context = LocalContext.current
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(stringResource(R.string.support_title), style = MaterialTheme.typography.bodyLarge)
-            Text(stringResource(R.string.support_text), style = MaterialTheme.typography.bodySmall)
-            OutlinedButton(onClick = {
-                try {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
-                } catch (e: ActivityNotFoundException) {
-                    // No browser: nothing to open it with.
-                }
-            }) { Text(stringResource(R.string.support_button)) }
-        }
-    }
-}
-
-/** What the 2FA codes card shows. */
-private data class CodesCardState(
-    val on: Boolean,
-    val access: CodeAccess,
-    /** The built-in mode or Shizuku runs, so access is one tap away. */
-    val shellReady: Boolean,
-    val last: LastCode?,
-)
-
-private class CodesActions(
-    val onChange: (Boolean) -> Unit,
-    val onAllow: () -> Unit,
-    val onOpenSettings: () -> Unit,
-)
-
-/** One-time codes from notifications: on or off, and what's missing to receive them. */
-@Composable
-private fun CodesCard(state: CodesCardState, actions: CodesActions) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.codes_title), style = MaterialTheme.typography.bodyLarge)
-                    val last = state.last
-                    Text(
-                        when {
-                            !state.on -> stringResource(R.string.codes_off)
-                            last != null -> lastCodeText(last)
-                            else -> stringResource(R.string.codes_waiting)
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                Switch(checked = state.on, onCheckedChange = actions.onChange)
-            }
-            if (state.on) CodesAccessLine(state, actions)
-        }
-    }
-}
-
-@Composable
-private fun CodesAccessLine(state: CodesCardState, actions: CodesActions) {
-    when {
-        !state.access.listening -> {
-            Text(stringResource(R.string.codes_needs_access), style = MaterialTheme.typography.bodySmall)
-            if (state.shellReady) {
-                TextButton(onClick = actions.onAllow) { Text(stringResource(R.string.codes_allow)) }
-            } else {
-                TextButton(onClick = actions.onOpenSettings) { Text(stringResource(R.string.codes_open_settings)) }
-                Text(stringResource(R.string.codes_restricted), style = MaterialTheme.typography.bodySmall)
-            }
-        }
-        state.access.seesCodes == false -> {
-            Text(stringResource(R.string.codes_hidden), style = MaterialTheme.typography.bodySmall)
-            if (state.shellReady) {
-                TextButton(onClick = actions.onAllow) { Text(stringResource(R.string.codes_allow)) }
-            } else {
-                Text(stringResource(R.string.codes_needs_shell), style = MaterialTheme.typography.bodySmall)
-            }
-        }
-        else -> {}
-    }
-}
-
-@Composable
-private fun lastCodeText(code: LastCode): String {
-    val time = DateFormat.getTimeFormat(LocalContext.current).format(Date(code.atMillis))
-    return pluralStringResource(R.plurals.last_code, code.sentTo, code.app, time, code.sentTo)
-}
-
-/** What the last clip from a computer was, and whether it made it to the phone's clipboard. */
-@Composable
-private fun LastReceivedText(received: LastReceived) {
-    val context = LocalContext.current
-    val kind = stringResource(if (received.mimeType.startsWith("image/")) R.string.kind_image else R.string.kind_text)
-    val size = Formatter.formatShortFileSize(context, received.bytes.toLong())
-    val time = DateFormat.getTimeFormat(context).format(Date(received.atMillis))
-    val format = if (received.onClipboard) R.string.last_received else R.string.last_received_failed
-    Text(stringResource(format, kind, size, time), style = MaterialTheme.typography.bodySmall)
-}
-
-@Composable
-private fun LastCopyText(copy: LastCopy) {
-    val context = LocalContext.current
-    val size = Formatter.formatShortFileSize(context, copy.bytes.toLong())
-    val time = DateFormat.getTimeFormat(context).format(Date(copy.atMillis))
-    Text(
-        pluralStringResource(R.plurals.last_copy, copy.sentTo, size, time, copy.sentTo),
-        style = MaterialTheme.typography.bodySmall,
-    )
 }
