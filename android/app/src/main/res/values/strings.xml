@@ -74,6 +74,7 @@
     <string name="forget_title">Forget %s?</string>
     <string name="forget_text">%1$s will stop receiving what you copy, and this phone will stop connecting to it. To use it again, pair again. On the computer, this phone stays listed until you forget it there too.</string>
     <string name="forget_confirm">Forget</string>
+    <string name="forget_failed">Forgetting %s couldn\'t be saved on this phone, so it may come back. Free some storage, then forget it again.</string>
     <string name="cancel">Cancel</string>
     <string name="screenshots_title">Send new screenshots</string>
     <string name="screenshots_off">Take a screenshot, paste it on your computer</string>

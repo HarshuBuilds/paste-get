@@ -11,6 +11,8 @@ class FakeComputers(
     var computers: List<PairedComputer> = emptyList(),
     var pairsWith: PairedComputer = AppFixtures.hp,
     var failure: Exception? = null,
+    /** Thrown by [forget]. */
+    var forgetFailure: Exception? = null,
 ) : Computers {
     val pairCalls = mutableListOf<String>()
     var retries = 0
@@ -38,6 +40,7 @@ class FakeComputers(
     }
 
     override fun forget(deviceId: String) {
+        forgetFailure?.let { throw it }
         computers = computers.filter { it.deviceId != deviceId }
     }
 

@@ -13,13 +13,16 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import io.github.nexoryx.pasteget.R
+import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import uniffi.pasteget_ffi.PastegetException
 
 /** Forgetting a computer, on its page, asks first, and Cancel keeps it. */
 @RunWith(RobolectricTestRunner::class)
@@ -72,6 +75,21 @@ class ForgetTest {
         compose.onNodeWithText(app.getString(R.string.forget_confirm)).performClick()
         compose.onNodeWithText(app.getString(R.string.forget_title, "HP-AIO")).assertDoesNotExist()
         assertEquals(listOf("a1"), forgotten)
+    }
+
+    @Test
+    fun aFailedForgetIsSaidInTheUsersWords() {
+        val fake = FakeComputers(listOf(AppFixtures.hp), forgetFailure = PastegetException.Storage("No space left on device (os error 28)"))
+        val model = AppViewModel(app, fake, Dispatchers.Unconfined).also { it.refresh() }
+
+        model.forget(AppFixtures.hp)
+        assertEquals(app.getString(R.string.forget_failed, "HP-AIO"), model.message)
+
+        // Unpaired by the computer meanwhile: gone, as asked, and that is said elsewhere.
+        fake.forgetFailure = PastegetException.UnknownDevice("unknown device")
+        model.messageShown(model.message!!)
+        model.forget(AppFixtures.hp)
+        assertNull(model.message)
     }
 
     @Test

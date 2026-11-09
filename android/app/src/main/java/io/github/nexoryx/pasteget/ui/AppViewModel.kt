@@ -296,8 +296,11 @@ class AppViewModel(
         viewModelScope.launch {
             try {
                 withContext(io) { computers.forget(computer.deviceId) }
+            } catch (e: PastegetException.UnknownDevice) {
+                // Gone already: it unpaired this phone meanwhile, which the app says by itself.
             } catch (e: PastegetException) {
-                message = e.message
+                // The Rust errors are in English and technical; saving is all that can fail here.
+                message = app.getString(R.string.forget_failed, computer.name)
             }
             paired = withContext(io) { computers.paired() }
         }
