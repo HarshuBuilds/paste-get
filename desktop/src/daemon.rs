@@ -36,7 +36,9 @@ use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::{sleep, timeout};
 
 use crate::clipboard::{ClipboardBackend, ClipboardWatcher, Content, DEFAULT_POLL_INTERVAL};
-use crate::config::{KnownDevice, KnownDevices, MAX_ADDRESSES, NotifyFor, Profile, Settings};
+use crate::config::{
+    KnownDevice, KnownDevices, LoadedDevices, MAX_ADDRESSES, NotifyFor, Profile, Settings,
+};
 use crate::discovery::{self, Advertiser, Announced};
 use crate::hotkeys::{self, Action, Hotkeys};
 use crate::i18n::{french, tr};
@@ -139,6 +141,11 @@ struct Shared {
     dialers: Mutex<HashMap<DeviceId, Dialer>>,
     /// Devices the user was told run another protocol version, once each while this runs.
     told_other_version: Mutex<HashSet<DeviceId>>,
+    /// Some paired devices couldn't be read at start ([`LoadedDevices::set_aside`]): a device
+    /// this one doesn't know may be one of them, so it isn't told it was unpaired, unless it was
+    /// forgotten while this runs.
+    devices_set_aside: bool,
+    forgotten: Mutex<HashSet<DeviceId>>,
 }
 
 /// Keeps a session with a device we joined.
@@ -157,7 +164,10 @@ impl Daemon {
     ) -> Result<Self> {
         let identity = profile.identity()?;
         let settings = profile.settings()?;
-        let known = profile.known_devices()?;
+        let LoadedDevices {
+            devices: known,
+            set_aside,
+        } = profile.load_known_devices()?;
         let listener = TcpListener::bind(options.listen)
             .await
             .with_context(|| format!("could not listen on {}", options.listen))?;
@@ -193,7 +203,18 @@ impl Daemon {
             tasks: Mutex::new(JoinSet::new()),
             dialers: Mutex::new(HashMap::new()),
             told_other_version: Mutex::new(HashSet::new()),
+            devices_set_aside: set_aside,
+            forgotten: Mutex::new(HashSet::new()),
         });
+        if set_aside && let Some(notifier) = &shared.notifier {
+            notifier.notice(
+                tr(
+                    "paste-get couldn't read all its paired devices: the file is kept as devices.toml.bad. Pair the missing ones again, or fix it and rename it devices.toml before paste-get restarts",
+                    "paste-get n'a pas pu lire tous ses appareils appairés : le fichier est gardé sous le nom devices.toml.bad. Appaire à nouveau ceux qui manquent, ou corrige-le et renomme-le devices.toml avant que paste-get redémarre",
+                )
+                .to_owned(),
+            );
+        }
 
         shared.spawn(accept_loop(Arc::clone(&shared), listener));
         shared.spawn(local_changes_loop(Arc::clone(&shared), changes));
@@ -336,6 +357,7 @@ impl Daemon {
             self.shared.profile.save_known_devices(&known)?;
             device
         };
+        lock(&self.shared.forgotten).insert(*id);
         self.shared.peers.unexpect(id);
         let dialer = lock(&self.shared.dialers).remove(id);
         let told = self.shared.peers.unpair(id);
@@ -841,12 +863,14 @@ async fn handle_incoming(shared: Arc<Shared>, socket: TcpStream) -> Result<()> {
     }
 
     if !shared.pairing_open() {
-        // Said, so that a phone unpaired here stops dialing and tells its user.
-        let _ = timeout(
-            HANDSHAKE_TIMEOUT,
-            unverified.refuse(RefusalReason::NotPaired),
-        )
-        .await;
+        // Said, so that a phone unpaired here stops dialing and tells its user. Not to one that
+        // may be among the paired devices that couldn't be read: it would forget this computer.
+        let reason = if shared.devices_set_aside && !lock(&shared.forgotten).contains(&peer) {
+            RefusalReason::Unspecified
+        } else {
+            RefusalReason::NotPaired
+        };
+        let _ = timeout(HANDSHAKE_TIMEOUT, unverified.refuse(reason)).await;
         bail!("refused device {peer}: not paired and no pairing code is shown");
     }
     // Nothing is locked while waiting: a device that stays silent holds up no other.
@@ -1711,8 +1735,47 @@ mod tests {
             .unwrap();
         let result = connection.exchange_hello(Hello::default()).await;
 
-        assert!(result.is_err());
+        // Told, so that it stops dialing.
+        assert!(matches!(result, Err(transport::TransportError::NotPaired)));
         assert!(pc.daemon.status().await.devices.is_empty());
+    }
+
+    /// Whether `device` is refused as not paired, or only refused.
+    async fn refusal(pc: &Daemon, device: &Identity) -> transport::TransportError {
+        let socket = TcpStream::connect(pc.local_addr()).await.unwrap();
+        let mut connection = transport::connect(socket, device, pc.device_id())
+            .await
+            .unwrap();
+        connection
+            .exchange_hello(Hello::default())
+            .await
+            .unwrap_err()
+    }
+
+    /// The paired devices couldn't be read: a device it doesn't know may be one of them, and is
+    /// refused without being told it was unpaired, so that it doesn't forget this computer.
+    #[tokio::test]
+    async fn unknown_devices_are_not_told_they_were_unpaired_while_pairings_are_set_aside() {
+        let home = tempfile::tempdir().unwrap();
+        let profile = Profile::open_in(home.path(), "pc").unwrap();
+        std::fs::write(profile.dir().join("devices.toml"), "[[device]\nid = ").unwrap();
+        let pc = start_in(home, profile).await;
+
+        assert_eq!(pc.notifications.1.lock().unwrap().len(), 1);
+        let phone = Identity::generate().unwrap();
+        assert!(matches!(
+            refusal(&pc.daemon, &phone).await,
+            transport::TransportError::Refused
+        ));
+
+        // One forgotten while it runs is told.
+        let invite = pc.daemon.open_pairing().await.unwrap();
+        pair_as(&pc.daemon, &phone, &invite, "POCO").await.unwrap();
+        pc.daemon.forget(&phone.device_id()).unwrap();
+        assert!(matches!(
+            refusal(&pc.daemon, &phone).await,
+            transport::TransportError::NotPaired
+        ));
     }
 
     #[tokio::test]
