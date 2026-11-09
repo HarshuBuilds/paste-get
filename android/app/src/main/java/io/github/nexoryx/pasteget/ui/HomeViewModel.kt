@@ -13,12 +13,14 @@ import io.github.nexoryx.pasteget.AccessNotices
 import io.github.nexoryx.pasteget.CodeAccess
 import io.github.nexoryx.pasteget.FallbackAccess
 import io.github.nexoryx.pasteget.OneTimeCodes
+import io.github.nexoryx.pasteget.PairingCode
 import io.github.nexoryx.pasteget.PhotoAccess
 import io.github.nexoryx.pasteget.Preferences
 import io.github.nexoryx.pasteget.R
 import io.github.nexoryx.pasteget.Sender
 import io.github.nexoryx.pasteget.SyncService
 import io.github.nexoryx.pasteget.pasteGet
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -40,6 +42,8 @@ class HomeViewModel(
     var paired by mutableStateOf<List<PairedComputer>?>(null)
         private set
     var message by mutableStateOf<String?>(null)
+        private set
+    var pairing by mutableStateOf<PairingState>(PairingState.Idle)
         private set
     var screenshots by mutableStateOf(ScreenshotSetting(wanted = false, access = PhotoAccess.NONE))
         private set
@@ -77,22 +81,45 @@ class HomeViewModel(
         notices = AccessNotices.of(app)
     }
 
-    fun showMessage(text: String) {
-        message = text
+    /**
+     * A scanned code or a `pasteget://` link, which any web page or message can open: shown for
+     * the user to confirm ([confirmPairing]), never paired right away.
+     */
+    fun offerPairing(scanned: String) {
+        if (pairing == PairingState.Busy) return
+        val code = PairingCode.extract(scanned)
+        if (code == null) {
+            message = app.getString(R.string.not_a_pairing_code)
+            return
+        }
+        val invite = PairingCode.describe(code)
+        pairing = if (invite == null) PairingState.Failed(unreadableCode()) else PairingState.Confirm(code, invite)
     }
 
-    fun pair(code: String) {
-        message = app.getString(R.string.pairing)
+    /** The user said yes to the code shown. */
+    fun confirmPairing() {
+        val confirmed = pairing as? PairingState.Confirm ?: return
+        pairing = PairingState.Busy
+        message = null
         viewModelScope.launch {
-            message = try {
-                val computer = withContext(io) { computers.pair(code) }
+            try {
+                val computer = withContext(io) { computers.pair(confirmed.code) }
                 paired = withContext(io) { computers.paired() }
                 SyncService.start(app)
-                app.getString(R.string.paired_with, computer.name)
-            } catch (e: PastegetException) {
-                e.message
+                pairing = PairingState.Idle
+                message = app.getString(R.string.paired_with, computer.name)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Also an unexpected error from the native library: "Pairing…" must not stay.
+                pairing = PairingState.Failed(pairingError(e))
             }
         }
+    }
+
+    /** No to the code shown, or closing the error. */
+    fun cancelPairing() {
+        if (pairing != PairingState.Busy) pairing = PairingState.Idle
     }
 
     fun forget(computer: PairedComputer) {

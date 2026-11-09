@@ -59,7 +59,7 @@ class MainActivity : ComponentActivity() {
         }
 
     private val scanner = registerForActivityResult(ScanContract()) { result ->
-        result.contents?.let(::pair)
+        result.contents?.let(model::offerPairing)
     }
 
     private val notificationPermission =
@@ -79,7 +79,8 @@ class MainActivity : ComponentActivity() {
             PasteGetTheme { Home() }
         }
         startSyncService()
-        handlePairingLink(intent)
+        // Not again when the activity is recreated (a rotation): its intent is still the link.
+        if (savedInstanceState == null) handlePairingLink(intent)
     }
 
     @Composable
@@ -116,6 +117,7 @@ class MainActivity : ComponentActivity() {
                 computers = computers,
                 connected = connected,
                 message = model.message,
+                pairing = model.pairing,
                 lastDelivery = lastDelivery,
                 lastReceived = lastReceived,
                 screenshots = model.screenshots,
@@ -129,6 +131,8 @@ class MainActivity : ComponentActivity() {
 
     private fun homeActions() = HomeActions(
         onPair = ::scan,
+        onConfirmPairing = model::confirmPairing,
+        onCancelPairing = model::cancelPairing,
         onSendClipboard = ::sendClipboard,
         onForget = model::forget,
         onScreenshotsChange = ::toggleScreenshots,
@@ -173,9 +177,12 @@ class MainActivity : ComponentActivity() {
         handlePairingLink(intent)
     }
 
-    /** A pairing QR code scanned with the system camera opens the app with a pasteget:// link. */
+    /**
+     * A pairing QR code scanned with the system camera opens the app with a pasteget:// link,
+     * and so can any web page or message: the user confirms it first.
+     */
     private fun handlePairingLink(intent: Intent?) {
-        PairingCode.extract(intent?.dataString)?.let(::pair)
+        intent?.dataString?.let(model::offerPairing)
     }
 
     private fun startSyncService() {
@@ -197,11 +204,6 @@ class MainActivity : ComponentActivity() {
                 .setBeepEnabled(false)
                 .setOrientationLocked(false),
         )
-    }
-
-    private fun pair(scanned: String) {
-        val code = PairingCode.extract(scanned) ?: return model.showMessage(getString(R.string.not_a_pairing_code))
-        model.pair(code)
     }
 
     private fun toggleScreenshots(on: Boolean) {

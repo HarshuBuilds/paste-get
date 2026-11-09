@@ -46,6 +46,7 @@ object HomeFixtures {
             computers = computers,
             connected = connected,
             message = message,
+            pairing = PairingState.Idle,
             lastDelivery = null,
             lastReceived = null,
             screenshots = screenshots,

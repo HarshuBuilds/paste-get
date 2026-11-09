@@ -25,6 +25,26 @@
     <string name="not_a_pairing_code">This is not a paste-get pairing code</string>
     <string name="pairing">Pairing…</string>
     <string name="paired_with">Paired with %s</string>
+    <string name="pair_confirm_title">Pair with this computer?</string>
+    <string name="pair_confirm_name">Name it gives: %s</string>
+    <string name="pair_unnamed">no name</string>
+    <plurals name="pair_confirm_addresses">
+        <item quantity="one">Address: %s</item>
+        <item quantity="other">Addresses: %s</item>
+    </plurals>
+    <string name="pair_confirm_again">This phone is already paired with it, as %s. Pairing again replaces that pairing.</string>
+    <string name="pair_confirm_effect">Once paired, this computer receives what you send from this phone.</string>
+    <string name="pair_confirm_warning">Only continue if this code is on your computer\'s screen right now.</string>
+    <string name="pair_confirm_button">Pair</string>
+    <string name="pair_error_title">Pairing didn\'t work</string>
+    <string name="pair_error_invalid">This code can\'t be used. On the computer, show a new pairing code and scan it.</string>
+    <string name="pair_error_unreachable">The phone couldn\'t reach the computer. Check that both are on the same Wi-Fi and that paste-get is open on the computer, then scan the code again. A guest network or the computer\'s firewall can block it.</string>
+    <string name="pair_error_refused">The computer refused the pairing: the code may have expired or been used already. Show a new code on the computer and scan it.</string>
+    <string name="pair_error_storage">The pairing couldn\'t be saved on this phone. Free some storage, then scan the code again.</string>
+    <string name="pair_error_other">Something went wrong. Scan the code again; if it keeps failing, include the details below in your report.</string>
+    <string name="pair_details">Details</string>
+    <string name="pair_hide_details">Hide details</string>
+    <string name="close">Close</string>
     <string name="paired_computers">Paired computers</string>
     <string name="connected">Connected</string>
     <string name="offline">Offline</string>

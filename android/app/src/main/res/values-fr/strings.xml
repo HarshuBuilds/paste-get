@@ -29,6 +29,27 @@
     <string name="not_a_pairing_code">Ce n\'est pas un code d\'appairage paste-get</string>
     <string name="pairing">Appairage…</string>
     <string name="paired_with">Appairé avec %s</string>
+    <string name="pair_confirm_title">Appairer cet ordinateur ?</string>
+    <string name="pair_confirm_name">Nom annoncé : %s</string>
+    <string name="pair_unnamed">aucun nom</string>
+    <plurals name="pair_confirm_addresses">
+        <item quantity="one">Adresse : %s</item>
+        <item quantity="many">Adresses : %s</item>
+        <item quantity="other">Adresses : %s</item>
+    </plurals>
+    <string name="pair_confirm_again">Ce téléphone est déjà appairé avec lui, sous le nom %s. L\'appairer à nouveau remplace cet appairage.</string>
+    <string name="pair_confirm_effect">Une fois appairé, cet ordinateur reçoit ce que tu envoies depuis ce téléphone.</string>
+    <string name="pair_confirm_warning">Continue seulement si ce code est affiché sur l\'écran de ton ordinateur en ce moment.</string>
+    <string name="pair_confirm_button">Appairer</string>
+    <string name="pair_error_title">L\'appairage n\'a pas marché</string>
+    <string name="pair_error_invalid">Ce code est inutilisable. Sur l\'ordinateur, affiche un nouveau code d\'appairage et scanne-le.</string>
+    <string name="pair_error_unreachable">Le téléphone n\'a pas pu joindre l\'ordinateur. Vérifie que les deux sont sur le même Wi-Fi et que paste-get est ouvert sur l\'ordinateur, puis scanne à nouveau le code. Un réseau invité ou le pare-feu de l\'ordinateur peut le bloquer.</string>
+    <string name="pair_error_refused">L\'ordinateur a refusé l\'appairage : le code a peut-être expiré ou déjà servi. Affiche un nouveau code sur l\'ordinateur et scanne-le.</string>
+    <string name="pair_error_storage">L\'appairage n\'a pas pu être enregistré sur ce téléphone. Libère de l\'espace, puis scanne à nouveau le code.</string>
+    <string name="pair_error_other">Quelque chose s\'est mal passé. Scanne à nouveau le code ; si ça échoue encore, joins les détails ci-dessous à ton signalement.</string>
+    <string name="pair_details">Détails</string>
+    <string name="pair_hide_details">Masquer les détails</string>
+    <string name="close">Fermer</string>
     <string name="paired_computers">Ordinateurs appairés</string>
     <string name="connected">Connecté</string>
     <string name="offline">Hors ligne</string>

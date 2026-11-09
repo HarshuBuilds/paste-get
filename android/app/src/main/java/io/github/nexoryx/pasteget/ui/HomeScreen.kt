@@ -38,6 +38,7 @@ data class HomeState(
     val connected: Set<String>,
     /** The result of the last thing the user did, or what just happened. */
     val message: String?,
+    val pairing: PairingState,
     val lastDelivery: LastDelivery?,
     val lastReceived: LastReceived?,
     val screenshots: ScreenshotSetting,
@@ -48,7 +49,11 @@ data class HomeState(
 
 /** What the home screen's buttons and switches do. Each does nothing unless given, for tests. */
 class HomeActions(
+    /** Scans a pairing code. */
     val onPair: () -> Unit = {},
+    val onConfirmPairing: () -> Unit = {},
+    /** No to the code shown, or closing the pairing error. */
+    val onCancelPairing: () -> Unit = {},
     val onSendClipboard: () -> Unit = {},
     val onForget: (PairedComputer) -> Unit = {},
     val onScreenshotsChange: (Boolean) -> Unit = {},
@@ -79,8 +84,20 @@ fun HomeScreen(state: HomeState, actions: HomeActions) {
             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
         )
 
-        Button(onClick = actions.onPair, modifier = Modifier.fillMaxWidth()) {
+        // One pairing at a time.
+        Button(onClick = actions.onPair, enabled = state.pairing != PairingState.Busy, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.pair_button))
+        }
+        when (val pairing = state.pairing) {
+            PairingState.Idle -> {}
+            is PairingState.Confirm -> PairingSheet(
+                confirm = pairing,
+                known = state.computers.firstOrNull { it.deviceId == pairing.invite.deviceId },
+                onConfirm = actions.onConfirmPairing,
+                onCancel = actions.onCancelPairing,
+            )
+            PairingState.Busy -> PairingProgress()
+            is PairingState.Failed -> PairingErrorCard(pairing.error, actions.onCancelPairing)
         }
         OutlinedButton(
             onClick = actions.onSendClipboard,
