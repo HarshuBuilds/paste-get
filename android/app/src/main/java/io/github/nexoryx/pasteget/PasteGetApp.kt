@@ -36,11 +36,19 @@ class PasteGetApp : Application() {
 
     private val unpairedState = MutableStateFlow<PairedComputer?>(null)
 
-    /** The last computer that unpaired this phone, for the home screen to update its list. */
+    /**
+     * The last computer that unpaired this phone, until the home screen has told the user
+     * ([clearUnpaired]): it may happen while the app isn't open.
+     */
     val unpaired: StateFlow<PairedComputer?> = unpairedState.asStateFlow()
 
     fun unpairedBy(computer: PairedComputer) {
         unpairedState.value = computer
+    }
+
+    /** The user has been told about [computer]. A computer that unpaired the phone since stays. */
+    fun clearUnpaired(computer: PairedComputer) {
+        unpairedState.compareAndSet(computer, null)
     }
 
     private val lastDeliveryState = MutableStateFlow<LastDelivery?>(null)

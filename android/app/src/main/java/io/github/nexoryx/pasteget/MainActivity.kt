@@ -93,8 +93,6 @@ class MainActivity : ComponentActivity() {
         val lastCopy by pasteGet.autoCopy.lastCopy.collectAsStateWithLifecycle()
         val lastReceived by ReceivedClips.last.collectAsStateWithLifecycle()
         val lastCode by OneTimeCodes.last.collectAsStateWithLifecycle()
-        val unpaired by pasteGet.unpaired.collectAsStateWithLifecycle()
-        LaunchedEffect(unpaired) { unpaired?.let(model::unpairedBy) }
         // The built-in mode grants the permission that lets the app hide the notices.
         LaunchedEffect(builtIn.status) { model.refreshNotices() }
 
@@ -103,7 +101,7 @@ class MainActivity : ComponentActivity() {
         val status = appStatus(
             computers,
             connected,
-            unpaired,
+            model.unpaired,
             listOf(
                 copiesHealth(model.copiesOn, builtIn, shizuku, logs, model.fallback),
                 screenshotsHealth(model.screenshots.wanted, model.screenshots.access),

@@ -23,6 +23,7 @@ import io.github.nexoryx.pasteget.pasteGet
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uniffi.pasteget_ffi.PairedComputer
@@ -45,6 +46,10 @@ class HomeViewModel(
         private set
     var pairing by mutableStateOf<PairingState>(PairingState.Idle)
         private set
+
+    /** The computer that unpaired this phone, for the status line once none is left. */
+    var unpaired by mutableStateOf<PairedComputer?>(null)
+        private set
     var screenshots by mutableStateOf(ScreenshotSetting(wanted = false, access = PhotoAccess.NONE))
         private set
     var photoRequestDenied by mutableStateOf(false)
@@ -59,6 +64,16 @@ class HomeViewModel(
         private set
     var codeAccess by mutableStateOf(CodeAccess(listening = false, seesCodes = null))
         private set
+
+    init {
+        // Taken from the app as it arrives, so the next screen doesn't say it again.
+        viewModelScope.launch {
+            app.pasteGet.unpaired.filterNotNull().collect { computer ->
+                app.pasteGet.clearUnpaired(computer)
+                unpairedBy(computer)
+            }
+        }
+    }
 
     /** On the main thread, when the screen shows and whenever it comes back. */
     fun refresh() {
@@ -106,6 +121,7 @@ class HomeViewModel(
                 val computer = withContext(io) { computers.pair(confirmed.code) }
                 paired = withContext(io) { computers.paired() }
                 SyncService.start(app)
+                unpaired = null
                 pairing = PairingState.Idle
                 message = app.getString(R.string.paired_with, computer.name)
             } catch (e: CancellationException) {
@@ -133,10 +149,17 @@ class HomeViewModel(
         }
     }
 
-    /** [computer] unpaired this phone. */
-    fun unpairedBy(computer: PairedComputer) {
-        refreshComputers()
-        message = app.getString(R.string.unpaired_title, computer.name)
+    /**
+     * [computer] unpaired this phone. With none left the status line says so; otherwise the
+     * message does.
+     */
+    private fun unpairedBy(computer: PairedComputer) {
+        unpaired = computer
+        viewModelScope.launch {
+            val left = withContext(io) { computers.paired() }
+            paired = left
+            if (left.isNotEmpty()) message = app.getString(R.string.unpaired_title, computer.name)
+        }
     }
 
     /** The user answered the photo permission request. */
