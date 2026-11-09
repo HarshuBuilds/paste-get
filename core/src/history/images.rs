@@ -188,7 +188,7 @@ impl HistoryStore {
     /// between writing and committing) are deleted, and rows whose file is missing say so.
     pub(super) fn sweep_files(&mut self) -> Result<(), Error> {
         let dir = self.originals_dir();
-        fs::create_dir_all(&dir)?;
+        super::create_private_dir(&dir)?;
         let mut expected = HashSet::new();
         let mut missing = Vec::new();
         {

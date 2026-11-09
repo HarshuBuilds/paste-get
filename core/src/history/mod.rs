@@ -156,9 +156,9 @@ impl HistoryStore {
     /// device it runs on: clips copied here have it as their origin.
     ///
     /// `dir` should be private to the app and left out of backups: the phone's no-backup files
-    /// folder, a user-only folder on the PC.
+    /// folder, a user-only folder on the PC. On Unix it is made so (mode 0700) if it isn't.
     pub fn open(dir: &Path, this_device: DeviceId, policy: Policy) -> Result<Self, Error> {
-        std::fs::create_dir_all(dir)?;
+        create_private_dir(dir)?;
         let conn = schema::open(&dir.join(DATABASE_FILE))?;
         search::register_fold(&conn)?;
         let mut store = Self {
@@ -194,6 +194,27 @@ impl HistoryStore {
     pub fn close(self) -> Result<(), Error> {
         self.conn.close().map_err(|(_, error)| error.into())
     }
+}
+
+/// Creates `dir` if needed, for this user only. On Unix that is mode 0700, and a folder others
+/// could open is tightened. On Windows a new folder takes the access rules of its parent, the
+/// user's own profile.
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)?;
+        let mode = std::fs::metadata(dir)?.permissions().mode();
+        if mode & 0o077 != 0 {
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(mode & 0o700))?;
+        }
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(dir)?;
+    Ok(())
 }
 
 fn system_now() -> i64 {

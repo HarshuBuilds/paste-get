@@ -113,6 +113,29 @@ fn creates_the_database_and_opens_it_again() {
     assert_eq!(classifier, 1);
 }
 
+#[cfg(unix)]
+#[test]
+fn the_folders_are_for_this_user_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    let parent = tempfile::tempdir().unwrap();
+
+    let new = parent.path().join("new");
+    drop(HistoryStore::open(&new, HERE, Policy::default()).unwrap());
+    assert_eq!(mode(&new), 0o700);
+    assert_eq!(mode(&new.join(ORIGINALS_DIR)), 0o700);
+
+    // Made by someone else, readable by all: tightened.
+    let old = parent.path().join("old");
+    std::fs::create_dir_all(old.join(ORIGINALS_DIR)).unwrap();
+    for dir in [old.clone(), old.join(ORIGINALS_DIR)] {
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    drop(HistoryStore::open(&old, HERE, Policy::default()).unwrap());
+    assert_eq!(mode(&old), 0o700);
+    assert_eq!(mode(&old.join(ORIGINALS_DIR)), 0o700);
+}
+
 #[test]
 fn a_newer_schema_is_left_untouched() {
     let dir = tempfile::tempdir().unwrap();

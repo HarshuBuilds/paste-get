@@ -72,8 +72,9 @@ running `adb`: that is how it starts its shell helper. Consequences:
 ## The clipboard history (being built, off by default)
 
 The history store is in the core (`core/src/history`) but no app turns it on yet. When one does:
-- It stays on the device, in a folder only paste-get can open (on the phone, one that is never
-  backed up). It is never sent anywhere.
+- It stays on the device, in a folder only paste-get can open on the phone (one that is never
+  backed up), and only your user account on a PC (mode 0700 on Linux and macOS, set when the
+  history opens). It is never sent anywhere.
 - **Never kept:** clips marked sensitive (password managers), 2FA codes (and copies of their
   digits made just before or in the 15 minutes after), and anything that looks like a private key, a 2FA seed (`otpauth://`), an API token, a card number or a generated
   password (`core/src/detect.rs`). Only how many were kept out is counted. A number of 4 to 8
