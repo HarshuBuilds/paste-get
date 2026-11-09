@@ -22,7 +22,7 @@ use pasteget_core::clip::mime;
 use pasteget_core::detect::Category;
 use pasteget_core::history::{Cursor, Format, Item, ItemId, MAX_PAGE_SIZE, PAGE_SIZE, Query};
 use pasteget_core::identity::DeviceId;
-use pasteget_core::pairing::{PAIRING_TTL, PairingError, PairingInvite};
+use pasteget_core::pairing::{PAIRING_TTL, PairingInvite};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::broadcast;
@@ -41,14 +41,6 @@ const MAX_REQUEST_LEN: u64 = 96 * 1024 * 1024;
 /// needs to know what a daemon understands. 1: the first to say it, and to know
 /// [`Request::Quit`]. 2: the history requests ([`Request::History`] and the ones after it).
 pub const CONTROL_VERSION: u32 = 2;
-
-/// How a [`Request::Pair`] ends when wrong attempts closed its code. The tray then shows a new
-/// one at once.
-pub const TOO_MANY_ATTEMPTS: &str = "too many wrong attempts: the pairing code was closed";
-
-/// After a wrong attempt closed the code, how long to wait in case a device got it right just
-/// before: it is said paired once its answer is out.
-const CLOSED_GRACE: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
@@ -556,13 +548,7 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(daemon: Arc<Daemon>, stream: 
                                 });
                             }
                             Ok(Event::PairingFailed(reason)) => {
-                                // The third wrong try closes the code: scanning it again would
-                                // be refused, so this request ends.
-                                if reason == PairingError::WrongSecret.to_string()
-                                    && !daemon.status().await.pairing_open
-                                {
-                                    return closed_after_wrong_attempts(&mut events).await;
-                                }
+                                // Wrong secrets never close the code: it still works.
                                 let response = Response::PairingAttemptFailed { reason };
                                 let _ = write_half.write_all(line_of(response).as_bytes()).await;
                             }
@@ -754,30 +740,6 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(daemon: Arc<Daemon>, stream: 
     // Once the answer is out: the process may end right after.
     if quit {
         daemon.request_quit();
-    }
-}
-
-/// A wrong attempt found the code closed: by too many wrong tries, unless a device got it right
-/// meanwhile and is about to be said paired.
-async fn closed_after_wrong_attempts(events: &mut broadcast::Receiver<Event>) -> Response {
-    let paired = tokio::time::timeout(CLOSED_GRACE, async {
-        loop {
-            match events.recv().await {
-                Ok(Event::Paired(device)) => return Some(device),
-                Ok(Event::PairingFailed(_)) | Err(broadcast::error::RecvError::Lagged(_)) => {}
-                Err(broadcast::error::RecvError::Closed) => return None,
-            }
-        }
-    })
-    .await;
-    match paired {
-        Ok(Some(device)) => Response::Paired(DeviceReply {
-            id: device.id.to_string(),
-            name: device.name,
-        }),
-        _ => Response::Error {
-            message: TOO_MANY_ATTEMPTS.into(),
-        },
     }
 }
 

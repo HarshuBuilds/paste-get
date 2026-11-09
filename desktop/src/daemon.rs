@@ -731,8 +731,8 @@ impl Shared {
     }
 
     /// Answers a pairing request from the open window. The window is locked only to check the
-    /// secret, never across network I/O, so the limit on wrong tries and the single use still hold
-    /// when requests come in at once.
+    /// secret, never across network I/O, so the single use still holds when requests come in at
+    /// once.
     async fn answer_pairing<S>(&self, request: PairingRequest<S>) -> Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin,

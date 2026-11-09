@@ -42,12 +42,10 @@ const RESTART_PAUSE: Duration = Duration::from_secs(1);
 pub enum View {
     /// Asking the daemon for a code.
     Preparing,
-    /// A code to scan, replaced by a new one after `secs`. `note` says why the last one was
-    /// replaced early, in the user's language.
+    /// A code to scan, replaced by a new one after `secs`.
     Code {
         svg: String,
         secs: u64,
-        note: Option<String>,
     },
     /// A device tried and failed; the code still works. In the user's language.
     AttemptFailed(String),
@@ -62,8 +60,6 @@ enum Ended {
     Paired,
     /// Its time ran out: ask for a new one.
     Expired,
-    /// Wrong attempts closed it: ask for a new one now, and say why.
-    Closed,
     /// The daemon went away before the code expired, saying nothing: it restarted.
     Interrupted,
     /// No code, or the code stopped working, for this reason (already in the user's language).
@@ -92,9 +88,7 @@ pub fn qr_svg(text: &str) -> Result<String> {
 pub fn script(view: &View) -> String {
     let data = match view {
         View::Preparing => json!({ "kind": "preparing" }),
-        View::Code { svg, secs, note } => {
-            json!({ "kind": "code", "svg": svg, "secs": secs, "note": note })
-        }
+        View::Code { svg, secs } => json!({ "kind": "code", "svg": svg, "secs": secs }),
         View::AttemptFailed(text) => json!({ "kind": "attempt-failed", "text": text }),
         View::Paired(name) => json!({ "kind": "paired", "text": name }),
         View::Error(text) => json!({ "kind": "error", "text": text }),
@@ -142,19 +136,9 @@ fn attempt_failed(reason: &str) -> String {
     }
 }
 
-/// Why the code shown replaced the last one before its time.
-fn closed_note() -> String {
-    tr(
-        "A device tried wrong codes too many times, so the last one stopped working. If it was your phone, scan this new one.",
-        "Un appareil a essayé trop de codes faux : le précédent ne marche plus. Si c'était ton téléphone, scanne ce nouveau code.",
-    )
-    .into()
-}
-
 /// Asks the daemon for one code and shows what comes of it, until it is used, expires or fails.
-/// `note` goes with the code.
-async fn one_code(endpoint: &Endpoint, show: &mut impl FnMut(View), note: Option<String>) -> Ended {
-    let mut note = note;
+/// Wrong attempts don't end it: the daemon never closes a code for them.
+async fn one_code(endpoint: &Endpoint, show: &mut impl FnMut(View)) -> Ended {
     let mut expires = None;
     let mut ended = None;
     let result = control::call(endpoint, &Request::Pair, |response| match response {
@@ -167,7 +151,6 @@ async fn one_code(endpoint: &Endpoint, show: &mut impl FnMut(View), note: Option
                 Ok(svg) => show(View::Code {
                     svg,
                     secs: expires_in_secs,
-                    note: note.take(),
                 }),
                 Err(e) => ended = Some(Ended::Failed(trouble(&format!("{e:#}")))),
             }
@@ -179,15 +162,12 @@ async fn one_code(endpoint: &Endpoint, show: &mut impl FnMut(View), note: Option
             show(View::Paired(device.name));
             ended = Some(Ended::Paired);
         }
-        Response::Error { message } if message == control::TOO_MANY_ATTEMPTS => {
-            ended = Some(Ended::Closed);
-        }
         Response::Error { message } => ended = Some(Ended::Failed(trouble(&message))),
         _ => {}
     })
     .await;
-    if let Some(done @ (Ended::Paired | Ended::Closed)) = ended {
-        return done;
+    if ended == Some(Ended::Paired) {
+        return Ended::Paired;
     }
     // Whatever the daemon said then ("the pairing code expired"), the code's time is up.
     if expires.is_some_and(|expires| Instant::now() + EXPIRY_SLACK >= expires) {
@@ -211,16 +191,11 @@ async fn keep_pairing(
     show: &mut impl FnMut(View),
     open: &impl Fn() -> bool,
 ) -> bool {
-    let mut note = None;
     loop {
-        match one_code(endpoint, show, note.take()).await {
+        match one_code(endpoint, show).await {
             Ended::Paired => return true,
             Ended::Expired => {
                 tracing::info!("the pairing code expired: showing a new one");
-            }
-            Ended::Closed => {
-                tracing::info!("wrong attempts closed the pairing code: showing a new one");
-                note = Some(closed_note());
             }
             Ended::Interrupted => {
                 show(View::Preparing);
@@ -315,11 +290,7 @@ mod tests {
 
         assert!(svg.starts_with("<svg"));
         assert!(svg.contains("#000000") && svg.contains("#ffffff"));
-        let script = script(&View::Code {
-            svg,
-            secs: 300,
-            note: None,
-        });
+        let script = script(&View::Code { svg, secs: 300 });
         assert!(script.contains(r#""kind":"code""#) && script.contains(r#""secs":300"#));
     }
 
@@ -340,11 +311,9 @@ mod tests {
         let profile = pasteget_desktop::config::Profile::open_in(home.path(), "pc").unwrap();
         let mut shown = Vec::new();
 
-        let ended = one_code(
-            &Endpoint::for_profile(&profile),
-            &mut |view| shown.push(view),
-            None,
-        )
+        let ended = one_code(&Endpoint::for_profile(&profile), &mut |view| {
+            shown.push(view)
+        })
         .await;
 
         assert_eq!(
@@ -378,7 +347,7 @@ mod tests {
         let server = control::serve(daemon, &endpoint).await.unwrap();
         let mut shown = Vec::new();
 
-        let ended = one_code(&endpoint, &mut |view| shown.push(view), None).await;
+        let ended = one_code(&endpoint, &mut |view| shown.push(view)).await;
 
         assert_eq!(
             ended,
@@ -494,11 +463,11 @@ mod tests {
         assert_eq!(shown[1], View::Preparing);
     }
 
-    /// A phone that scanned the code before it was renewed tried the old one at each address,
-    /// which closed it: a new code comes at once, saying why.
+    /// A phone that scanned the code before it was renewed tries the old one at each address:
+    /// each try is said, and the code shown keeps working, without a new one.
     #[cfg(unix)]
     #[tokio::test]
-    async fn a_code_closed_by_wrong_attempts_is_replaced_at_once() {
+    async fn wrong_attempts_keep_the_code_shown() {
         english();
         let home = tempfile::tempdir().unwrap();
         let profile = pasteget_desktop::config::Profile::open_in(home.path(), "pc").unwrap();
@@ -506,21 +475,19 @@ mod tests {
             reason: PairingError::WrongSecret.to_string(),
         })
         .unwrap();
-        let closed = serde_json::to_string(&Response::Error {
-            message: control::TOO_MANY_ATTEMPTS.into(),
-        })
-        .unwrap();
         let paired = r#"{"paired":{"id":"PHONE","name":"POCO"}}"#.to_owned();
         let daemon = fake_daemon(
             &profile,
-            vec![
-                vec![invite(300), failed.clone(), failed, closed],
-                vec![invite(300), paired],
-            ],
+            vec![vec![
+                invite(300),
+                failed.clone(),
+                failed.clone(),
+                failed,
+                paired,
+            ]],
         );
         let mut shown = Vec::new();
 
-        let started = Instant::now();
         let paired = keep_pairing(
             &Endpoint::for_profile(&profile),
             &mut |view| shown.push(view),
@@ -529,21 +496,20 @@ mod tests {
         .await;
 
         assert!(paired);
-        assert_eq!(daemon.await.unwrap(), 2);
-        // No pause before the new code.
-        assert!(started.elapsed() < RESTART_PAUSE);
-        let View::Code { note: None, .. } = &shown[0] else {
-            panic!("{:?}", shown[0]);
-        };
-        assert!(matches!(&shown[1], View::AttemptFailed(text) if text.contains("scan this one")));
-        let View::Code {
-            note: Some(note), ..
-        } = &shown[3]
-        else {
-            panic!("{:?}", shown[3]);
-        };
-        assert!(note.contains("too many times"), "{note}");
-        assert_eq!(shown.len(), 5);
+        assert_eq!(daemon.await.unwrap(), 1);
+        let kinds: Vec<_> = shown
+            .iter()
+            .map(|view| match view {
+                View::Code { secs, .. } => format!("code {secs}"),
+                View::AttemptFailed(text) => text.clone(),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        let failed = "A device tried an old or wrong code. If it was your phone, scan this one.";
+        assert_eq!(
+            kinds,
+            ["code 300", failed, failed, failed, r#"Paired("POCO")"#]
+        );
     }
 
     /// Closed: the code shown expires, and no other is asked for.
