@@ -23,13 +23,14 @@ use pasteget_core::detect;
 use pasteget_core::echo::EchoGuard;
 use pasteget_core::identity::{DeviceId, Identity};
 use pasteget_core::pairing::{
-    self, Opening, PairedDevice, PairingError, PairingInvite, PairingWindow,
+    self, Opening, PairedDevice, PairingError, PairingInvite, PairingRequest, PairingWindow,
 };
 use pasteget_core::proto::{Hello, PROTOCOL_VERSION, Platform, RefusalReason};
 use pasteget_core::session::{self, HANDSHAKE_TIMEOUT, Peers, RECONNECT_MIN, SessionEvents};
 use pasteget_core::transport;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Mutex as AsyncMutex, broadcast, mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::{sleep, timeout};
 
@@ -113,7 +114,8 @@ struct Shared {
     listen_port: u16,
     advertised_ips: Option<Vec<IpAddr>>,
     known: Mutex<KnownDevices>,
-    pairing: AsyncMutex<Option<PairingWindow>>,
+    /// Locked only for quick checks, never across network I/O: status reads it.
+    pairing: Mutex<Option<PairingWindow>>,
     peers: Peers,
     guard: Mutex<EchoGuard>,
     clipboard: ClipboardWatcher,
@@ -163,7 +165,7 @@ impl Daemon {
             listen_port: local_addr.port(),
             advertised_ips: options.advertised_ips,
             known: Mutex::new(known),
-            pairing: AsyncMutex::new(None),
+            pairing: Mutex::new(None),
             peers,
             clipboard,
             notifier: options.notifier,
@@ -252,7 +254,7 @@ impl Daemon {
             bail!("no network address to put in the pairing code: is this PC on a network?");
         }
         let invite = window.invite(&self.shared.identity, &self.shared.device_name, addresses);
-        *self.shared.pairing.lock().await = Some(window);
+        *lock(&self.shared.pairing) = Some(window);
         tracing::info!("pairing window opened");
         Ok(invite)
     }
@@ -359,14 +361,9 @@ impl Daemon {
         Ok(restart_needed)
     }
 
+    /// Never waits on pairing or on the network.
     pub async fn status(&self) -> Status {
-        let pairing_open = self
-            .shared
-            .pairing
-            .lock()
-            .await
-            .as_ref()
-            .is_some_and(|window| window.is_open(Instant::now()));
+        let pairing_open = self.shared.pairing_open();
         let connected = self.shared.peers.connected();
         let devices = lock(&self.shared.known)
             .iter()
@@ -521,6 +518,32 @@ impl Shared {
         let mut known = lock(&self.known);
         known.insert(device);
         self.profile.save_known_devices(&known)
+    }
+
+    fn pairing_open(&self) -> bool {
+        lock(&self.pairing)
+            .as_ref()
+            .is_some_and(|window| window.is_open(Instant::now()))
+    }
+
+    /// Answers a pairing request from the open window. The window is locked only to check the
+    /// secret, never across network I/O, so the 3 wrong tries and the single use still hold
+    /// when requests come in at once.
+    async fn answer_pairing<S>(&self, request: PairingRequest<S>) -> Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        let peer = request.peer();
+        let check = |secret: &[u8]| {
+            let verdict = check_secret(&mut lock(&self.pairing), secret);
+            if verdict.is_ok() {
+                // Paired again: a session it may still have here ends, it starts a new one.
+                self.peers.disconnect(&peer);
+            }
+            verdict
+        };
+        let result = request.answer(check, &self.device_name).await;
+        self.paired(result)
     }
 
     /// Stores a device that just paired, or paired again, and says so.
@@ -694,30 +717,11 @@ async fn handle_incoming(shared: Arc<Shared>, socket: TcpStream) -> Result<()> {
                 Ok(())
             }
             // It forgot this computer and scanned its pairing code: it pairs again.
-            Opening::PairRequest(request) => {
-                let mut slot = shared.pairing.lock().await;
-                let result = request
-                    .answer(
-                        |secret| {
-                            let verdict = check_secret(&mut slot, secret);
-                            if verdict.is_ok() {
-                                // A session it may still have here ends: it starts a new one.
-                                shared.peers.disconnect(&peer);
-                            }
-                            verdict
-                        },
-                        &shared.device_name,
-                    )
-                    .await;
-                drop(slot);
-                shared.paired(result)
-            }
+            Opening::PairRequest(request) => shared.answer_pairing(request).await,
         };
     }
 
-    let mut slot = shared.pairing.lock().await;
-    if !slot.as_ref().is_some_and(|w| w.is_open(Instant::now())) {
-        drop(slot);
+    if !shared.pairing_open() {
         // Said, so that a phone unpaired here stops dialing and tells its user.
         let _ = timeout(
             HANDSHAKE_TIMEOUT,
@@ -726,22 +730,13 @@ async fn handle_incoming(shared: Arc<Shared>, socket: TcpStream) -> Result<()> {
         .await;
         bail!("refused device {peer}: not paired and no pairing code is shown");
     }
-    let result = timeout(PAIRING_REQUEST_TIMEOUT, async {
-        pairing::read_request(unverified)
-            .await?
-            .answer(
-                |secret| check_secret(&mut slot, secret),
-                &shared.device_name,
-            )
-            .await
-    })
-    .await;
-    drop(slot);
-
-    match result {
-        Ok(result) => shared.paired(result),
+    // Nothing is locked while waiting: a device that stays silent holds up no other.
+    let request = match timeout(PAIRING_REQUEST_TIMEOUT, pairing::read_request(unverified)).await {
+        Ok(Ok(request)) => request,
+        Ok(Err(e)) => return shared.paired(Err(e)),
         Err(_) => bail!("device {peer} did not send its pairing request in time"),
-    }
+    };
+    shared.answer_pairing(request).await
 }
 
 /// An address of this PC, and the network interface it is on.
@@ -1188,6 +1183,64 @@ mod tests {
         .await;
 
         assert!(matches!(second, Err(PairingError::NoLongerShown)));
+    }
+
+    #[tokio::test]
+    async fn a_silent_client_blocks_neither_status_nor_pairing() {
+        let pc = start("pc").await;
+        let laptop = start("laptop").await;
+        let invite = pc.daemon.open_pairing().await.unwrap();
+        // Something on the network opens a TLS connection, then says nothing.
+        let socket = TcpStream::connect(pc.daemon.local_addr()).await.unwrap();
+        let _silent = transport::connect(socket, &Identity::generate().unwrap(), invite.device_id)
+            .await
+            .unwrap();
+        sleep(Duration::from_millis(100)).await;
+
+        let status = timeout(Duration::from_secs(1), pc.daemon.status())
+            .await
+            .expect("status waited for the silent client");
+        assert!(status.pairing_open);
+        let joined = timeout(Duration::from_secs(3), laptop.daemon.join(&invite))
+            .await
+            .expect("pairing waited for the silent client");
+        assert_eq!(joined.unwrap().name, "pc");
+    }
+
+    #[tokio::test]
+    async fn wrong_secrets_close_the_window_and_a_code_pairs_once() {
+        let pc = start("pc").await;
+        let invite = pc.daemon.open_pairing().await.unwrap();
+        let mut guess = PairingWindow::open(Instant::now()).unwrap().invite(
+            &Identity::generate().unwrap(),
+            "pc",
+            invite.addresses.clone(),
+        );
+        guess.device_id = invite.device_id;
+
+        // Three wrong secrets at once: all refused, and the window closes.
+        let guesser = Identity::generate().unwrap();
+        let (a, b, c) = tokio::join!(
+            pair_as(&pc.daemon, &guesser, &guess, "guess"),
+            pair_as(&pc.daemon, &guesser, &guess, "guess"),
+            pair_as(&pc.daemon, &guesser, &guess, "guess"),
+        );
+        for result in [a, b, c] {
+            assert!(matches!(result, Err(PairingError::Rejected)), "{result:?}");
+        }
+        assert!(!pc.daemon.status().await.pairing_open);
+        let late = pair_as(&pc.daemon, &Identity::generate().unwrap(), &invite, "late").await;
+        assert!(matches!(late, Err(PairingError::NoLongerShown)), "{late:?}");
+
+        // Two devices with the right secret at once: one pairs.
+        let invite = pc.daemon.open_pairing().await.unwrap();
+        let (first, second) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (a, b) = tokio::join!(
+            pair_as(&pc.daemon, &first, &invite, "first"),
+            pair_as(&pc.daemon, &second, &invite, "second"),
+        );
+        assert_eq!(u8::from(a.is_ok()) + u8::from(b.is_ok()), 1, "{a:?} {b:?}");
+        assert_eq!(pc.daemon.status().await.devices.len(), 1);
     }
 
     #[tokio::test]

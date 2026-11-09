@@ -56,9 +56,14 @@ Each line is a claim to check. "→" points at where it's enforced.
 
 ### Pairing
 7. An unknown device can do nothing but send one `PairRequest`, and only while a window is
-   open. → `desktop/src/daemon.rs` `handle_incoming`, `PAIRING_REQUEST_TIMEOUT`
+   open. A paired device that sends a `PairRequest` instead of its `Hello` (pairing again) is
+   checked against the same window. → `desktop/src/daemon.rs` `handle_incoming`,
+   `PAIRING_REQUEST_TIMEOUT`, `pairing::read_opening`
 8. The secret: 16 bytes from the system RNG (`ring::rand::SystemRandom`), compared in
-   constant time, valid once, for 5 minutes, at most 3 wrong tries. → `PairingWindow::check`
+   constant time, valid once, for 5 minutes, at most 3 wrong tries. → `PairingWindow::check`.
+   It runs under the window's lock, which is never held across network I/O: attempts made at
+   once can't get around these limits, and a client that connects and stays silent holds up
+   no other attempt. → `Shared::answer_pairing`, `PairingRequest::answer`
 9. The secret is zeroized after use and never logged or `Debug`-printed. → `PairingSecret`
 10. The phone pins the device ID from the QR code before sending the secret, so a machine that
     doesn't own that key never sees the secret. → `pair_with`. It tries every address of the
