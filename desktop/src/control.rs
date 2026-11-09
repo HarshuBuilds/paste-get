@@ -233,9 +233,11 @@ pub struct HistoryItemReply {
     pub category: String,
     /// Bytes of the original.
     pub size: u64,
-    /// The device where it was first copied; `None` for this computer.
+    /// The name of the device where it was first copied, empty if it was never named; `None`
+    /// for this computer.
     pub from: Option<String>,
-    /// The paired device it came through; `None` when it didn't come from one.
+    /// The name of the paired device it came through, empty if it was never named; `None` when
+    /// it didn't come from one.
     pub via: Option<String>,
     /// Unix ms.
     pub last_at_ms: i64,
@@ -263,16 +265,10 @@ impl std::fmt::Debug for HistoryItemReply {
 }
 
 impl HistoryItemReply {
+    /// Device names stay as the history has them, empty ones too: each client says "another
+    /// device" in its own language.
     fn of(item: Item) -> Self {
-        let name = |device: Option<pasteget_core::history::Device>| {
-            device.map(|device| {
-                if device.name.is_empty() {
-                    crate::i18n::tr("another device", "un autre appareil").to_owned()
-                } else {
-                    device.name
-                }
-            })
-        };
+        let name = |device: Option<pasteget_core::history::Device>| device.map(|d| d.name);
         Self {
             id: item.id.0,
             mime_type: match item.format {
@@ -1092,6 +1088,46 @@ mod tests {
             serde_json::from_str::<Response>(&answer).unwrap(),
             Response::Quitting
         ));
+    }
+
+    /// A device the history knows by its ID only comes with an empty name, whatever the
+    /// daemon's language: never a word a device could be named.
+    #[test]
+    fn a_device_never_named_has_an_empty_name() {
+        use pasteget_core::history::{Device, Kept, Source, Thumb};
+        let device = |name: &str| Device {
+            id: DeviceId::from_bytes([3; DeviceId::LEN]),
+            name: name.into(),
+            platform: None,
+        };
+        let item = Item {
+            id: ItemId(7),
+            sha256: [0; 32],
+            format: Format::Text,
+            size: 5,
+            category: Category::Text,
+            host: None,
+            source: Source::Received,
+            origin: Some(device("")),
+            via: Some(device("HP-AIO")),
+            first_at: 0,
+            last_at: 0,
+            times: 1,
+            pinned_at: None,
+            expires_at: None,
+            kept: Kept::Original,
+            media_id: None,
+            width: None,
+            height: None,
+            thumb: Thumb::None,
+            preview: "hello".into(),
+            highlights: Vec::new(),
+        };
+
+        let reply = HistoryItemReply::of(item);
+
+        assert_eq!(reply.from.as_deref(), Some(""));
+        assert_eq!(reply.via.as_deref(), Some("HP-AIO"));
     }
 
     /// The history requests, as `pasteget history` sends them.

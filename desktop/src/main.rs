@@ -18,6 +18,7 @@ use pasteget_desktop::config::{DEFAULT_PROFILE, Profile};
 use pasteget_desktop::control::{self, Endpoint, HistoryItemReply, Request, Response};
 use pasteget_desktop::daemon::{Daemon, DaemonOptions};
 use pasteget_desktop::history::{parse_duration, picked_id, plain_line};
+use pasteget_desktop::i18n::{self, Lang};
 use pasteget_desktop::notify::DesktopNotifier;
 use pasteget_desktop::recent;
 use qrcode::QrCode;
@@ -173,6 +174,10 @@ async fn main() -> ExitCode {
 }
 
 async fn run(cli: Cli) -> Result<()> {
+    // The command speaks English; the daemon, which shows notifications, the system's language.
+    if !matches!(cli.command, Command::Daemon { .. }) {
+        i18n::force(Lang::En);
+    }
     let profile = Profile::open(&cli.profile)?;
     let endpoint = Endpoint::for_profile(&profile);
     match cli.command {
@@ -536,7 +541,11 @@ fn history_line(item: &HistoryItemReply, now_ms: i64, plain: bool) -> String {
         return plain_line(item.id, &preview);
     }
     let age_secs = u64::try_from((now_ms - item.last_at_ms) / 1000).unwrap_or(0);
-    let from = item.from.as_deref().unwrap_or("this computer");
+    let from = match item.from.as_deref() {
+        None => "this computer",
+        Some("") => "another device",
+        Some(name) => name,
+    };
     format!(
         "{:>6} {}{:>9}  {:<20}  {}",
         item.id,
@@ -642,6 +651,21 @@ mod tests {
             assert!(!line.contains('\n') && !line.contains('\u{1b}'), "{line:?}");
         }
         assert_eq!(picked_id(&plain), Some(12));
+    }
+
+    #[test]
+    fn a_device_never_named_is_another_device() {
+        let unnamed = HistoryItemReply {
+            from: Some(String::new()),
+            ..item("hello")
+        };
+        let here = HistoryItemReply {
+            from: None,
+            ..item("hello")
+        };
+
+        assert!(history_line(&unnamed, 1_000_000, false).contains("  another device  "));
+        assert!(history_line(&here, 1_000_000, false).contains("  this computer  "));
     }
 
     #[test]
