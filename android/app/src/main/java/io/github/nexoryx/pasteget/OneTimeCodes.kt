@@ -67,6 +67,8 @@ object OneTimeCodes {
             val sentTo = app.pasteGet.client.sendOneTimeCode(code, name).toInt()
             // The app that sent it, never the code.
             Log.i(TAG, "one-time code from ${notification.packageName} sent to $sentTo computers")
+            // Its length is what the computers acknowledge; the code itself is never kept.
+            app.pasteGet.activity.sent(ActivityKind.CODE, code.encodeToByteArray().size, sentTo, automatic = true, sensitive = true, app = name)
             lastState.value = LastCode(System.currentTimeMillis(), name, sentTo)
         }
     }

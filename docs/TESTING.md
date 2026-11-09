@@ -164,7 +164,7 @@ Windows have one built in.
 | # | Do this | Expected |
 |---|---|---|
 | S1 | Take a screenshot on the phone, then `Ctrl+V` in Discord (or Paint, GIMP) on the PC | The screenshot is pasted, upright. The PC shows "Image from POCO M8 5G ✓" |
-| S2 | Look at the app's home screen | "Last screenshot (… kB) reached your computer in … ms" |
+| S2 | Look at the app's home screen, under **Recent** | "Screenshot, … kB", and under it "<PC> in … ms" |
 | S3 | Share a photo from the gallery with **Send to PC**, paste on the PC | The photo is pasted the right way up, even if taken in portrait |
 | S4 | Turn Wi-Fi off on the phone for a minute, then on again | "Connected to 1 computer" again within a few seconds |
 | S5 | Restart the PC into the other OS (Windows ↔ Arch), start `pasteget daemon` there (pair it once if it isn't yet) | The phone connects to it within a few seconds, without a new QR code |
@@ -174,8 +174,8 @@ Windows have one built in.
 ### Measuring latency (target: under 1 s)
 
 Two numbers, both on the phone:
-- The home screen (S2) counts from the moment Android announced the new screenshot file to the
-  PC's acknowledgement. Repeat S1 five times and note the values.
+- The home screen's Recent list (S2) counts from the moment Android announced the new screenshot
+  file to the PC's acknowledgement. Repeat S1 five times and note the values.
 - `adb logcat -s paste-get` shows each step: "screenshot of … bytes read in … ms", then
   "delivered … ms after sending, … ms after Android announced the screenshot".
 
@@ -489,7 +489,8 @@ never wait: a code would be stale by then.
 - Only the last copy made while a device is away waits for it, in memory: it's lost if the
   sending side restarts first. Passwords and 2FA codes never wait.
 - The phone shows nothing of its own when a clip from the PC arrives (Android 13 and later may
-  show their clipboard preview); its home screen says what came last.
+  show their clipboard preview); its home screen's Recent list shows what came (kind, size and
+  time, never the contents), in memory only.
 - Only text copied on the phone is sent automatically, not images or files: share those.
 - Mode B takes focus for a moment on each copy, which may close the keyboard. On Android 13+, it
   needs paste-get opened once (and log access allowed) after each restart of the phone.

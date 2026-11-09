@@ -2,8 +2,6 @@
 
 package io.github.nexoryx.pasteget.ui
 
-import android.text.format.DateFormat
-import android.text.format.Formatter
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,7 +15,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -25,11 +22,9 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import io.github.nexoryx.pasteget.LastDelivery
-import io.github.nexoryx.pasteget.LastReceived
+import io.github.nexoryx.pasteget.Activity
 import io.github.nexoryx.pasteget.R
 import uniffi.pasteget_ffi.PairedComputer
-import java.util.Date
 
 /** Everything the home screen shows. It reads nothing else. */
 data class HomeState(
@@ -39,8 +34,8 @@ data class HomeState(
     /** The result of the last thing the user did, or what just happened. */
     val message: String?,
     val pairing: PairingState,
-    val lastDelivery: LastDelivery?,
-    val lastReceived: LastReceived?,
+    /** Newest first. */
+    val activity: List<Activity>,
     val screenshots: ScreenshotSetting,
     val photoRequestDenied: Boolean,
     val autoCopy: AutoCopyCardState,
@@ -116,15 +111,32 @@ fun HomeScreen(state: HomeState, actions: HomeActions) {
         }
 
         ScreenshotsCard(state.screenshots, state.photoRequestDenied, actions.onScreenshotsChange, actions.onOpenAppSettings)
-        state.lastDelivery?.let { LastDeliveryText(it) }
-        state.lastReceived?.let { LastReceivedText(it) }
         AutoCopyCard(state.autoCopy, actions.autoCopy)
         CodesCard(state.codes, actions.codes)
+        Recent(state.activity, state.computers)
         SupportCard()
 
         ComputerList(state.computers, state.connected, actions.onForget)
     }
 }
+
+/** The last few things sent or received, with where they went and how fast. */
+@Composable
+private fun Recent(activity: List<Activity>, computers: List<PairedComputer>) {
+    if (activity.isEmpty()) return
+    Text(
+        stringResource(R.string.recent_title),
+        style = MaterialTheme.typography.titleMedium,
+        modifier = Modifier.semantics { heading() },
+    )
+    val names = computers.associate { it.deviceId to it.name }
+    Column {
+        activity.take(RECENT).forEach { ActivityRow(it, names) }
+    }
+}
+
+/** How many entries Recent shows. */
+private const val RECENT = 5
 
 /** The app's state in one line. */
 @Composable
@@ -138,27 +150,3 @@ private fun statusTitle(status: AppStatus): String = when (status) {
 
 @Composable
 private fun connectedText(count: Int): String = pluralStringResource(R.plurals.notification_connected, count, count)
-
-/** How long the last clip took to reach a computer: the latency the roadmap aims to keep under a second. */
-@Composable
-private fun LastDeliveryText(delivery: LastDelivery) {
-    val text = if (delivery.accepted) {
-        val size = Formatter.formatShortFileSize(LocalContext.current, delivery.bytes)
-        val format = if (delivery.screenshot) R.string.last_screenshot else R.string.last_send
-        stringResource(format, size, delivery.millis)
-    } else {
-        stringResource(R.string.last_refused)
-    }
-    Text(text, style = MaterialTheme.typography.bodySmall)
-}
-
-/** What the last clip from a computer was, and whether it made it to the phone's clipboard. */
-@Composable
-private fun LastReceivedText(received: LastReceived) {
-    val context = LocalContext.current
-    val kind = stringResource(if (received.mimeType.startsWith("image/")) R.string.kind_image else R.string.kind_text)
-    val size = Formatter.formatShortFileSize(context, received.bytes.toLong())
-    val time = DateFormat.getTimeFormat(context).format(Date(received.atMillis))
-    val format = if (received.onClipboard) R.string.last_received else R.string.last_received_failed
-    Text(stringResource(format, kind, size, time), style = MaterialTheme.typography.bodySmall)
-}

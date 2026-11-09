@@ -3,6 +3,7 @@
 package io.github.nexoryx.pasteget.ui
 
 import io.github.nexoryx.pasteget.AccessNotices
+import io.github.nexoryx.pasteget.Activity
 import io.github.nexoryx.pasteget.BuiltInState
 import io.github.nexoryx.pasteget.BuiltInStatus
 import io.github.nexoryx.pasteget.CodeAccess
@@ -27,6 +28,7 @@ object HomeFixtures {
         codesOn: Boolean = false,
         builtInStatus: BuiltInStatus = if (copiesOn) BuiltInStatus.NOT_SET_UP else BuiltInStatus.OFF,
         canNotify: Boolean = true,
+        activity: List<Activity> = emptyList(),
     ): HomeState {
         val builtIn = BuiltInState(builtInStatus)
         val shizuku = ShizukuState(if (copiesOn) ShizukuStatus.NOT_INSTALLED else ShizukuStatus.OFF)
@@ -49,8 +51,7 @@ object HomeFixtures {
             connected = connected,
             message = message,
             pairing = PairingState.Idle,
-            lastDelivery = null,
-            lastReceived = null,
+            activity = activity,
             screenshots = screenshots,
             photoRequestDenied = false,
             autoCopy = AutoCopyCardState(

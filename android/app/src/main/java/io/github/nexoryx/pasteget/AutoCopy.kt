@@ -118,6 +118,7 @@ class AutoCopy(private val app: PasteGetApp) {
             return
         }
         Log.i(TAG, "copy of $bytes bytes sent to $sentTo computers")
+        app.activity.sent(ActivityKind.TEXT, bytes, sentTo, automatic = true, sensitive = copy.sensitive)
         lastCopyState.value = LastCopy(System.currentTimeMillis(), bytes, sentTo)
     }
 

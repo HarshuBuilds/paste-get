@@ -34,22 +34,24 @@ object Sender {
     }
 
     suspend fun sendText(context: Context, text: String): String =
-        deliver(context) { it.sendText(text) }
+        deliver(context, ActivityKind.TEXT, text.encodeToByteArray().size) { it.sendText(text) }
 
     suspend fun sendImage(context: Context, uri: Uri): String = try {
         val image = withContext(Dispatchers.IO) { readImage(context, uri) }
-        deliver(context) { it.sendImage(image) }
+        deliver(context, ActivityKind.IMAGE, image.size) { it.sendImage(image) }
     } catch (e: Exception) {
         context.getString(R.string.send_failed, e.message ?: e.javaClass.simpleName)
     }
 
-    private suspend fun deliver(context: Context, send: (PhoneClient) -> UInt): String {
+    /** Sends [bytes] of [kind] with [send], and notes it in the activity log. */
+    private suspend fun deliver(context: Context, kind: ActivityKind, bytes: Int, send: (PhoneClient) -> UInt): String {
         val client = connectedClient(context)
         val sentTo = try {
             withContext(Dispatchers.IO) { send(client).toInt() }
         } catch (e: PastegetException) {
             return context.getString(R.string.send_failed, e.message)
         }
+        context.pasteGet.activity.sent(kind, bytes, sentTo, automatic = false)
         if (sentTo > 0) return resultText(context, sentTo, emptyList())
         val paired = withContext(Dispatchers.IO) { client.pairedComputers().map { it.name } }
         return resultText(context, sentTo, paired)

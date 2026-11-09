@@ -60,6 +60,7 @@ object ReceivedClips {
 
     private fun put(context: Context, mimeType: String, data: ByteArray, sensitive: Boolean) {
         val onClipboard = putOnClipboard(context, mimeType, data, sensitive)
+        context.pasteGet.activity.received(mimeType, data.size, sensitive, onClipboard)
         lastState.value = LastReceived(System.currentTimeMillis(), mimeType, data.size, onClipboard)
     }
 

@@ -77,7 +77,7 @@ class SyncService : Service() {
                     (screenshot?.let { ", $millis ms after Android announced the screenshot" } ?: "") +
                     if (delivery.accepted) "" else ", refused",
             )
-            pasteGet.setLastDelivery(LastDelivery(screenshot != null, size, millis, delivery.accepted))
+            pasteGet.activity.delivered(delivery.deviceId, delivery.mimeType, size.toInt(), millis, delivery.accepted)
         }
     }
 
@@ -211,6 +211,7 @@ class SyncService : Service() {
         val sendable = Sender.sendable(image)
         lastScreenshot = SentScreenshot(sendable.size.toLong(), announcedAtMs)
         val sentTo = pasteGet.client.sendImage(sendable).toInt()
+        pasteGet.activity.sent(ActivityKind.SCREENSHOT, sendable.size, sentTo, automatic = true)
         val readMs = SystemClock.elapsedRealtime() - announcedAtMs
         Log.i(TAG, "screenshot of ${sendable.size} bytes read in $readMs ms, sent to $sentTo computers")
     }

@@ -11,6 +11,8 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import io.github.nexoryx.pasteget.ActivityKind
+import io.github.nexoryx.pasteget.ActivityLog
 import io.github.nexoryx.pasteget.R
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -68,6 +70,31 @@ class HomeScreenTest {
 
         compose.onNodeWithText(app.getString(R.string.send_clipboard_button)).assertIsEnabled().performClick()
         assertEquals(1, sends)
+    }
+
+    @Test
+    fun recentSaysWhereEachClipWentAndHowFast() {
+        val log = ActivityLog()
+        log.sent(ActivityKind.SCREENSHOT, 1_200_000, sentTo = 2, automatic = true)
+        log.delivered("a1", "image/png", 1_200_000, millis = 91, accepted = true)
+        log.delivered("b2", "image/png", 1_200_000, millis = 140, accepted = false)
+        log.sent(ActivityKind.TEXT, 12, sentTo = 0, automatic = false)
+        log.received("text/plain", 30, sensitive = false, onClipboard = true)
+        show(HomeFixtures.state(computers = listOf(HomeFixtures.hp, HomeFixtures.arch), activity = log.entries.value))
+
+        compose.onNodeWithText(app.getString(R.string.recent_title)).performScrollTo().assertIsDisplayed()
+        val delivered = app.getString(R.string.activity_delivered, "HP-AIO", 91) + ", " +
+            app.getString(R.string.activity_refused, "Arch-PC")
+        compose.onNodeWithText(delivered).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(app.getString(R.string.send_waits)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(app.getString(R.string.activity_on_clipboard)).performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun withNothingSentThereIsNoRecentList() {
+        show(HomeFixtures.state(computers = listOf(HomeFixtures.hp)))
+
+        compose.onNodeWithText(app.getString(R.string.recent_title)).assertDoesNotExist()
     }
 
     @Test

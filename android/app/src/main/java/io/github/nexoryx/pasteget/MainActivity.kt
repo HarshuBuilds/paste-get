@@ -86,12 +86,11 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun Home() {
         val connected by pasteGet.connected.collectAsStateWithLifecycle()
-        val lastDelivery by pasteGet.lastDelivery.collectAsStateWithLifecycle()
+        val activity by pasteGet.activity.entries.collectAsStateWithLifecycle()
         val builtIn by pasteGet.autoCopy.builtIn.state.collectAsStateWithLifecycle()
         val shizuku by pasteGet.autoCopy.shizuku.state.collectAsStateWithLifecycle()
         val logs by pasteGet.autoCopy.logs.state.collectAsStateWithLifecycle()
         val lastCopy by pasteGet.autoCopy.lastCopy.collectAsStateWithLifecycle()
-        val lastReceived by ReceivedClips.last.collectAsStateWithLifecycle()
         val lastCode by OneTimeCodes.last.collectAsStateWithLifecycle()
         // The built-in mode grants the permission that lets the app hide the notices.
         LaunchedEffect(builtIn.status) { model.refreshNotices() }
@@ -116,8 +115,7 @@ class MainActivity : ComponentActivity() {
                 connected = connected,
                 message = model.message,
                 pairing = model.pairing,
-                lastDelivery = lastDelivery,
-                lastReceived = lastReceived,
+                activity = activity,
                 screenshots = model.screenshots,
                 photoRequestDenied = model.photoRequestDenied,
                 autoCopy = AutoCopyCardState(
