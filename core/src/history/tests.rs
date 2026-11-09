@@ -1616,6 +1616,27 @@ fn what_came_from_a_device_can_go_with_it() {
 }
 
 #[test]
+fn the_id_of_a_deleted_item_is_never_reused() {
+    let mut test = Test::new();
+    let Recorded::Added(image) = test.received_image(png(1, 100)) else {
+        panic!("not added");
+    };
+    // The app is still making its thumbnail when the user deletes it.
+    test.store.delete(&[image]).unwrap();
+    let Recorded::Added(next) = test.received_image(png(2, 100)) else {
+        panic!("not added");
+    };
+    assert!(next > image);
+    test.store.set_thumbnail(image, JPEG_THUMB, 10, 10).unwrap();
+    assert_eq!(test.store.thumbnail(next).unwrap(), None);
+
+    // Nor after everything is cleared, nor after a restart.
+    test.store.clear(i64::MIN..i64::MAX, true).unwrap();
+    let mut test = test.reopen();
+    assert!(test.added("new") > next);
+}
+
+#[test]
 fn freed_space_goes_back_to_the_file_system() {
     let mut test = Test::new();
     let ids: Vec<ItemId> = (0..300)

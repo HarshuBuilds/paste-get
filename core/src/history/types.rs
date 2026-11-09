@@ -10,7 +10,8 @@ use super::Error;
 use crate::detect::Category;
 use crate::identity::DeviceId;
 
-/// An item of the history. Stable for as long as the item exists; never reused.
+/// An item of the history. Stable for as long as the item exists, and never given to another
+/// item after it is deleted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ItemId(pub i64);
 

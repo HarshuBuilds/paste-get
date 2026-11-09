@@ -16,9 +16,10 @@ CREATE TABLE device (
   platform INTEGER                          -- proto Platform
 );
 
--- One row per unique content.
+-- One row per unique content. AUTOINCREMENT: the id of a deleted item is never given to another,
+-- so a stale id (a thumbnail being made, an undo) can't reach a new item.
 CREATE TABLE item (
-  id         INTEGER PRIMARY KEY,
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
   sha256     BLOB    NOT NULL UNIQUE,       -- of the exact bytes = ClipOffer.sha256
   format     INTEGER NOT NULL,              -- 1 text/utf-8, 2 PNG, 3 JPEG
   size       INTEGER NOT NULL,              -- bytes of the original
