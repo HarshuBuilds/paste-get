@@ -3019,6 +3019,7 @@ dependencies = [
  "bytes",
  "data-encoding",
  "form_urlencoded",
+ "futures-util",
  "proptest",
  "prost",
  "prost-build",

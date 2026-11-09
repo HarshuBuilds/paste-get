@@ -201,7 +201,7 @@ The query uses `application/x-www-form-urlencoded` encoding.
 | `v` | Invite format version: `0` |
 | `id` | Device ID of the PC (52 base32 characters) |
 | `s` | One-time secret: 16 random bytes, unpadded base32 (26 characters) |
-| `a` | Comma-separated socket addresses where the PC listens, e.g. `192.168.1.20:47290,[fe80::1]:47290` |
+| `a` | Comma-separated socket addresses where the PC listens, likeliest to work first, e.g. `192.168.1.20:47290,[fe80::1]:47290` |
 | `n` | PC name, for display |
 
 Rules for readers:
@@ -214,8 +214,9 @@ Rules for readers:
 
 1. The PC opens a **pairing window**: a fresh secret, valid for **5 minutes**, for **one**
    successful pairing, and closed after **3 wrong secrets**.
-2. The phone connects to one of the addresses, **pinning the device ID from the QR code**
-   (section 2.3).
+2. The phone connects to the addresses, **pinning the device ID from the QR code** (section
+   2.3). It may try them all at once and keep the first that pairs: a window pairs one device
+   once, so two attempts that both reach the PC can't both succeed.
 3. The PC sees an unknown client while its window is open. It waits for a `PairRequest`, and
    anything else closes the connection.
 4. The phone sends `PairRequest { secret, device_name }`.

@@ -19,13 +19,18 @@ use std::str::FromStr;
 use std::time::{Duration, Instant};
 
 use data_encoding::BASE32_NOPAD;
+use futures_util::StreamExt;
+use futures_util::stream::FuturesUnordered;
 use ring::rand::{SecureRandom, SystemRandom};
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::TcpStream;
+use tokio::time::timeout;
 use zeroize::Zeroizing;
 
 use crate::identity::{DeviceId, Identity};
 use crate::proto::{Envelope, Hello, PairRequest, PairResponse, envelope::Payload};
+use crate::session::HANDSHAKE_TIMEOUT;
 use crate::transport::{self, Connection, TransportError, UnverifiedConnection};
 
 /// How long a pairing QR code stays valid.
@@ -99,7 +104,8 @@ impl fmt::Debug for PairingSecret {
 pub struct PairingInvite {
     pub device_id: DeviceId,
     pub device_name: String,
-    /// Where the inviting device listens. The new device tries them in order.
+    /// Where the inviting device listens, likeliest first. The new device tries them all at
+    /// once ([`pair_with_any_address`]).
     pub addresses: Vec<SocketAddr>,
     pub secret: PairingSecret,
 }
@@ -248,6 +254,134 @@ impl PairingWindow {
         }
         Err(PairingError::WrongSecret)
     }
+}
+
+/// Why pairing through one address of a pairing code failed.
+#[derive(Debug)]
+pub enum AttemptError {
+    /// Nothing answered within [`HANDSHAKE_TIMEOUT`].
+    TimedOut,
+    /// No connection: refused, unreachable…
+    Connect(std::io::Error),
+    /// Something answered, and pairing failed.
+    Pairing(PairingError),
+}
+
+impl fmt::Display for AttemptError {
+    /// A few words: it goes in a list of every address tried.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TimedOut => write!(f, "no answer in {} s", HANDSHAKE_TIMEOUT.as_secs()),
+            Self::Connect(e) | Self::Pairing(PairingError::Transport(TransportError::Io(e))) => {
+                // The TLS handshake pins the key of the device in the code.
+                let wrong_key = e
+                    .get_ref()
+                    .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+                    .is_some_and(|tls| matches!(tls, rustls::Error::InvalidCertificate(_)));
+                if wrong_key {
+                    f.write_str("a different device answered")
+                } else {
+                    f.write_str(&short_io_reason(e))
+                }
+            }
+            Self::Pairing(e) => e.fmt(f),
+        }
+    }
+}
+
+/// "connection refused" rather than "Connection refused (os error 111)".
+fn short_io_reason(e: &std::io::Error) -> String {
+    use std::io::ErrorKind;
+    match e.kind() {
+        kind @ (ErrorKind::ConnectionRefused
+        | ErrorKind::ConnectionReset
+        | ErrorKind::ConnectionAborted
+        | ErrorKind::HostUnreachable
+        | ErrorKind::NetworkUnreachable
+        | ErrorKind::NetworkDown
+        | ErrorKind::TimedOut
+        | ErrorKind::AddrNotAvailable) => kind.to_string(),
+        _ => e.to_string(),
+    }
+}
+
+/// Pairing failed through every address of a pairing code.
+#[derive(Debug)]
+pub struct NoAddressWorked {
+    /// Each address, in the code's order, and why it failed.
+    pub attempts: Vec<(SocketAddr, AttemptError)>,
+}
+
+impl NoAddressWorked {
+    /// Whether the device itself answered through one of them (and refused), rather than none
+    /// reaching it.
+    pub fn reached_the_device(&self) -> bool {
+        self.attempts.iter().any(|(_, error)| {
+            matches!(error, AttemptError::Pairing(e) if !matches!(e, PairingError::Transport(_)))
+        })
+    }
+}
+
+impl fmt::Display for NoAddressWorked {
+    /// "192.168.1.20:47290: connection refused; 10.0.0.2:47290: no answer in 10 s".
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.attempts.is_empty() {
+            return f.write_str("the pairing code has no address");
+        }
+        for (i, (address, error)) in self.attempts.iter().enumerate() {
+            if i > 0 {
+                f.write_str("; ")?;
+            }
+            write!(f, "{address}: {error}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for NoAddressWorked {}
+
+/// New-device side: pairs with the device from `invite`, through the first of its addresses
+/// that works. Returns that address too.
+///
+/// All addresses are tried at once, each for at most [`HANDSHAKE_TIMEOUT`]; the first to pair
+/// wins and the others are dropped. That is safe because a code pairs one device once: two
+/// attempts that both reach the device can't both succeed, so none that succeeded is dropped.
+pub async fn pair_with_any_address(
+    identity: &Identity,
+    invite: &PairingInvite,
+    device_name: &str,
+) -> Result<(PairedDevice, SocketAddr), NoAddressWorked> {
+    let mut attempts: FuturesUnordered<_> = invite
+        .addresses
+        .iter()
+        .enumerate()
+        .map(|(index, &address)| async move {
+            let attempt = async {
+                let socket = TcpStream::connect(address)
+                    .await
+                    .map_err(AttemptError::Connect)?;
+                pair_with(socket, identity, invite, device_name)
+                    .await
+                    .map_err(AttemptError::Pairing)
+            };
+            let result = timeout(HANDSHAKE_TIMEOUT, attempt)
+                .await
+                .unwrap_or(Err(AttemptError::TimedOut));
+            (index, address, result)
+        })
+        .collect();
+
+    let mut failed = Vec::new();
+    while let Some((index, address, result)) = attempts.next().await {
+        match result {
+            Ok(paired) => return Ok((paired, address)),
+            Err(e) => failed.push((index, address, e)),
+        }
+    }
+    failed.sort_by_key(|(index, ..)| *index);
+    Err(NoAddressWorked {
+        attempts: failed.into_iter().map(|(_, a, e)| (a, e)).collect(),
+    })
 }
 
 /// New-device side: connects to the device from `invite` over `io` and pairs.
@@ -437,7 +571,9 @@ pub fn sanitize_device_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::Ipv4Addr;
     use tokio::io::duplex;
+    use tokio::net::TcpListener;
 
     fn sample_invite() -> (Identity, PairingWindow, PairingInvite) {
         let pc = Identity::generate().unwrap();
@@ -646,6 +782,110 @@ mod tests {
             panic!("expected a Hello");
         };
         assert_eq!(hello.device_name, "POCO");
+    }
+
+    /// A port nothing listens on.
+    async fn closed_port() -> SocketAddr {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        listener.local_addr().unwrap()
+    }
+
+    /// Listens as `identity` and answers one pairing attempt from `window`.
+    async fn pairing_server(
+        identity: Identity,
+        mut window: PairingWindow,
+    ) -> (
+        SocketAddr,
+        tokio::task::JoinHandle<Result<PairedDevice, PairingError>>,
+    ) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.map_err(TransportError::from)?;
+            let incoming = transport::accept(socket, &identity).await?;
+            accept_pairing(incoming, &mut window, "PC").await
+        });
+        (address, server)
+    }
+
+    #[tokio::test]
+    async fn pairs_through_whichever_address_works() {
+        let (pc, window, mut invite) = sample_invite();
+        let pc_id = pc.device_id();
+        let (pc_address, pc_side) = pairing_server(pc, window).await;
+        let (impostor, _) = pairing_server(
+            Identity::generate().unwrap(),
+            PairingWindow::open(Instant::now()).unwrap(),
+        )
+        .await;
+        invite.addresses = vec![closed_port().await, impostor, pc_address];
+        let phone = Identity::generate().unwrap();
+
+        let (paired, address) = pair_with_any_address(&phone, &invite, "POCO")
+            .await
+            .unwrap();
+
+        assert_eq!(address, pc_address);
+        assert_eq!(paired.device_id, pc_id);
+        assert_eq!(pc_side.await.unwrap().unwrap().device_name, "POCO");
+    }
+
+    #[tokio::test]
+    async fn says_why_each_address_failed() {
+        let (pc, window, mut invite) = sample_invite();
+        let (pc_address, _) = pairing_server(pc, window).await;
+        let (impostor, _) = pairing_server(
+            Identity::generate().unwrap(),
+            PairingWindow::open(Instant::now()).unwrap(),
+        )
+        .await;
+        let closed = closed_port().await;
+        invite.addresses = vec![closed, impostor];
+        let phone = Identity::generate().unwrap();
+
+        let unreachable = pair_with_any_address(&phone, &invite, "POCO")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            unreachable.to_string(),
+            format!("{closed}: connection refused; {impostor}: a different device answered")
+        );
+        assert!(!unreachable.reached_the_device());
+
+        // The PC itself answers, and refuses: a stale code.
+        invite.addresses = vec![pc_address];
+        invite.secret = PairingSecret::generate().unwrap();
+        let refused = pair_with_any_address(&phone, &invite, "POCO")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refused.to_string(),
+            format!("{pc_address}: the other device refused to pair")
+        );
+        assert!(refused.reached_the_device());
+    }
+
+    #[test]
+    fn failed_addresses_read_well() {
+        let failed = NoAddressWorked {
+            attempts: vec![
+                (
+                    "192.168.1.20:47290".parse().unwrap(),
+                    AttemptError::TimedOut,
+                ),
+                (
+                    "10.0.0.2:47290".parse().unwrap(),
+                    AttemptError::Connect(std::io::ErrorKind::NetworkUnreachable.into()),
+                ),
+            ],
+        };
+
+        assert_eq!(
+            failed.to_string(),
+            "192.168.1.20:47290: no answer in 10 s; 10.0.0.2:47290: network unreachable"
+        );
+        let none = NoAddressWorked { attempts: vec![] };
+        assert_eq!(none.to_string(), "the pairing code has no address");
     }
 
     #[tokio::test]

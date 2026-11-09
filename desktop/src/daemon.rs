@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use pasteget_core::clip::{Clip, Kind, mime};
 use pasteget_core::detect;
 use pasteget_core::echo::EchoGuard;
@@ -259,31 +259,17 @@ impl Daemon {
 
     /// Pairs with the device that shows `invite`, then keeps a connection to it.
     pub async fn join(&self, invite: &PairingInvite) -> Result<KnownDevice> {
-        let mut last_error = anyhow!("the pairing code has no address");
-        for address in &invite.addresses {
-            let attempt = async {
-                let socket = TcpStream::connect(address).await?;
-                pairing::pair_with(
-                    socket,
-                    &self.shared.identity,
-                    invite,
-                    &self.shared.device_name,
-                )
+        let (paired, worked) =
+            pairing::pair_with_any_address(&self.shared.identity, invite, &self.shared.device_name)
                 .await
-                .map_err(anyhow::Error::from)
-            };
-            match timeout(HANDSHAKE_TIMEOUT, attempt).await {
-                Ok(Ok(paired)) => {
-                    let device = KnownDevice::joined(paired, invite.addresses.clone());
-                    self.shared.remember(device.clone())?;
-                    self.shared.start_dialer(device.clone());
-                    return Ok(device);
-                }
-                Ok(Err(e)) => last_error = e.context(format!("pairing through {address} failed")),
-                Err(_) => last_error = anyhow!("{address} did not answer"),
-            }
-        }
-        Err(last_error)
+                .context("could not pair")?;
+        // The address that worked is dialed first.
+        let mut addresses = vec![worked];
+        addresses.extend(invite.addresses.iter().filter(|a| **a != worked));
+        let device = KnownDevice::joined(paired, addresses);
+        self.shared.remember(device.clone())?;
+        self.shared.start_dialer(device.clone());
+        Ok(device)
     }
 
     /// Sends content to every connected device, even while paused. Returns how many it was
@@ -440,19 +426,21 @@ impl Shared {
         if let Some(ips) = &self.advertised_ips {
             return Ok(ips.clone());
         }
-        let mut ips: Vec<IpAddr> = if_addrs::get_if_addrs()
+        let addresses = if_addrs::get_if_addrs()
             .context("could not list network interfaces")?
             .into_iter()
             .filter(|interface| {
                 interface.is_oper_up() && !interface.is_loopback() && !interface.is_link_local()
             })
-            .map(|interface| interface.ip())
             // The listener is IPv4-only for now.
-            .filter(IpAddr::is_ipv4)
+            .filter(|interface| interface.ip().is_ipv4())
+            .map(|interface| LocalAddress {
+                ip: interface.ip(),
+                point_to_point: interface.is_p2p,
+                interface: interface.name,
+            })
             .collect();
-        ips.sort();
-        ips.dedup();
-        Ok(ips)
+        Ok(likeliest_first(addresses))
     }
 
     fn set_paused(&self, paused: bool) -> bool {
@@ -540,7 +528,11 @@ impl Shared {
         let paired = match result {
             Ok(paired) => paired,
             Err(e) => {
-                let _ = self.events.send(Event::PairingFailed(e.to_string()));
+                // Closed: the code was used meanwhile, maybe by this device through another of
+                // its addresses, or closed after wrong attempts already reported.
+                if !matches!(e, PairingError::Closed) {
+                    let _ = self.events.send(Event::PairingFailed(e.to_string()));
+                }
                 return Err(e.into());
             }
         };
@@ -750,6 +742,86 @@ async fn handle_incoming(shared: Arc<Shared>, socket: TcpStream) -> Result<()> {
         Ok(result) => shared.paired(result),
         Err(_) => bail!("device {peer} did not send its pairing request in time"),
     }
+}
+
+/// An address of this PC, and the network interface it is on.
+#[derive(Debug)]
+struct LocalAddress {
+    interface: String,
+    /// VPN tunnels are point-to-point.
+    point_to_point: bool,
+    ip: IpAddr,
+}
+
+/// The addresses for a pairing code, the likeliest to reach this PC from a phone on the same
+/// network first: home networks (192.168.x, then 10.x), then 172.16-31.x (often Docker or WSL),
+/// then the rest, and interfaces that look virtual (VMs, containers, VPNs) last.
+fn likeliest_first(mut addresses: Vec<LocalAddress>) -> Vec<IpAddr> {
+    addresses.sort_by_key(|address| (likelihood_rank(address), address.ip));
+    let mut ips = Vec::new();
+    for address in addresses {
+        if !ips.contains(&address.ip) {
+            ips.push(address.ip);
+        }
+    }
+    ips
+}
+
+/// Lower is likelier.
+fn likelihood_rank(address: &LocalAddress) -> u8 {
+    if address.point_to_point || looks_virtual(&address.interface) {
+        return 4;
+    }
+    match address.ip {
+        IpAddr::V4(ip) => match ip.octets() {
+            [192, 168, ..] => 0,
+            [10, ..] => 1,
+            [172, 16..=31, ..] => 2,
+            _ => 3,
+        },
+        IpAddr::V6(_) => 3,
+    }
+}
+
+/// Interfaces of virtual machines, containers and VPNs, by the names they get on Linux
+/// (`docker0`, `virbr0`, `wg0`…) and on Windows (`vEthernet (WSL)`, `VMware Network Adapter
+/// VMnet8`…).
+fn looks_virtual(interface: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "docker",
+        "br-",
+        "veth",
+        "virbr",
+        "vboxnet",
+        "vmnet",
+        "vnet",
+        "tun",
+        "tap",
+        "wg",
+        "tailscale",
+        "zt",
+        "lxc",
+        "lxd",
+        "podman",
+        "cni",
+        "utun",
+    ];
+    const PARTS: &[&str] = &[
+        "vethernet",
+        "hyper-v",
+        "wsl",
+        "virtualbox",
+        "vmware",
+        "docker",
+        "vpn",
+        "wireguard",
+        "tailscale",
+        "zerotier",
+        "tap-windows",
+    ];
+    let name = interface.to_lowercase();
+    PREFIXES.iter().any(|prefix| name.starts_with(prefix))
+        || PARTS.iter().any(|part| name.contains(part))
 }
 
 /// Checks a pairing secret against the window, which closes once used or expired.
@@ -1116,6 +1188,105 @@ mod tests {
         .await;
 
         assert!(matches!(second, Err(PairingError::NoLongerShown)));
+    }
+
+    #[tokio::test]
+    async fn joining_says_why_each_address_failed() {
+        let pc = start("pc").await;
+        let laptop = start("laptop").await;
+        let mut invite = pc.daemon.open_pairing().await.unwrap();
+        let closed = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        invite.addresses = vec![closed];
+
+        let error = laptop.daemon.join(&invite).await.unwrap_err();
+        assert_eq!(
+            format!("{error:#}"),
+            format!("could not pair: {closed}: connection refused")
+        );
+
+        // With the PC's own address after it, it pairs, and dials that address first.
+        invite.addresses.push(pc.daemon.local_addr());
+        let joined = laptop.daemon.join(&invite).await.unwrap();
+        assert_eq!(joined.addresses, [pc.daemon.local_addr(), closed]);
+        assert!(wait_for_async(|| connected(&laptop.daemon)).await);
+    }
+
+    #[test]
+    fn pairing_codes_list_the_likeliest_addresses_first() {
+        let address = |interface: &str, ip: &str| LocalAddress {
+            interface: interface.into(),
+            point_to_point: false,
+            ip: ip.parse().unwrap(),
+        };
+        let mut vpn = address("ppp0", "100.64.0.7");
+        vpn.point_to_point = true;
+
+        let ordered = likeliest_first(vec![
+            address("vEthernet (WSL (Hyper-V firewall))", "172.25.80.1"),
+            address("docker0", "172.17.0.1"),
+            address("wg0", "10.8.0.2"),
+            vpn,
+            address("eth1", "172.20.1.5"),
+            address("Ethernet", "10.0.0.12"),
+            address("VirtualBox Host-Only Network", "192.168.56.1"),
+            address("Wi-Fi", "192.168.1.20"),
+            address("enp3s0", "192.168.1.21"),
+            address("eth0", "203.0.113.9"),
+            address("Wi-Fi 2", "192.168.1.20"),
+        ]);
+
+        let expected = [
+            "192.168.1.20",
+            "192.168.1.21",
+            "10.0.0.12",
+            "172.20.1.5",
+            "203.0.113.9",
+            // Virtual: last.
+            "10.8.0.2",
+            "100.64.0.7",
+            "172.17.0.1",
+            "172.25.80.1",
+            "192.168.56.1",
+        ];
+        assert_eq!(ordered, expected.map(|ip| ip.parse::<IpAddr>().unwrap()));
+    }
+
+    #[test]
+    fn virtual_interfaces_are_recognized_by_name() {
+        for name in [
+            "docker0",
+            "br-3f2a9c1d",
+            "virbr0",
+            "vboxnet0",
+            "vmnet8",
+            "tun0",
+            "tap0",
+            "wg0",
+            "tailscale0",
+            "vEthernet (Default Switch)",
+            "VMware Network Adapter VMnet1",
+            "VirtualBox Host-Only Network",
+            "ZeroTier One [8056c2e21c000001]",
+            "OpenVPN TAP-Windows6",
+        ] {
+            assert!(looks_virtual(name), "{name}");
+        }
+        for name in [
+            "Wi-Fi",
+            "Ethernet",
+            "Ethernet 2",
+            "eth0",
+            "enp3s0",
+            "wlp2s0",
+            "wlan0",
+            "br0",
+        ] {
+            assert!(!looks_virtual(name), "{name}");
+        }
     }
 
     #[tokio::test]

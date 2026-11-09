@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use pasteget_core::clip::mime;
 use pasteget_core::identity::Identity;
+use pasteget_core::pairing::PairingInvite;
 use pasteget_desktop::clipboard::{Content, MemoryClipboard, Raw, RgbaImage};
 use pasteget_desktop::config::Profile;
 use pasteget_desktop::daemon::{Daemon, DaemonOptions};
@@ -616,6 +617,47 @@ fn a_jpeg_from_one_phone_reaches_another_through_the_pc() {
     // Not back to the phone it came from.
     std::thread::sleep(Duration::from_millis(200));
     assert!(first.listener.clips.lock().unwrap().is_empty());
+}
+
+/// The error names every address of the code, with its own reason.
+#[test]
+fn pairing_says_why_each_address_failed() {
+    let pc = start_pc();
+    let other_pc = start_pc();
+    let mut invite: PairingInvite = pc
+        .runtime
+        .block_on(pc.daemon.open_pairing())
+        .unwrap()
+        .to_uri()
+        .parse()
+        .unwrap();
+    let closed = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let other = other_pc.daemon.local_addr();
+    invite.addresses = vec![closed, other];
+    let phone_dir = tempfile::tempdir().unwrap();
+    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+
+    let error = phone.pair(invite.to_uri()).unwrap_err();
+    assert!(matches!(error, PastegetError::Unreachable(_)));
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "could not reach the computer: {closed}: connection refused; \
+             {other}: a different device answered"
+        )
+    );
+
+    // With the PC's own address too, it pairs, and that address is dialed first.
+    let address = pc.daemon.local_addr();
+    invite.addresses.push(address);
+    let computer = phone.pair(invite.to_uri()).unwrap();
+    assert_eq!(
+        computer.addresses,
+        [address, closed, other].map(|a| a.to_string())
+    );
 }
 
 #[test]

@@ -61,7 +61,9 @@ Each line is a claim to check. "→" points at where it's enforced.
    constant time, valid once, for 5 minutes, at most 3 wrong tries. → `PairingWindow::check`
 9. The secret is zeroized after use and never logged or `Debug`-printed. → `PairingSecret`
 10. The phone pins the device ID from the QR code before sending the secret, so a machine that
-    doesn't own that key never sees the secret. → `pair_with`
+    doesn't own that key never sees the secret. → `pair_with`. It tries every address of the
+    code at once and drops the rest after the first success, which can't drop another success:
+    the window accepts the secret once. → `pair_with_any_address`
 11. Invite parsing rejects what `PROTOCOL.md` §5.1 says to reject (length, version, duplicates,
     missing keys) and can't panic. → `PairingInvite::from_str`, fuzz target `pairing_invite`
 12. Device names from peers are sanitized before display or storage.

@@ -14,6 +14,8 @@ workspace = true
 bytes = "1"
 data-encoding = "2"
 form_urlencoded = "1"
+# Tries a pairing code's addresses at once (`FuturesUnordered`).
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 prost = "0.14"
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
 ring = "0.17"

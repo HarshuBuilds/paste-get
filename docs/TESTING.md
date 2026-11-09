@@ -144,6 +144,7 @@ The phone and the PC must be on the **same Wi-Fi**. On the PC, run `pasteget dae
 | P8 | Restart the phone, wait a minute, repeat P3 | Still works (the app restarts on boot) |
 | P9 | Scan the PC's pairing QR code with the **normal camera app** (only if it offers to open the link; not every camera does) | paste-get opens and pairs |
 | P10 | On the phone only, forget the computer (the PC still lists it). PC: `pasteget pair`, scan the new code | Phone: "Paired with …", then "Connected to 1 computer". The PC lists the phone once |
+| P11 | Turn the phone's Wi-Fi off (mobile data on), scan a pairing code | Within about 10 s, an error that lists each address of the code with its reason, the PC's Wi-Fi or Ethernet address first |
 
 Phone logs never contain clipboard contents either. To get them: `adb logcat -s paste-get`.
 

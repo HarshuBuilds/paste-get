@@ -27,9 +27,8 @@ use pasteget_core::echo::EchoGuard;
 use pasteget_core::identity::{DeviceId, Identity};
 use pasteget_core::pairing::{self, PairingInvite, sanitize_device_name};
 use pasteget_core::proto::{AckStatus, Hello, PROTOCOL_VERSION, Platform};
-use pasteget_core::session::{self, Delivery, HANDSHAKE_TIMEOUT, Peers, SessionEvents};
+use pasteget_core::session::{self, Delivery, Peers, SessionEvents};
 use serde::{Deserialize, Serialize};
-use tokio::net::TcpStream;
 use tokio::runtime::Runtime;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -173,19 +172,35 @@ impl PhoneClient {
         lock(&self.state.computers).clone()
     }
 
-    /// Pairs with the computer whose QR code was scanned. Blocks for up to ~10 s per address.
+    /// Pairs with the computer whose QR code was scanned. Tries all the code's addresses at
+    /// once and blocks for up to ~10 s. The error names each address and why it failed.
     pub fn pair(&self, invite_uri: String) -> Result<PairedComputer, PastegetError> {
         let invite: PairingInvite = invite_uri
             .trim()
             .parse()
             .map_err(|_| PastegetError::InvalidCode)?;
-        let paired = self
+        let (paired, worked) = self
             .runtime
-            .block_on(pair_with_any_address(&self.state, &invite))?;
+            .block_on(pairing::pair_with_any_address(
+                &self.state.identity,
+                &invite,
+                &self.state.device_name,
+            ))
+            .map_err(|failed| {
+                if failed.reached_the_device() {
+                    PastegetError::PairingFailed(failed.to_string())
+                } else {
+                    PastegetError::Unreachable(failed.to_string())
+                }
+            })?;
         let computer = PairedComputer {
             device_id: paired.device_id.to_string(),
             name: paired.device_name,
-            addresses: invite.addresses.iter().map(SocketAddr::to_string).collect(),
+            // The address that worked is dialed first.
+            addresses: found_first([worked], invite.addresses.iter().copied())
+                .iter()
+                .map(SocketAddr::to_string)
+                .collect(),
         };
         {
             let mut computers = lock(&self.state.computers);
@@ -462,29 +477,6 @@ impl SessionEvents for State {
             });
         }
     }
-}
-
-async fn pair_with_any_address(
-    state: &State,
-    invite: &PairingInvite,
-) -> Result<pairing::PairedDevice, PastegetError> {
-    let mut last_error = PastegetError::Unreachable("the code has no address".into());
-    for address in &invite.addresses {
-        let attempt = async {
-            let socket = TcpStream::connect(address)
-                .await
-                .map_err(|e| PastegetError::Unreachable(format!("{address}: {e}")))?;
-            pairing::pair_with(socket, &state.identity, invite, &state.device_name)
-                .await
-                .map_err(|e| PastegetError::PairingFailed(e.to_string()))
-        };
-        match tokio::time::timeout(HANDSHAKE_TIMEOUT, attempt).await {
-            Ok(Ok(paired)) => return Ok(paired),
-            Ok(Err(e)) => last_error = e,
-            Err(_) => last_error = PastegetError::Unreachable(format!("{address} did not answer")),
-        }
-    }
-    Err(last_error)
 }
 
 fn parse_addresses(addresses: &[String]) -> Vec<SocketAddr> {
