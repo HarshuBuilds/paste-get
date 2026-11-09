@@ -191,6 +191,15 @@ say that it arrived, never what it holds.
   characters are removed and it is cut to 64 characters. A one-time code offer that isn't text is
   treated as a copy.
 
+**`age_ms`** is how long ago the clip was copied on its origin device, in milliseconds, as far as
+the sender knows: 0 for a copy it just made, and for a clip it passes on, the age it arrived with
+plus the time since. An age rather than a time, so that the devices' clocks don't need to agree.
+Copies made on both sides while they couldn't reach each other cross when they reconnect (each
+sends the clip still waiting for the other). A receiver whose own clip for the sender, not
+acknowledged yet, was copied more recently answers `OK` but doesn't apply the received clip; the
+sender gets the receiver's clip and applies it, so both end with the newer copy. A missing field
+reads as 0: clips from older senders are always applied, as before.
+
 ### 4.3 `Ping` / `Pong`
 
 Either side may send `Ping` at any time; the peer answers with a `Pong` carrying the same

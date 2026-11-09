@@ -159,6 +159,8 @@ pub fn outgoing(clip: &Clip) -> Result<impl Iterator<Item = Envelope> + '_, Rand
             Kind::Copy => String::new(),
             Kind::OneTimeCode { app } => app.clone(),
         },
+        // Set by the session, which knows when the clip was copied.
+        age_ms: 0,
     });
     let chunks = clip
         .data

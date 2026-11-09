@@ -141,7 +141,9 @@ History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart ac
   the built-in mode or Shizuku (`TESTING.md`, section 14)
 - [x] A copy made while a paired device is away waits for it and is sent when it connects
   again: the last one only, in memory, never a sensitive clip (`TESTING.md`, section 15). Also
-  when the connection died without closing: a copy waits until the device acknowledges it
+  when the connection died without closing: a copy waits until the device acknowledges it.
+  Copies made on both sides meanwhile cross on reconnection, and both keep the newer one (each
+  offer says how old its clip is, `ClipOffer.age_ms`)
 Desktop identity key in the OS keystore when one is available (M2 stores it in a user-only file,
 like SSH keys, because Hyprland setups often run no Secret Service).
 

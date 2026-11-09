@@ -503,8 +503,9 @@ async fn forward(
 }
 
 /// A session that died without closing looks alive until it times out (90 s): copies made
-/// meanwhile, on either side, go into it for nothing. They arrive once the device reconnects,
-/// and what the old session delivered isn't delivered again.
+/// meanwhile, on either side, go into it for nothing. They are sent again once the device
+/// reconnects, and both sides end with the newer one. What the old session delivered isn't
+/// delivered again.
 #[test]
 fn copies_made_while_a_session_is_silently_dead_arrive_when_it_reconnects() {
     let pc = start_pc();
@@ -568,9 +569,11 @@ fn copies_made_while_a_session_is_silently_dead_arrive_when_it_reconnects() {
     assert_eq!(received_on_the_phone(), ["before, from the PC"]);
     assert_eq!(recent_on_the_pc(), before);
 
-    // Copies made while it's dead go into it, on both sides, for nothing.
+    // Copies made while it's dead go into it, on both sides, for nothing: the PC's first, then
+    // the phone's.
     proxy.freeze();
     assert_eq!(pc.daemon.send(text("copied on the PC meanwhile")), 1);
+    std::thread::sleep(Duration::from_millis(50));
     assert_eq!(
         phone.copied_text("copied on the phone meanwhile".into(), false),
         Some(1)
@@ -578,16 +581,19 @@ fn copies_made_while_a_session_is_silently_dead_arrive_when_it_reconnects() {
     std::thread::sleep(Duration::from_millis(100));
     assert_eq!(received_on_the_phone().len(), 1);
 
-    // Once the phone reconnects, each arrives, once.
+    // Once the phone reconnects, they cross. Both sides keep the newer one, the phone's: the PC
+    // takes it, the phone drops the PC's (it came before the PC's ack of the phone's).
     proxy.hang_up_phone_side();
+    let delivered = || listener.deliveries.lock().unwrap().len();
     wait_until("the copies made meanwhile", || {
-        received_on_the_phone().len() == 2
+        delivered() == 2
             && pc.clipboard.get() == Some(Raw::Text("copied on the phone meanwhile".into()))
     });
     std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(received_on_the_phone(), ["before, from the PC"]);
     assert_eq!(
-        received_on_the_phone(),
-        ["before, from the PC", "copied on the PC meanwhile"]
+        pc.clipboard.get(),
+        Some(Raw::Text("copied on the phone meanwhile".into()))
     );
     assert_eq!(pc.daemon.recent().len(), 4);
 }

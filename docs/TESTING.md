@@ -488,6 +488,8 @@ land over it.
 | Q6 | PC off, copy on the phone, force-stop paste-get on the phone, start both | Nothing arrives: the copy was only in memory |
 | Q7 | Put the PC to sleep. Within a minute, copy a line on the phone (it may still say it went to 1 computer), then wake the PC | The line is in the PC's clipboard once the phone reconnects |
 | Q8 | With both connected, copy a line on the PC; once it's on the phone, turn the phone's Wi-Fi off and on | The line is not sent a second time when the phone reconnects |
+| Q9 | Turn the phone's Wi-Fi off. Right away copy a line on the PC, then a few seconds later another line on the phone, and turn Wi-Fi back on | Once the phone reconnects, both paste the phone's line: the PC's log says "clip received", the phone keeps its own |
+| Q10 | Same as Q9, but copy on the phone first, then on the PC | Both paste the PC's line; the PC's log says "clip dropped: a newer copy from here is on its way to the device" |
 
 ## Known limitations
 
@@ -498,6 +500,8 @@ land over it.
 - Only the last copy made while a device is away waits for it, in memory: it's lost if the
   sending side restarts first. Passwords and 2FA codes never wait, nor does the copy made
   before one.
+- When both sides copied while apart, the newer copy wins on both. Copies made within a few
+  milliseconds of each other (less than the network delay) can still end up crossed.
 - The phone shows nothing of its own when a clip from the PC arrives (Android 13 and later may
   show their clipboard preview); its home screen says what came last.
 - Only text copied on the phone is sent automatically, not images or files: share those.

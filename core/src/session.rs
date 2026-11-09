@@ -13,6 +13,9 @@
 //! [`Peers`] holds the outgoing queue of every connected device, so the app can send to all of
 //! them, and the last clip each paired device hasn't acknowledged, to send again when it
 //! reconnects. What to do with received clips (clipboard, relay, notification) is up to the app.
+//!
+//! Each offer says how long ago its clip was copied. When copies made on both sides while they
+//! were apart cross on the way, each side keeps the newer one, so that both end with it.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -113,6 +116,8 @@ pub struct Peers {
     /// The paired devices, connected or not ([`Peers::expect`]), and the last clip each one
     /// hasn't acknowledged yet.
     waiting: Mutex<HashMap<DeviceId, Option<Numbered>>>,
+    /// When the last clip received from each device was copied, for [`Peers::relay`].
+    received: Mutex<HashMap<DeviceId, Copied>>,
     next_session: AtomicU64,
     next_clip: AtomicU64,
 }
@@ -123,6 +128,29 @@ pub struct Peers {
 struct Numbered {
     number: u64,
     clip: Arc<Clip>,
+    copied: Copied,
+}
+
+/// When a clip was copied: `age` before `seen`, the moment it was copied here or reached this
+/// device. Kept as an age, like on the wire, so it never needs a time before this device started.
+#[derive(Clone, Copy, Debug)]
+struct Copied {
+    seen: Instant,
+    age: Duration,
+}
+
+impl Copied {
+    fn now() -> Self {
+        Self {
+            seen: Instant::now(),
+            age: Duration::ZERO,
+        }
+    }
+
+    /// How long ago the clip was copied.
+    fn age(&self) -> Duration {
+        self.seen.elapsed().saturating_add(self.age)
+    }
 }
 
 #[derive(Debug)]
@@ -175,6 +203,7 @@ impl Peers {
     /// The device was unpaired: nothing waits for it any more.
     pub fn unexpect(&self, peer: &DeviceId) {
         lock(&self.waiting).remove(peer);
+        lock(&self.received).remove(peer);
     }
 
     /// Queues `clip` for every connected device except `except`. Returns how many.
@@ -185,9 +214,25 @@ impl Peers {
     /// nothing. Secrets don't wait: a password or a code shouldn't turn up hours later. The clip
     /// before a secret doesn't wait either: it would land over the secret.
     pub fn broadcast(&self, clip: &Clip, except: Option<DeviceId>) -> usize {
+        self.queue(clip, except, Copied::now())
+    }
+
+    /// Like [`Peers::broadcast`], for a clip `from` just sent ([`SessionEvents::clip_received`])
+    /// and passed on to the other devices: it keeps the time it was copied there, not the time
+    /// it reached this one.
+    pub fn relay(&self, clip: &Clip, from: DeviceId) -> usize {
+        let copied = lock(&self.received)
+            .get(&from)
+            .copied()
+            .unwrap_or_else(Copied::now);
+        self.queue(clip, Some(from), copied)
+    }
+
+    fn queue(&self, clip: &Clip, except: Option<DeviceId>, copied: Copied) -> usize {
         let clip = Numbered {
             number: self.next_clip.fetch_add(1, Ordering::Relaxed),
             clip: Arc::new(clip.clone()),
+            copied,
         };
         // Held throughout, so that a session starting meanwhile gets the clip exactly once:
         // queued, or waiting for it.
@@ -276,6 +321,21 @@ impl Peers {
             },
         );
         (session, kicked)
+    }
+
+    /// Whether the clip waiting for `peer` was copied after a clip `peer` just sent, copied at
+    /// `theirs`: both were copied while they were apart, and crossed on the way. Then this side
+    /// keeps its own, and `peer`, which gets it, takes it: both end with the newer one.
+    fn has_newer_for(&self, peer: &DeviceId, theirs: &Copied) -> bool {
+        lock(&self.waiting)
+            .get(peer)
+            .and_then(Option::as_ref)
+            .is_some_and(|ours| ours.copied.age() < theirs.age())
+    }
+
+    /// `peer` sent a clip copied at `copied`, which the app may pass on ([`Peers::relay`]).
+    fn received_from(&self, peer: DeviceId, copied: Copied) {
+        lock(&self.received).insert(peer, copied);
     }
 
     /// `peer` acknowledged the clip `number`: if it's the one waiting for it, it waits no more.
@@ -559,8 +619,8 @@ async fn read_loop<R: AsyncRead + Unpin>(
     events: &dyn SessionEvents,
 ) -> Result<(), SessionError> {
     let mut receiver = ClipReceiver::default();
-    // When the offer of the clip being received arrived.
-    let mut offered_at = Instant::now();
+    // When the offer of the clip being received arrived, and how long ago it was copied by then.
+    let mut offered = Copied::now();
     loop {
         let Some(envelope) = timeout(IDLE_TIMEOUT, reader.recv())
             .await
@@ -570,7 +630,10 @@ async fn read_loop<R: AsyncRead + Unpin>(
         };
         let received = match envelope.payload {
             Some(Payload::ClipOffer(offer)) => {
-                offered_at = Instant::now();
+                offered = Copied {
+                    seen: Instant::now(),
+                    age: Duration::from_millis(offer.age_ms),
+                };
                 receiver.on_offer(offer)
             }
             Some(Payload::ClipChunk(chunk)) => receiver.on_chunk(chunk),
@@ -602,13 +665,23 @@ async fn read_loop<R: AsyncRead + Unpin>(
             }
             Received::Clip { clip, ack } => {
                 reply(replies, Payload::Ack(ack)).await?;
+                if peers.has_newer_for(&peer, &offered) {
+                    tracing::info!(
+                        %peer,
+                        mime_type = %clip.mime_type,
+                        len = clip.data.len(),
+                        "clip dropped: a newer copy from here is on its way to the device"
+                    );
+                    continue;
+                }
                 tracing::info!(
                     %peer,
                     mime_type = %clip.mime_type,
                     len = clip.data.len(),
-                    ms = offered_at.elapsed().as_millis(),
+                    ms = offered.seen.elapsed().as_millis(),
                     "clip received"
                 );
+                peers.received_from(peer, offered);
                 events.clip_received(peer, clip);
             }
         }
@@ -701,9 +774,11 @@ async fn write_loop<W: AsyncWrite + Unpin>(
                     Some(Outgoing::Clip { clip, queued_at }) => {
                         let envelopes = clip::outgoing(&clip.clip)
                             .map_err(|_| SessionError::Protocol("no randomness for a clip ID"))?;
-                        for envelope in envelopes {
+                        for mut envelope in envelopes {
                             // Recorded before the offer leaves, so its ack can't come first.
-                            if let Some(Payload::ClipOffer(offer)) = &envelope.payload {
+                            if let Some(Payload::ClipOffer(offer)) = &mut envelope.payload {
+                                offer.age_ms =
+                                    u64::try_from(clip.copied.age().as_millis()).unwrap_or(u64::MAX);
                                 await_ack(&awaiting, offer.clip_id.clone(), &clip, queued_at);
                             }
                             writer.send(&envelope).await?;
@@ -1347,6 +1422,77 @@ mod tests {
         pc_peers.register(phone.device_id(), sender);
         assert!(received.try_recv().is_err());
         assert_eq!(phone_events.clips.lock().unwrap().len(), 1);
+    }
+
+    /// Each side copied something while they were apart, and sends it once they reconnect: both
+    /// end with the newer copy, not with each other's.
+    #[tokio::test]
+    async fn copies_that_cross_end_with_the_newer_one_on_both_sides() {
+        let (phone, pc) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (phone_peers, pc_peers) = (Arc::new(Peers::new()), Arc::new(Peers::new()));
+        phone_peers.expect(pc.device_id());
+        pc_peers.expect(phone.device_id());
+        pc_peers.broadcast(&Clip::text("older, from the PC", pc.device_id()), None);
+        sleep(Duration::from_millis(50)).await;
+        let newer = Clip::text("newer, from the phone", phone.device_id());
+        phone_peers.broadcast(&newer, None);
+
+        let (phone_io, pc_io) = duplex(64 * 1024);
+        let (client, server) = tokio::join!(
+            transport::connect(phone_io, &phone, pc.device_id()),
+            async { transport::accept(pc_io, &pc).await?.authorize(|_| true) }
+        );
+        let (phone_events, pc_events) =
+            (Arc::new(Recorder::default()), Arc::new(Recorder::default()));
+        let _phone_session = tokio::spawn({
+            let (peers, events) = (Arc::clone(&phone_peers), Arc::clone(&phone_events));
+            async move { run_session(client.unwrap(), hello("phone"), &peers, &*events).await }
+        });
+        let _pc_session = tokio::spawn({
+            let (peers, events) = (Arc::clone(&pc_peers), Arc::clone(&pc_events));
+            async move { run_session(server.unwrap(), hello("pc"), &peers, &*events).await }
+        });
+        // Both were acknowledged: the phone has seen the PC's, and the PC the phone's.
+        until(|| {
+            !phone_events.deliveries.lock().unwrap().is_empty()
+                && !pc_events.deliveries.lock().unwrap().is_empty()
+        })
+        .await;
+
+        assert_eq!(
+            *pc_events.clips.lock().unwrap(),
+            [(phone.device_id(), newer)]
+        );
+        assert!(phone_events.clips.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_relayed_clip_keeps_the_time_it_was_copied() {
+        let peers = Peers::new();
+        let (phone, other) = (
+            Identity::generate().unwrap().device_id(),
+            Identity::generate().unwrap().device_id(),
+        );
+        peers.expect(other);
+        let an_hour = Duration::from_secs(3600);
+        peers.received_from(
+            phone,
+            Copied {
+                seen: Instant::now(),
+                age: an_hour,
+            },
+        );
+
+        peers.relay(&Clip::text("copied an hour ago", phone), phone);
+        let (sender, mut received) = mpsc::channel(4);
+        peers.register(other, sender);
+        assert!(next_clip(&mut received).unwrap().copied.age() >= an_hour);
+
+        // A copy made here is new.
+        peers.broadcast(&Clip::text("just copied", phone), None);
+        let (sender, mut received) = mpsc::channel(4);
+        peers.register(other, sender);
+        assert!(next_clip(&mut received).unwrap().copied.age() < an_hour);
     }
 
     #[tokio::test]

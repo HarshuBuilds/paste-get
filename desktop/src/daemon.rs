@@ -787,7 +787,7 @@ impl SessionEvents for Shared {
         if let Err(e) = self.clipboard.write(content, applied) {
             tracing::warn!(error = %e, "received clip not applied");
         }
-        self.peers.broadcast(&clip, Some(peer));
+        self.peers.relay(&clip, peer);
     }
 }
 

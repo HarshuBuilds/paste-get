@@ -46,6 +46,7 @@ mod tests {
                 sensitive: true,
                 kind: ClipKind::OneTimeCode.into(),
                 source_app: "Messages".into(),
+                age_ms: 90_000,
             })),
         };
 
