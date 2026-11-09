@@ -660,7 +660,11 @@ mod tests {
             })
             .await;
 
-            assert!(tray.is_finished());
+            // The tray quit with its own daemon.
+            tokio::time::timeout(Duration::from_secs(1), tray)
+                .await
+                .expect("the tray should have quit")
+                .unwrap();
             assert!(!control::is_running(&older.endpoint).await);
         });
     }
