@@ -54,6 +54,38 @@ const SHA256_LEN: usize = 32;
 #[error("could not generate a random clip ID")]
 pub struct RandomError;
 
+/// Names one copy on every device it reaches ([`ClipOffer::origin_clip_id`]): the device where it
+/// was copied picks it at random, and a device that passes the clip on keeps it. Not derived from
+/// the content: the same text copied again is a new copy, and the ID says nothing about it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct OriginClipId([u8; CLIP_ID_LEN]);
+
+impl OriginClipId {
+    pub fn random() -> Result<Self, RandomError> {
+        let mut bytes = [0; CLIP_ID_LEN];
+        SystemRandom::new()
+            .fill(&mut bytes)
+            .map_err(|_| RandomError)?;
+        Ok(Self(bytes))
+    }
+
+    pub const fn from_bytes(bytes: [u8; CLIP_ID_LEN]) -> Self {
+        Self(bytes)
+    }
+
+    /// The field of an offer: `None` when empty (an older sender), and `Err` when it isn't 16
+    /// bytes long.
+    pub fn from_offer(field: &[u8]) -> Result<Option<Self>, AckStatus> {
+        match field {
+            [] => Ok(None),
+            bytes => bytes
+                .try_into()
+                .map(|bytes| Some(Self(bytes)))
+                .map_err(|_| AckStatus::ProtocolError),
+        }
+    }
+}
+
 /// Longest app name a one-time code carries, in characters.
 pub const MAX_SOURCE_APP_CHARS: usize = 64;
 
@@ -67,6 +99,9 @@ pub struct Clip {
     /// Device where the clip was first copied.
     pub origin: DeviceId,
     pub kind: Kind,
+    /// Picked when the clip is first sent ([`crate::session::Peers::broadcast`]); `None` before,
+    /// and for a clip from an older device.
+    pub origin_clip_id: Option<OriginClipId>,
 }
 
 /// What a clip is, beyond its type, when its source knows.
@@ -87,6 +122,7 @@ impl Clip {
             sensitive: false,
             origin,
             kind: Kind::Copy,
+            origin_clip_id: None,
         }
     }
 
@@ -97,6 +133,7 @@ impl Clip {
             sensitive: false,
             origin,
             kind: Kind::Copy,
+            origin_clip_id: None,
         }
     }
 
@@ -132,6 +169,7 @@ impl fmt::Debug for Clip {
             .field("sensitive", &self.sensitive)
             .field("origin", &self.origin)
             .field("kind", &self.kind)
+            .field("origin_clip_id", &self.origin_clip_id)
             .finish()
     }
 }
@@ -161,6 +199,10 @@ pub fn outgoing(clip: &Clip) -> Result<impl Iterator<Item = Envelope> + '_, Rand
         },
         // Set by the session, which knows when the clip was copied.
         age_ms: 0,
+        origin_clip_id: clip
+            .origin_clip_id
+            .map(|id| id.0.to_vec())
+            .unwrap_or_default(),
     });
     let chunks = clip
         .data
@@ -207,6 +249,7 @@ struct Incoming {
     size: u64,
     sensitive: bool,
     kind: Kind,
+    origin_clip_id: Option<OriginClipId>,
     data: Vec<u8>,
 }
 
@@ -248,6 +291,10 @@ impl ClipReceiver {
         if offer.clip_id.len() != CLIP_ID_LEN || offer.sha256.len() != SHA256_LEN {
             return reject(AckStatus::ProtocolError);
         }
+        let origin_clip_id = match OriginClipId::from_offer(&offer.origin_clip_id) {
+            Ok(id) => id,
+            Err(status) => return reject(status),
+        };
         if !mime::is_supported(&offer.mime_type) {
             return reject(AckStatus::UnsupportedType);
         }
@@ -272,6 +319,7 @@ impl ClipReceiver {
             size: offer.size,
             sensitive: offer.sensitive || kind != Kind::Copy,
             kind,
+            origin_clip_id,
         };
         if incoming.size == 0 {
             return finish(incoming);
@@ -329,6 +377,7 @@ fn finish(incoming: Incoming) -> Received {
             sensitive: incoming.sensitive,
             origin: incoming.origin,
             kind: incoming.kind,
+            origin_clip_id: incoming.origin_clip_id,
         },
         ack,
     }
@@ -613,6 +662,42 @@ mod tests {
         );
         // The clip was dropped: further chunks are stray.
         assert_eq!(status(&receiver.on_chunk(second)), AckStatus::ProtocolError);
+    }
+
+    #[test]
+    fn the_origin_clip_id_crosses_the_wire_and_must_be_16_bytes() {
+        let id = OriginClipId::from_bytes([7; CLIP_ID_LEN]);
+        let clip = Clip {
+            origin_clip_id: Some(id),
+            ..Clip::text("copied once", ORIGIN)
+        };
+        let Received::Clip { clip: received, .. } = transfer(&clip, &mut ClipReceiver::default())
+        else {
+            panic!("refused");
+        };
+        assert_eq!(received.origin_clip_id, Some(id));
+
+        // Missing, from an older sender: the clip is taken without one.
+        let mut offer = offer_of(&Clip::text("", ORIGIN));
+        assert!(offer.origin_clip_id.is_empty());
+        let Received::Clip { clip, .. } = ClipReceiver::default().on_offer(offer.clone()) else {
+            panic!("refused");
+        };
+        assert_eq!(clip.origin_clip_id, None);
+
+        offer.origin_clip_id = vec![7; CLIP_ID_LEN - 1];
+        assert_eq!(
+            status(&ClipReceiver::default().on_offer(offer)),
+            AckStatus::ProtocolError
+        );
+    }
+
+    #[test]
+    fn random_origin_clip_ids_differ() {
+        assert_ne!(
+            OriginClipId::random().unwrap(),
+            OriginClipId::random().unwrap()
+        );
     }
 
     #[test]

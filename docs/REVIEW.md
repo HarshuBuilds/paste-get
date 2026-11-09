@@ -16,7 +16,7 @@ make trust decisions. In order of risk:
 | `core/src/transport.rs` | TLS 1.3 setup, custom certificate verifiers (pinning), ALPN, `UnverifiedConnection` | ~620 |
 | `core/src/pairing.rs` | Invite (QR code) parsing, pairing window, secret check, `pair_with` / `accept_pairing` | ~540 |
 | `core/src/identity.rs` | Ed25519 key, device ID = SHA-256 of the SPKI, certificate generation | ~200 |
-| `core/src/session.rs` | Session per device, reconnects, who may stay connected | ~670 |
+| `core/src/session.rs` | Session per device, reconnects, who may stay connected, which clips are taken and passed on | ~920 |
 | `core/src/clip.rs` | Clip offer/chunks/ack: sizes, offsets, hash check, reassembly | ~510 |
 | `core/src/framing.rs` | Length-prefixed frames, 1 MiB limit | ~190 |
 | `core/src/echo.rs` | Echo-loop guard (not a security boundary, but it hashes untrusted data) | ~120 |
@@ -24,9 +24,12 @@ make trust decisions. In order of risk:
 | `core/src/history/record.rs` | The one place that decides what the clipboard history keeps | ~380 |
 | `core/src/history/retention.rs` | Deleting from the history, and keeping it small | ~360 |
 | `desktop/src/daemon.rs` | `handle_incoming`: known device → session, unknown → pairing only while a window is open | part |
+| `desktop/src/admission.rs` | Limits on connections not known yet to come from a paired device | ~110 |
 | `desktop/src/control.rs` | Local control channel: Unix socket in a 0700 directory, Windows named pipe | ~550 |
 | `desktop/src/config.rs` | Key file permissions (0600), profile names (path traversal) | part |
 | `ffi/src/lib.rs` | The same decisions on the phone side, through the core | part |
+| `desktop/src/history.rs` | The PC's history: the same, plus thumbnails of images from other devices, and the `pasteget history` line format | ~340 |
+| `ffi/src/history.rs` | The phone's history: what the phone copies, sends and receives goes to `HistoryStore::record` on a thread of its own | ~870, half of it type mappings |
 | `android/…/OneTimeCodes.kt` | Notification listener for 2FA codes: what it reads, what it sends | ~170 |
 | `ffi/src/wireless_adb/` | ADB client for the phone's own wireless debugging: pairing (TLS 1.3 + BoringSSL SPAKE2 + AES-GCM), `exec:` over TLS | ~700 |
 | `android/…/ShellHelper.kt`, `ShellBinderProvider.kt`, `HiddenProviders.kt`, `BuiltInShell.kt` | The shell helper the app starts through it, and how it hands its binder to the app | ~600 |
@@ -62,9 +65,15 @@ Each line is a claim to check. "→" points at where it's enforced.
 7. An unknown device can do nothing but send one `PairRequest`, and only while a window is
    open. A paired device that sends a `PairRequest` instead of its `Hello` (pairing again) is
    checked against the same window. → `desktop/src/daemon.rs` `handle_incoming`,
-   `PAIRING_REQUEST_TIMEOUT`, `pairing::read_opening`
+   `UNKNOWN_DEADLINE`, `pairing::read_opening`. Connections not known to come from a paired
+   device are limited (3 s deadlines, 8 per IP, 64 in all; past that the oldest of the address
+   holding the most closes, and one from an address paired devices connected from only for
+   another such address), and one that was proven paired is no longer counted.
+   → `desktop/src/admission.rs` (`Admission::admit`, `State::to_close`, `Ticket::proven_paired`)
 8. The secret: 16 bytes from the system RNG (`ring::rand::SystemRandom`), compared in
-   constant time, valid once, for 5 minutes, at most 3 wrong tries. → `PairingWindow::check`.
+   constant time, valid once, for 5 minutes. Wrong tries don't close the window, so junk
+   requests can't keep closing it; the expiry and the connection limits (item 7) bound how
+   many tries there are. → `PairingWindow::check`.
    It runs under the window's lock, which is never held across network I/O: attempts made at
    once can't get around these limits, and a client that connects and stays silent holds up
    no other attempt. → `Shared::answer_pairing`, `PairingRequest::answer`
@@ -74,7 +83,12 @@ Each line is a claim to check. "→" points at where it's enforced.
     code at once and drops the rest after the first success, which can't drop another success:
     the window accepts the secret once. → `pair_with_any_address`
 11. Invite parsing rejects what `PROTOCOL.md` §5.1 says to reject (length, version, duplicates,
-    missing keys) and can't panic. → `PairingInvite::from_str`, fuzz target `pairing_invite`
+    missing keys) and can't panic. → `PairingInvite::from_str`, fuzz target `pairing_invite`.
+    Only an invite's addresses on the local network are dialed (private, link-local, IPv6
+    unique local; not `100.64/10`), and on the phone never loopback, before any connection. The
+    phone also drops, before TLS, a connection that reached one of its own other addresses
+    (its source address is the one dialed). → `pairing::Dial`, `on_local_network`,
+    `pair_with_any_address`, `connected_to_itself`, `ffi/src/lib.rs` `pair`
 12. Device names from peers are sanitized before display or storage, also when a paired
     device's `Hello` renames it. → `sanitize_device_name`, `KnownDevices::rename`,
     `ffi/src/lib.rs` `renamed`
@@ -86,7 +100,12 @@ Each line is a claim to check. "→" points at where it's enforced.
 14. A reassembled clip is checked against the offered SHA-256 before use.
 15. Images are checked (dimensions ≤ 16,384 px, decoded size ≤ 512 MiB) before decoding.
     → `desktop/src/clipboard.rs`
-16. A clip whose origin is this device is dropped (echo through another device). → `echo.rs`
+16. A clip whose origin is this device is dropped (echo through another device). → `echo.rs`.
+    A copy (`origin_device`, `origin_clip_id`) is taken once while it is remembered (10 minutes,
+    512 copies), and passed on at most once; a sensitive clip, a one-time code, a clip without
+    an ID or one copied over 10 minutes ago never. Nothing about the content is kept for this.
+    → `session.rs` (`SeenClips`, `Peers::relay`, `read_loop`), `desktop/src/daemon.rs`
+    `clip_received`
 
 ### Local attack surface
 17. Another user on the same machine can't talk to the daemon: socket in a 0700 profile
@@ -147,6 +166,16 @@ Each line is a claim to check. "→" points at where it's enforced.
     and `logs_never_hold_contents`. A search is parsed in Rust and reaches FTS5 only as quoted
     phrases, with control characters (NUL included) read as spaces, so no query can fail or be
     read as FTS5 syntax. → `core/src/history/query.rs` (fuzz target `history_query`)
+    On the phone, every clip goes through it too, sensitive ones included (they are counted),
+    from a queue that drops clips rather than make a session wait; a history that can't open
+    or write leaves syncing as it was. → `ffi/src/history.rs`, `ffi/src/lib.rs` (`State::keep`),
+    tests `the_history_never_keeps_a_secret` and `syncing_goes_on_when_the_history_cant_open`.
+    On the PC, likewise, what the *Recent* list gets. → `desktop/src/history.rs`,
+    `desktop/src/daemon.rs` (`remember_clip`), test `a_sensitive_clip_adds_no_row`.
+    On both, a panic on the history's thread (a bug, the app's listener throwing, an image that
+    breaks the decoder) loses that job only; the PC marks an image failed before decoding it,
+    so one that breaks the decoder isn't tried again. → `record_loop`, `make_thumbnails`, tests
+    `a_listener_that_throws_stops_nothing`, `an_image_that_breaks_the_decoder_stops_nothing`
 31. Deleting from the history leaves nothing of the clip: rows, body, thumbnail and search
     entries go in one transaction (`secure_delete`, FTS5 secure-delete), the original file
     after the commit, then the free pages and the WAL are emptied. The same goes for an expired

@@ -44,6 +44,8 @@ prost-build = "0.14"
 protox = "0.10"
 
 [dev-dependencies]
+# Finds an address of this machine other than loopback, to dial it in a pairing test.
+if-addrs = "0.15"
 proptest = "1"
 tempfile = "3"
 # Captures logs to check they never hold clip contents.

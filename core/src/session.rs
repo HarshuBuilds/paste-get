@@ -16,8 +16,12 @@
 //!
 //! Each offer says how long ago its clip was copied. When copies made on both sides while they
 //! were apart cross on the way, each side keeps the newer one, so that both end with it.
+//!
+//! A device can pass a clip on to the others ([`Peers::relay`]), so the same copy may reach a
+//! device twice, through two of them. Each copy carries an ID ([`OriginClipId`]) that the session
+//! remembers for a while ([`SeenClips`]): a second one is dropped before the app sees it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -28,7 +32,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, watch};
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep, sleep_until, timeout};
 
-use crate::clip::{self, Clip, ClipReceiver, Received};
+use crate::clip::{self, Clip, ClipReceiver, Kind, OriginClipId, Received};
 use crate::identity::{DeviceId, Identity};
 use crate::proto::envelope::Payload;
 use crate::proto::{Ack, AckStatus, Envelope, Hello, Ping, Pong, Unpaired};
@@ -50,6 +54,9 @@ const AWAITING_ACK: usize = 32;
 /// How long a session's writer has, once the session ends, to send what's left ([`Unpaired`]
 /// included) and close the connection.
 const WRITER_TIMEOUT: Duration = Duration::from_secs(1);
+/// How long a device remembers the copies it took ([`SeenClips`]), and how many at most.
+pub const SEEN_FOR: Duration = Duration::from_secs(10 * 60);
+pub const SEEN_MAX: usize = 512;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -119,6 +126,8 @@ pub struct Peers {
     waiting: Mutex<HashMap<DeviceId, Option<Numbered>>>,
     /// When the last clip received from each device was copied, for [`Peers::relay`].
     received: Mutex<HashMap<DeviceId, Copied>>,
+    /// The copies received lately, to take each one once.
+    seen: Mutex<SeenClips>,
     next_session: AtomicU64,
     next_clip: AtomicU64,
 }
@@ -151,6 +160,54 @@ impl Copied {
     /// How long ago the clip was copied.
     fn age(&self) -> Duration {
         self.seen.elapsed().saturating_add(self.age)
+    }
+}
+
+/// The copies a device took lately, by origin device and [`OriginClipId`], so that one reaching
+/// it again through another device is dropped. Kept [`SEEN_FOR`], [`SEEN_MAX`] at most, in memory
+/// only. It holds no hash of the content, so it says nothing about what was copied (a 2FA code,
+/// say).
+#[derive(Debug, Default)]
+pub struct SeenClips {
+    /// Oldest first.
+    entries: VecDeque<(std::time::Instant, DeviceId, OriginClipId)>,
+}
+
+impl SeenClips {
+    /// Remembers the copy `id` of `origin`, at `now`. Returns `false` if it was already there.
+    pub fn first_time(
+        &mut self,
+        origin: DeviceId,
+        id: OriginClipId,
+        now: std::time::Instant,
+    ) -> bool {
+        while self
+            .entries
+            .front()
+            .is_some_and(|(seen, ..)| now.saturating_duration_since(*seen) >= SEEN_FOR)
+        {
+            self.entries.pop_front();
+        }
+        if self
+            .entries
+            .iter()
+            .any(|(_, o, i)| *o == origin && *i == id)
+        {
+            return false;
+        }
+        if self.entries.len() >= SEEN_MAX {
+            self.entries.pop_front();
+        }
+        self.entries.push_back((now, origin, id));
+        true
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 }
 
@@ -209,30 +266,50 @@ impl Peers {
 
     /// Queues `clip` for every connected device except `except`. Returns how many.
     ///
+    /// A clip without an [`OriginClipId`] gets one here, once: every device gets the same, also
+    /// when it's sent again, so that one reached twice (through a device that passed it on) takes
+    /// it once.
+    ///
     /// Until it acknowledges the clip, a paired device gets it again when it connects, if it's
     /// still the last clip by then: one that isn't connected, and one whose session is dead but
     /// hasn't timed out yet (a PC asleep, a phone that just left the Wi-Fi), which queues it for
     /// nothing. Secrets don't wait: a password or a code shouldn't turn up hours later. The clip
     /// before a secret doesn't wait either: it would land over the secret.
     pub fn broadcast(&self, clip: &Clip, except: Option<DeviceId>) -> usize {
+        let mut clip = clip.clone();
+        if clip.origin_clip_id.is_none() {
+            // Without randomness it goes without one: it's taken, but not passed on.
+            clip.origin_clip_id = OriginClipId::random().ok();
+        }
         self.queue(clip, except, Copied::now())
     }
 
-    /// Like [`Peers::broadcast`], for a clip `from` just sent ([`SessionEvents::clip_received`])
-    /// and passed on to the other devices: it keeps the time it was copied there, not the time
-    /// it reached this one.
+    /// Passes on a clip `from` just sent ([`SessionEvents::clip_received`]) to the other devices
+    /// but its origin, like [`Peers::broadcast`]: it keeps its ID, and the time it was copied
+    /// there, not the time it reached this one. Returns how many it was queued for.
+    ///
+    /// A device takes each copy once ([`SeenClips`]), so it passes each one on at most once.
+    /// Not passed on at all:
+    /// - secrets and one-time codes: their origin sends them to the devices that trust it, and
+    ///   they go no further;
+    /// - a clip without an ID (from an older device): a device it reaches twice couldn't tell;
+    /// - a clip copied more than [`SEEN_FOR`] ago: a device may have forgotten taking it.
     pub fn relay(&self, clip: &Clip, from: DeviceId) -> usize {
         let copied = lock(&self.received)
             .get(&from)
             .copied()
             .unwrap_or_else(Copied::now);
-        self.queue(clip, Some(from), copied)
+        let secret = clip.sensitive || clip.kind != Kind::Copy;
+        if secret || clip.origin_clip_id.is_none() || copied.age() >= SEEN_FOR {
+            return 0;
+        }
+        self.queue(clip.clone(), Some(from), copied)
     }
 
-    fn queue(&self, clip: &Clip, except: Option<DeviceId>, copied: Copied) -> usize {
+    fn queue(&self, clip: Clip, except: Option<DeviceId>, copied: Copied) -> usize {
         let clip = Numbered {
             number: self.next_clip.fetch_add(1, Ordering::Relaxed),
-            clip: Arc::new(clip.clone()),
+            clip: Arc::new(clip),
             copied,
         };
         // Held throughout, so that a session starting meanwhile gets the clip exactly once:
@@ -246,7 +323,8 @@ impl Peers {
         }
         let mut queued = 0;
         for (id, queue) in queues.iter() {
-            if Some(*id) == except {
+            // The origin would drop its own clip.
+            if Some(*id) == except || *id == clip.clip.origin {
                 continue;
             }
             let outgoing = Outgoing::Clip {
@@ -337,6 +415,15 @@ impl Peers {
     /// `peer` sent a clip copied at `copied`, which the app may pass on ([`Peers::relay`]).
     fn received_from(&self, peer: DeviceId, copied: Copied) {
         lock(&self.received).insert(peer, copied);
+    }
+
+    /// Whether this is the first time `clip` reaches this device lately. A clip without an ID
+    /// (from an older device) always is.
+    fn first_time(&self, clip: &Clip) -> bool {
+        match clip.origin_clip_id {
+            Some(id) => lock(&self.seen).first_time(clip.origin, id, std::time::Instant::now()),
+            None => true,
+        }
     }
 
     /// `peer` acknowledged the clip `number`: if it's the one waiting for it, it waits no more.
@@ -668,6 +755,16 @@ async fn read_loop<R: AsyncRead + Unpin>(
             }
             Received::Clip { clip, ack } => {
                 reply(replies, Payload::Ack(ack)).await?;
+                // Through another device too, or sent again after an ack that got lost.
+                if !peers.first_time(&clip) {
+                    tracing::info!(
+                        %peer,
+                        mime_type = %clip.mime_type,
+                        len = clip.data.len(),
+                        "clip dropped: already received"
+                    );
+                    continue;
+                }
                 if peers.has_newer_for(&peer, &offered) {
                     tracing::info!(
                         %peer,
@@ -1149,9 +1246,12 @@ mod tests {
         .await;
         assert_eq!(*pc_events.connected.lock().unwrap(), ["phone"]);
 
-        let text = Clip::text("from the phone", phone.device_id());
+        let text = with_id(Clip::text("from the phone", phone.device_id()), 1);
         assert_eq!(phone_peers.broadcast(&text, None), 1);
-        let image = Clip::png(b"\x89PNG\r\n\x1a\nrest".to_vec(), pc.device_id());
+        let image = with_id(
+            Clip::png(b"\x89PNG\r\n\x1a\nrest".to_vec(), pc.device_id()),
+            2,
+        );
         assert_eq!(pc_peers.broadcast(&image, None), 1);
 
         until(|| !pc_events.clips.lock().unwrap().is_empty()).await;
@@ -1329,7 +1429,7 @@ mod tests {
         let id = Identity::generate().unwrap().device_id();
         peers.register(id, sender);
 
-        let clip = Clip::text("x", id);
+        let clip = Clip::text("x", Identity::generate().unwrap().device_id());
 
         assert_eq!(peers.broadcast(&clip, Some(id)), 0);
         assert_eq!(peers.broadcast(&clip, None), 1);
@@ -1355,12 +1455,16 @@ mod tests {
         peers.register(pc, sender);
         let missed = next_clip(&mut received).expect("the waiting clip was not sent");
         assert_eq!(missed.clip.data, b"last");
+        assert!(missed.clip.origin_clip_id.is_some());
         assert!(received.try_recv().is_err());
 
-        // Sent again until the PC acknowledges it: that session may have died too.
+        // Sent again until the PC acknowledges it: that session may have died too. With the same
+        // ID, so a PC that got it already drops it.
         let (again, mut received) = mpsc::channel(4);
         peers.register(pc, again);
-        assert_eq!(next_clip(&mut received).unwrap().number, missed.number);
+        let again = next_clip(&mut received).unwrap();
+        assert_eq!(again.number, missed.number);
+        assert_eq!(again.clip.origin_clip_id, missed.clip.origin_clip_id);
         peers.acknowledged(&pc, missed.number);
         let (acknowledged, mut nothing) = mpsc::channel(4);
         peers.register(pc, acknowledged);
@@ -1498,7 +1602,7 @@ mod tests {
         pc_peers.expect(phone.device_id());
         pc_peers.broadcast(&Clip::text("older, from the PC", pc.device_id()), None);
         sleep(Duration::from_millis(50)).await;
-        let newer = Clip::text("newer, from the phone", phone.device_id());
+        let newer = with_id(Clip::text("newer, from the phone", phone.device_id()), 1);
         phone_peers.broadcast(&newer, None);
 
         let (phone_io, pc_io) = duplex(64 * 1024);
@@ -1538,25 +1642,196 @@ mod tests {
             Identity::generate().unwrap().device_id(),
         );
         peers.expect(other);
-        let an_hour = Duration::from_secs(3600);
+        let minutes = Duration::from_secs(5 * 60);
         peers.received_from(
             phone,
             Copied {
                 seen: Instant::now(),
-                age: an_hour,
+                age: minutes,
             },
         );
 
-        peers.relay(&Clip::text("copied an hour ago", phone), phone);
+        peers.relay(&with_id(Clip::text("copied 5 min ago", phone), 1), phone);
         let (sender, mut received) = mpsc::channel(4);
         peers.register(other, sender);
-        assert!(next_clip(&mut received).unwrap().copied.age() >= an_hour);
+        assert!(next_clip(&mut received).unwrap().copied.age() >= minutes);
 
         // A copy made here is new.
         peers.broadcast(&Clip::text("just copied", phone), None);
         let (sender, mut received) = mpsc::channel(4);
         peers.register(other, sender);
-        assert!(next_clip(&mut received).unwrap().copied.age() < an_hour);
+        assert!(next_clip(&mut received).unwrap().copied.age() < minutes);
+    }
+
+    /// A clip with the given [`OriginClipId`], as it comes from a device that sent it.
+    fn with_id(clip: Clip, id: u8) -> Clip {
+        Clip {
+            origin_clip_id: Some(OriginClipId::from_bytes([id; 16])),
+            ..clip
+        }
+    }
+
+    #[tokio::test]
+    async fn a_relayed_clip_goes_to_the_others_and_never_a_secret() {
+        let peers = Peers::new();
+        let [origin, from, other] = [(); 3].map(|()| Identity::generate().unwrap().device_id());
+        let mut queues = [origin, from, other].map(|id| {
+            let (sender, queue) = mpsc::channel(4);
+            peers.register(id, sender);
+            queue
+        });
+        peers.received_from(from, Copied::now());
+        let copy = with_id(Clip::text("copied", origin), 1);
+
+        // Neither back to the device it came from nor to its origin.
+        assert_eq!(peers.relay(&copy, from), 1);
+        let [to_origin, to_from, to_other] = &mut queues;
+        assert_eq!(
+            next_clip(to_other).unwrap().clip.origin_clip_id,
+            copy.origin_clip_id
+        );
+        assert!(to_origin.try_recv().is_err());
+        assert!(to_from.try_recv().is_err());
+
+        // Secrets and codes go one hop only. A clip without an ID, from an older device, isn't
+        // passed on either: a device it reached twice couldn't tell.
+        let secret = Clip {
+            sensitive: true,
+            ..copy.clone()
+        };
+        let code = Clip {
+            origin_clip_id: copy.origin_clip_id,
+            ..Clip::one_time_code("482913", "Messages", origin)
+        };
+        let from_an_older_device = Clip {
+            origin_clip_id: None,
+            ..copy.clone()
+        };
+        for clip in [secret, code, from_an_older_device] {
+            assert_eq!(peers.relay(&clip, from), 0, "{clip:?}");
+        }
+        // Nor one copied too long ago: a device may have forgotten taking it.
+        peers.received_from(
+            from,
+            Copied {
+                seen: Instant::now(),
+                age: SEEN_FOR,
+            },
+        );
+        assert_eq!(peers.relay(&copy, from), 0);
+        assert!(to_other.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn broadcast_gives_each_copy_its_own_id_and_keeps_one_it_has() {
+        let peers = Peers::new();
+        let [origin, pc] = [(); 2].map(|()| Identity::generate().unwrap().device_id());
+        let (sender, mut queue) = mpsc::channel(4);
+        peers.register(pc, sender);
+
+        peers.broadcast(&Clip::text("same text", origin), None);
+        peers.broadcast(&Clip::text("same text", origin), None);
+        let relayed = with_id(Clip::text("passed on", origin), 9);
+        peers.broadcast(&relayed, None);
+
+        let [first, second, third] = [(); 3].map(|()| next_clip(&mut queue).unwrap());
+        assert!(first.clip.origin_clip_id.is_some());
+        assert_ne!(first.clip.origin_clip_id, second.clip.origin_clip_id);
+        assert_eq!(third.clip.origin_clip_id, relayed.origin_clip_id);
+    }
+
+    #[test]
+    fn seen_clips_take_each_copy_once_for_a_while() {
+        let mut seen = SeenClips::default();
+        let (phone, pc) = (
+            DeviceId::from_bytes([1; DeviceId::LEN]),
+            DeviceId::from_bytes([2; DeviceId::LEN]),
+        );
+        let id = OriginClipId::from_bytes([7; 16]);
+        let start = std::time::Instant::now();
+
+        assert!(seen.first_time(phone, id, start));
+        assert!(!seen.first_time(phone, id, start + Duration::from_secs(60)));
+        // The same ID from another origin is another copy.
+        assert!(seen.first_time(pc, id, start));
+        // Forgotten after a while.
+        assert!(!seen.first_time(phone, id, start + SEEN_FOR - Duration::from_secs(1)));
+        assert!(seen.first_time(phone, id, start + SEEN_FOR));
+        assert_eq!(seen.len(), 1);
+    }
+
+    #[test]
+    fn seen_clips_forget_the_oldest_when_full() {
+        let mut seen = SeenClips::default();
+        let phone = DeviceId::from_bytes([1; DeviceId::LEN]);
+        let id = |n: usize| {
+            let mut bytes = [0; 16];
+            bytes[..8].copy_from_slice(&(n as u64).to_le_bytes());
+            OriginClipId::from_bytes(bytes)
+        };
+        let now = std::time::Instant::now();
+
+        for n in 0..=SEEN_MAX {
+            assert!(seen.first_time(phone, id(n), now));
+        }
+
+        assert_eq!(seen.len(), SEEN_MAX);
+        assert!(!seen.first_time(phone, id(SEEN_MAX), now));
+        assert!(seen.first_time(phone, id(0), now));
+    }
+
+    /// Runs a session between `device` and `pc` over an in-memory connection. Returns the
+    /// device's peers and events.
+    async fn session_with(
+        device: &Identity,
+        pc: &Identity,
+        pc_peers: &Arc<Peers>,
+        pc_events: &Arc<Recorder>,
+    ) -> (Arc<Peers>, Arc<Recorder>) {
+        let (device_io, pc_io) = duplex(64 * 1024);
+        let (client, server) = tokio::join!(
+            transport::connect(device_io, device, pc.device_id()),
+            async { transport::accept(pc_io, pc).await?.authorize(|_| true) }
+        );
+        let (peers, events) = (Arc::new(Peers::new()), Arc::new(Recorder::default()));
+        tokio::spawn({
+            let (peers, events) = (Arc::clone(&peers), Arc::clone(&events));
+            async move { run_session(client.unwrap(), hello("device"), &peers, &*events).await }
+        });
+        tokio::spawn({
+            let (peers, events) = (Arc::clone(pc_peers), Arc::clone(pc_events));
+            async move { run_session(server.unwrap(), hello("pc"), &peers, &*events).await }
+        });
+        let id = device.device_id();
+        until(|| pc_peers.is_connected(&id)).await;
+        (peers, events)
+    }
+
+    /// A copy reaches the PC from the phone and from a laptop that passed it on: the PC takes it
+    /// once, and both hear it was delivered. The same text copied again is a new copy.
+    #[tokio::test]
+    async fn a_copy_that_arrives_twice_is_taken_once() {
+        let [phone, laptop, pc] = [(); 3].map(|()| Identity::generate().unwrap());
+        let (pc_peers, pc_events) = (Arc::new(Peers::new()), Arc::new(Recorder::default()));
+        let (phone_peers, phone_events) = session_with(&phone, &pc, &pc_peers, &pc_events).await;
+        let (laptop_peers, laptop_events) = session_with(&laptop, &pc, &pc_peers, &pc_events).await;
+        let copy = with_id(Clip::text("copied on the phone", phone.device_id()), 1);
+
+        phone_peers.broadcast(&copy, None);
+        laptop_peers.broadcast(&copy, None);
+
+        until(|| {
+            !phone_events.deliveries.lock().unwrap().is_empty()
+                && !laptop_events.deliveries.lock().unwrap().is_empty()
+        })
+        .await;
+        assert_eq!(pc_events.clips.lock().unwrap().len(), 1);
+
+        phone_peers.broadcast(&Clip::text("copied on the phone", phone.device_id()), None);
+        until(|| pc_events.clips.lock().unwrap().len() == 2).await;
+        let clips = pc_events.clips.lock().unwrap();
+        assert_eq!(clips[0].1.data, clips[1].1.data);
+        assert_ne!(clips[0].1.origin_clip_id, clips[1].1.origin_clip_id);
     }
 
     #[tokio::test]

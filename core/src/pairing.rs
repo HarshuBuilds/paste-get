@@ -12,9 +12,13 @@
 //! Each side then stores the other's [`PairedDevice`]; later connections are ordinary pinned TLS.
 //! A device that forgot the accepting one, which still knows it, can pair again the same way: the
 //! accepting side finds its request with [`read_opening`].
+//!
+//! A QR code can also arrive as a `pasteget://pair` link, which any web page or message can open.
+//! So only the addresses of a code that are on the local network are dialed ([`Dial`]): a code
+//! never makes a device connect across the Internet, nor a phone pair with another app on it.
 
 use std::fmt;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
@@ -36,9 +40,6 @@ use crate::transport::{self, Connection, TransportError, UnverifiedConnection};
 /// How long a pairing QR code stays valid.
 pub const PAIRING_TTL: Duration = Duration::from_secs(5 * 60);
 
-/// Wrong secrets tolerated before the window closes.
-pub const MAX_ATTEMPTS: u8 = 3;
-
 /// Longest device name kept, in characters.
 pub const MAX_DEVICE_NAME_CHARS: usize = 64;
 
@@ -56,7 +57,7 @@ pub enum PairingError {
     Random,
     #[error("the pairing code has expired")]
     Expired,
-    #[error("the pairing code was already used or too many wrong attempts were made")]
+    #[error("the pairing code was already used")]
     Closed,
     #[error("wrong pairing code")]
     WrongSecret,
@@ -189,6 +190,45 @@ impl FromStr for PairingInvite {
     }
 }
 
+/// Whether `ip` is on a local network: private IPv4 (10/8, 172.16/12, 192.168/16), link-local
+/// (169.254/16, fe80::/10) or IPv6 unique local (fc00::/7). Not public addresses, nor the
+/// carrier and VPN range 100.64/10, loopback, multicast, broadcast or unspecified ones.
+pub fn on_local_network(ip: IpAddr) -> bool {
+    match ip.to_canonical() {
+        IpAddr::V4(ip) => ip.is_private() || ip.is_link_local(),
+        IpAddr::V6(ip) => ip.is_unique_local() || ip.is_unicast_link_local(),
+    }
+}
+
+/// Which addresses of a pairing code [`pair_with_any_address`] pairs through: those on the local
+/// network ([`on_local_network`]), and this device's own ones only where they make sense.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dial {
+    /// Also this device's own addresses: a computer may pair with another paste-get running on
+    /// it (another profile).
+    LocalNetwork,
+    /// Not this device's own addresses: on a phone, what listens there is another app, which
+    /// pairing would let read every copy. Loopback ones aren't dialed; a connection that turns
+    /// out to reach this device through another of its addresses (its Wi-Fi or hotspot address,
+    /// say) is closed before anything is sent.
+    OtherDevicesOnly,
+}
+
+impl Dial {
+    /// Why `address` isn't dialed, if it isn't.
+    fn refuses(self, address: SocketAddr) -> Option<AttemptError> {
+        let ip = address.ip().to_canonical();
+        if ip.is_loopback() {
+            return (self == Self::OtherDevicesOnly).then_some(AttemptError::ThisDevice);
+        }
+        (!on_local_network(ip)).then_some(AttemptError::NotLocal)
+    }
+
+    pub fn allows(self, address: SocketAddr) -> bool {
+        self.refuses(address).is_none()
+    }
+}
+
 /// A device both sides have agreed to trust. The caller stores it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PairedDevice {
@@ -201,7 +241,6 @@ pub struct PairedDevice {
 pub struct PairingWindow {
     secret: PairingSecret,
     expires_at: Instant,
-    wrong_attempts: u8,
     closed: bool,
 }
 
@@ -211,7 +250,6 @@ impl PairingWindow {
         Ok(Self {
             secret: PairingSecret::generate()?,
             expires_at: now + PAIRING_TTL,
-            wrong_attempts: 0,
             closed: false,
         })
     }
@@ -237,6 +275,10 @@ impl PairingWindow {
     }
 
     /// Checks a secret. A match closes the window: each code pairs one device.
+    ///
+    /// Wrong secrets don't close it: anyone on the network can send them, and could otherwise
+    /// close every window as it opens. Guessing a 128-bit secret is hopeless however many tries
+    /// the 5 minutes allow.
     pub fn check(&mut self, candidate: &[u8], now: Instant) -> Result<(), PairingError> {
         if self.closed {
             return Err(PairingError::Closed);
@@ -248,10 +290,6 @@ impl PairingWindow {
             self.closed = true;
             return Ok(());
         }
-        self.wrong_attempts += 1;
-        if self.wrong_attempts >= MAX_ATTEMPTS {
-            self.closed = true;
-        }
         Err(PairingError::WrongSecret)
     }
 }
@@ -259,6 +297,10 @@ impl PairingWindow {
 /// Why pairing through one address of a pairing code failed.
 #[derive(Debug)]
 pub enum AttemptError {
+    /// Not dialed: the address isn't on the local network ([`Dial`]).
+    NotLocal,
+    /// Not paired through: the address is this device's own ([`Dial::OtherDevicesOnly`]).
+    ThisDevice,
     /// Nothing answered within [`HANDSHAKE_TIMEOUT`].
     TimedOut,
     /// No connection: refused, unreachable…
@@ -271,6 +313,8 @@ impl fmt::Display for AttemptError {
     /// A few words: it goes in a list of every address tried.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::NotLocal => f.write_str("not on the local network, not tried"),
+            Self::ThisDevice => f.write_str("an address of this device, not tried"),
             Self::TimedOut => write!(f, "no answer in {} s", HANDSHAKE_TIMEOUT.as_secs()),
             Self::Connect(e) | Self::Pairing(PairingError::Transport(TransportError::Io(e))) => {
                 // The TLS handshake pins the key of the device in the code.
@@ -343,27 +387,28 @@ impl std::error::Error for NoAddressWorked {}
 /// New-device side: pairs with the device from `invite`, through the first of its addresses
 /// that works. Returns that address too.
 ///
-/// All addresses are tried at once, each for at most [`HANDSHAKE_TIMEOUT`]; the first to pair
-/// wins and the others are dropped. That is safe because a code pairs one device once: two
-/// attempts that both reach the device can't both succeed, so none that succeeded is dropped.
+/// Only the addresses `dial` allows are dialed; the others fail at once. Those are tried all at
+/// once, each for at most [`HANDSHAKE_TIMEOUT`]; the first to pair wins and the others are
+/// dropped. That is safe because a code pairs one device once: two attempts that both reach the
+/// device can't both succeed, so none that succeeded is dropped.
 pub async fn pair_with_any_address(
     identity: &Identity,
     invite: &PairingInvite,
     device_name: &str,
+    dial: Dial,
 ) -> Result<(PairedDevice, SocketAddr), NoAddressWorked> {
-    let mut attempts: FuturesUnordered<_> = invite
-        .addresses
-        .iter()
-        .enumerate()
-        .map(|(index, &address)| async move {
-            let attempt = async {
-                let socket = TcpStream::connect(address)
-                    .await
-                    .map_err(AttemptError::Connect)?;
-                pair_with(socket, identity, invite, device_name)
-                    .await
-                    .map_err(AttemptError::Pairing)
-            };
+    let mut failed = Vec::new();
+    let mut allowed = Vec::new();
+    for (index, &address) in invite.addresses.iter().enumerate() {
+        match dial.refuses(address) {
+            Some(refused) => failed.push((index, address, refused)),
+            None => allowed.push((index, address)),
+        }
+    }
+    let mut attempts: FuturesUnordered<_> = allowed
+        .into_iter()
+        .map(|(index, address)| async move {
+            let attempt = pair_through(address, dial, identity, invite, device_name);
             let result = timeout(HANDSHAKE_TIMEOUT, attempt)
                 .await
                 .unwrap_or(Err(AttemptError::TimedOut));
@@ -371,7 +416,6 @@ pub async fn pair_with_any_address(
         })
         .collect();
 
-    let mut failed = Vec::new();
     while let Some((index, address, result)) = attempts.next().await {
         match result {
             Ok(paired) => return Ok((paired, address)),
@@ -382,6 +426,34 @@ pub async fn pair_with_any_address(
     Err(NoAddressWorked {
         attempts: failed.into_iter().map(|(_, a, e)| (a, e)).collect(),
     })
+}
+
+/// Connects to `address`, one that `dial` allows, and pairs through it.
+async fn pair_through(
+    address: SocketAddr,
+    dial: Dial,
+    identity: &Identity,
+    invite: &PairingInvite,
+    device_name: &str,
+) -> Result<PairedDevice, AttemptError> {
+    let socket = TcpStream::connect(address)
+        .await
+        .map_err(AttemptError::Connect)?;
+    if dial == Dial::OtherDevicesOnly
+        && connected_to_itself(&socket).map_err(AttemptError::Connect)?
+    {
+        return Err(AttemptError::ThisDevice);
+    }
+    pair_with(socket, identity, invite, device_name)
+        .await
+        .map_err(AttemptError::Pairing)
+}
+
+/// Whether `socket` reached this device: a connection to one of its own addresses (its Wi-Fi
+/// address, say) comes from that same address.
+fn connected_to_itself(socket: &TcpStream) -> std::io::Result<bool> {
+    let (local, peer) = (socket.local_addr()?, socket.peer_addr()?);
+    Ok(local.ip().to_canonical() == peer.ip().to_canonical())
 }
 
 /// New-device side: connects to the device from `invite` over `io` and pairs.
@@ -660,21 +732,23 @@ mod tests {
     }
 
     #[test]
-    fn window_closes_after_too_many_wrong_secrets() {
+    fn wrong_secrets_never_close_the_window() {
         let now = Instant::now();
         let mut window = PairingWindow::open(now).unwrap();
         let secret = window.secret.clone();
 
-        for _ in 0..MAX_ATTEMPTS {
+        // However many junk requests come in, as fast as a script sends them, the right secret
+        // still pairs.
+        for n in 0..10_000_u32 {
+            let mut wrong = [0; SECRET_LEN];
+            wrong[..4].copy_from_slice(&n.to_le_bytes());
             assert!(matches!(
-                window.check(&[0; SECRET_LEN], now),
+                window.check(&wrong, now),
                 Err(PairingError::WrongSecret)
             ));
         }
-        assert!(matches!(
-            window.check(secret.0.as_slice(), now),
-            Err(PairingError::Closed)
-        ));
+        assert!(window.is_open(now));
+        assert!(window.check(secret.0.as_slice(), now).is_ok());
     }
 
     #[test]
@@ -821,7 +895,7 @@ mod tests {
         invite.addresses = vec![closed_port().await, impostor, pc_address];
         let phone = Identity::generate().unwrap();
 
-        let (paired, address) = pair_with_any_address(&phone, &invite, "POCO")
+        let (paired, address) = pair_with_any_address(&phone, &invite, "POCO", Dial::LocalNetwork)
             .await
             .unwrap();
 
@@ -843,7 +917,7 @@ mod tests {
         invite.addresses = vec![closed, impostor];
         let phone = Identity::generate().unwrap();
 
-        let unreachable = pair_with_any_address(&phone, &invite, "POCO")
+        let unreachable = pair_with_any_address(&phone, &invite, "POCO", Dial::LocalNetwork)
             .await
             .unwrap_err();
         assert_eq!(
@@ -855,7 +929,7 @@ mod tests {
         // The PC itself answers, and refuses: a stale code.
         invite.addresses = vec![pc_address];
         invite.secret = PairingSecret::generate().unwrap();
-        let refused = pair_with_any_address(&phone, &invite, "POCO")
+        let refused = pair_with_any_address(&phone, &invite, "POCO", Dial::LocalNetwork)
             .await
             .unwrap_err();
         assert_eq!(
@@ -863,6 +937,122 @@ mod tests {
             format!("{pc_address}: the other device refused to pair")
         );
         assert!(refused.reached_the_device());
+    }
+
+    #[test]
+    fn only_local_network_addresses_are_dialed() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        for local in [
+            "10.0.0.2",
+            "172.16.0.1",
+            "172.31.255.254",
+            "192.168.1.20",
+            "169.254.10.1",
+            "fd12:3456::1",
+            "fe80::1",
+            "::ffff:192.168.1.20",
+        ] {
+            assert!(on_local_network(ip(local)), "{local}");
+        }
+        for elsewhere in [
+            "203.0.113.9",
+            "8.8.8.8",
+            "172.32.0.1",
+            "100.64.0.7",
+            "100.127.255.1",
+            "0.0.0.0",
+            "255.255.255.255",
+            "224.0.0.251",
+            "127.0.0.1",
+            "2001:db8::1",
+            "2a00:1450::1",
+            "ff02::fb",
+            "::",
+            "::1",
+            "::ffff:8.8.8.8",
+        ] {
+            assert!(!on_local_network(ip(elsewhere)), "{elsewhere}");
+        }
+
+        let address = |s: &str| s.parse::<SocketAddr>().unwrap();
+        // Loopback: a computer may pair with another profile on itself, a phone never.
+        for this_device in ["127.0.0.1:47290", "[::1]:47290", "[::ffff:127.0.0.1]:47290"] {
+            assert!(Dial::LocalNetwork.allows(address(this_device)));
+            assert!(!Dial::OtherDevicesOnly.allows(address(this_device)));
+        }
+        assert!(Dial::OtherDevicesOnly.allows(address("192.168.1.20:47290")));
+        assert!(!Dial::LocalNetwork.allows(address("203.0.113.9:47290")));
+    }
+
+    /// An app on a phone can listen on all of its addresses and open a pairing link with one of
+    /// them: the phone doesn't pair through its Wi-Fi address any more than through loopback.
+    #[tokio::test]
+    async fn a_phone_never_pairs_through_an_address_of_its_own() {
+        let own = if_addrs::get_if_addrs()
+            .unwrap()
+            .into_iter()
+            .map(|interface| interface.ip())
+            .find(|ip| ip.is_ipv4() && !ip.is_loopback());
+        let Some(own) = own else {
+            eprintln!("skipped: this machine has no address but loopback");
+            return;
+        };
+        let (app, mut window, invite) = sample_invite();
+        let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).await.unwrap();
+        let address = SocketAddr::new(own, listener.local_addr().unwrap().port());
+        let app_side = tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                // The phone's first try ends before TLS.
+                if let Ok(incoming) = transport::accept(socket, &app).await {
+                    return accept_pairing(incoming, &mut window, "HP-AIO").await;
+                }
+            }
+        });
+        let phone = Identity::generate().unwrap();
+
+        let refused = pair_through(address, Dial::OtherDevicesOnly, &phone, &invite, "POCO").await;
+        assert!(
+            matches!(refused, Err(AttemptError::ThisDevice)),
+            "{refused:?}"
+        );
+
+        // Only that check stopped it: a computer pairs through the same address.
+        let paired = pair_through(address, Dial::LocalNetwork, &phone, &invite, "POCO").await;
+        assert_eq!(paired.unwrap().device_name, "HP-AIO");
+        assert_eq!(app_side.await.unwrap().unwrap().device_name, "POCO");
+    }
+
+    /// A link from a web page names a server on the Internet: it's refused without being dialed
+    /// (dialing 203.0.113.9, which nothing answers, would take the full timeout).
+    #[tokio::test]
+    async fn a_code_for_a_server_on_the_internet_is_not_dialed() {
+        let (_, _, mut invite) = sample_invite();
+        let loopback = closed_port().await;
+        invite.addresses = vec![
+            "203.0.113.9:47290".parse().unwrap(),
+            "100.64.0.7:47290".parse().unwrap(),
+            loopback,
+        ];
+        let phone = Identity::generate().unwrap();
+
+        let refused = timeout(
+            Duration::from_secs(1),
+            pair_with_any_address(&phone, &invite, "POCO", Dial::OtherDevicesOnly),
+        )
+        .await
+        .expect("an address was dialed")
+        .unwrap_err();
+
+        assert_eq!(
+            refused.to_string(),
+            format!(
+                "203.0.113.9:47290: not on the local network, not tried; \
+                 100.64.0.7:47290: not on the local network, not tried; \
+                 {loopback}: an address of this device, not tried"
+            )
+        );
+        assert!(!refused.reached_the_device());
     }
 
     #[test]

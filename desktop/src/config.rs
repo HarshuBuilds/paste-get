@@ -5,15 +5,19 @@
 //! ```text
 //! <config dir>/paste-get/<profile>/
 //!   identity.key    Ed25519 private key (PKCS#8 DER). Readable by the user only.
-//!   settings.toml   Device name, port, notifications, links, hotkeys. Created with defaults, safe
-//!                   to edit.
+//!   settings.toml   Device name, port, notifications, links, hotkeys, history. Created with
+//!                   defaults, safe to edit.
 //!   devices.toml    Paired devices. Moved to devices.toml.bad if it can't be read, copied
 //!                   there if some entries can't.
+//! <data dir>/paste-get/<profile>/
+//!   history/        The clipboard history, when it is on (`core::history`).
 //! ```
 //!
 //! `<config dir>` is `%APPDATA%` on Windows and `$XDG_CONFIG_HOME` (`~/.config`) on Linux.
-//! `PASTEGET_HOME` replaces `<config dir>/paste-get`. Profiles let several daemons run on one
-//! machine, which is how the daemon is tested without a phone.
+//! `<data dir>` is `%LOCALAPPDATA%` on Windows, which doesn't roam to other PCs, and
+//! `$XDG_DATA_HOME` (`~/.local/share`) on Linux, which dotfile repositories leave out.
+//! `PASTEGET_HOME` replaces both `<config dir>/paste-get` and `<data dir>/paste-get`. Profiles let
+//! several daemons run on one machine, which is how the daemon is tested without a phone.
 
 use std::fs;
 use std::io::Write;
@@ -42,21 +46,28 @@ const DEVICES_FILE: &str = "devices.toml";
 pub struct Profile {
     name: String,
     dir: PathBuf,
+    /// Where its larger data goes: the history.
+    data_dir: PathBuf,
 }
 
 impl Profile {
     /// Opens (creating if needed) the profile `name` in the default location.
     pub fn open(name: &str) -> Result<Self> {
-        let base = match std::env::var_os("PASTEGET_HOME") {
-            Some(home) => PathBuf::from(home),
-            None => dirs::config_dir()
-                .context("could not find the user's configuration directory")?
-                .join("paste-get"),
-        };
-        Self::open_in(&base, name)
+        if let Some(home) = std::env::var_os("PASTEGET_HOME") {
+            return Self::open_in(Path::new(&home), name);
+        }
+        let config = dirs::config_dir()
+            .context("could not find the user's configuration directory")?
+            .join("paste-get");
+        let data = dirs::data_local_dir()
+            .context("could not find the user's data directory")?
+            .join("paste-get");
+        let mut profile = Self::open_in(&config, name)?;
+        profile.data_dir = data.join(name);
+        Ok(profile)
     }
 
-    /// Opens (creating if needed) the profile `name` under `base`.
+    /// Opens (creating if needed) the profile `name` under `base`, which also holds its data.
     pub fn open_in(base: &Path, name: &str) -> Result<Self> {
         let valid = !name.is_empty()
             && name.len() <= 32
@@ -70,6 +81,7 @@ impl Profile {
         create_private_dir(&dir)?;
         Ok(Self {
             name: name.to_owned(),
+            data_dir: dir.clone(),
             dir,
         })
     }
@@ -80,6 +92,11 @@ impl Profile {
 
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// The folder of the clipboard history, created when the history opens.
+    pub fn history_dir(&self) -> PathBuf {
+        self.data_dir.join("history")
     }
 
     /// Loads this device's identity, creating it on first use.
@@ -212,8 +229,34 @@ pub struct Settings {
     pub notify: NotifyFor,
     /// A link copied on another device shows a notification that opens it when clicked.
     pub offer_to_open_links: bool,
-    /// Global hotkeys. Must stay last: TOML puts tables after plain keys.
+    /// Global hotkeys. Tables stay last: TOML puts them after plain keys.
     pub hotkeys: HotkeySettings,
+    /// The clipboard history, `[history]`.
+    pub history: HistorySettings,
+}
+
+/// `[history]` in `settings.toml`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HistorySettings {
+    /// Keep a history of what is copied here, sent and received. Off unless turned on.
+    /// Passwords and codes are never kept.
+    pub enabled: bool,
+    /// Items not pinned are deleted this many days after they were last copied; 0 keeps them.
+    pub keep_for_days: u32,
+    /// Keep numbers of 4 to 8 digits alone (often codes) for 15 minutes; `false` never keeps
+    /// them.
+    pub keep_bare_codes: bool,
+}
+
+impl Default for HistorySettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            keep_for_days: 90,
+            keep_bare_codes: true,
+        }
+    }
 }
 
 /// `notify = "images"` in `settings.toml`.
@@ -243,6 +286,7 @@ impl Default for Settings {
             notify: NotifyFor::default(),
             offer_to_open_links: true,
             hotkeys: HotkeySettings::default(),
+            history: HistorySettings::default(),
         }
     }
 }
@@ -544,6 +588,29 @@ mod tests {
             hotkeys.send_clipboard,
             HotkeySettings::default().send_clipboard
         );
+
+        // The history is off until turned on.
+        assert!(!defaults.history.enabled);
+        fs::write(
+            profile.dir().join(SETTINGS_FILE),
+            "[history]\nenabled = true\nkeep_for_days = 0\n",
+        )
+        .unwrap();
+        let history = profile.settings().unwrap().history;
+        assert!(history.enabled);
+        assert_eq!(history.keep_for_days, 0);
+        assert!(history.keep_bare_codes);
+    }
+
+    /// With `PASTEGET_HOME` (tests, two profiles side by side), the history goes there too.
+    #[test]
+    fn the_history_is_in_the_profile_s_data_folder() {
+        let (base, profile) = profile();
+
+        assert_eq!(
+            profile.history_dir(),
+            base.path().join("test").join("history")
+        );
     }
 
     #[test]
@@ -553,6 +620,7 @@ mod tests {
 
         let text = fs::read_to_string(profile.dir().join(SETTINGS_FILE)).unwrap();
         assert!(text.contains("[hotkeys]"));
+        assert!(text.contains("[history]"));
         assert_eq!(profile.settings().unwrap(), Settings::default());
     }
 

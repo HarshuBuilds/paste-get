@@ -55,6 +55,17 @@ ignored, and the certificate may be regenerated at any time without changing the
   - **otherwise** → send a `Refusal` with reason `NOT_PAIRED` and close the connection, without
     acting on anything the client sent. (It reads and discards what arrives for a moment before
     closing, so that TCP doesn't reset the connection and lose the refusal.)
+- **Limits.** Anyone on the network can open a connection, so the accepting side limits those
+  not known yet to come from a paired device (in their TLS handshake, or from a device that
+  isn't paired): **3 s** for the TLS handshake, 3 s more for the first message of a device that
+  isn't paired, at most **8 at once from one IP address** (one more is closed at once) and **64
+  in all**. One more makes another close: the oldest of the address holding the most places,
+  so that a device flooding from a few addresses only closes its own. Connections from the
+  addresses paired devices last connected from (16, in memory) go last: one is never closed for
+  one from another address, which is refused instead when only those are left. A connection is no longer counted once the handshake proved its device is paired. So a
+  paired device gets in during a flood of silent connections, and during one that reconnects
+  without pause if it connects from an address a paired device used since the PC started, or
+  if the flood comes from fewer than 64 addresses.
 - **Unpairing**: the device that forgets a peer deletes its ID, closes any session with it at
   once and stops dialing it. If a session with it is open, it first sends `Unpaired` in it
   (section 4.4): the peer forgets that device too, at once, whichever side dialed. Otherwise,
@@ -149,8 +160,8 @@ Only one clip is in flight per direction at a time: a new `ClipOffer` cancels an
 - A chunk carries **1 to 262 144 bytes** (256 KiB). Senders use full-size chunks except the last.
 - Receivers choose their maximum clip size (default **64 MiB**) and answer `TOO_LARGE` to bigger
   offers right away. They must not allocate `size` bytes up front based on the offer alone.
-- `clip_id` is 16 bytes, `sha256` and `origin_device` are 32 bytes; anything else is a
-  `PROTOCOL_ERROR`.
+- `clip_id` is 16 bytes, `sha256` and `origin_device` are 32 bytes, `origin_clip_id` is empty
+  or 16 bytes; anything else is a `PROTOCOL_ERROR`.
 - When the clip is complete, the receiver checks the hash, then that the content matches its type:
   valid UTF-8 for text, the PNG or JPEG signature for images. Failing content is a
   `PROTOCOL_ERROR`.
@@ -174,9 +185,12 @@ Only one clip is in flight per direction at a time: a new `ClipOffer` cancels an
 Images in any other format are converted to PNG before sending. A receiver decodes images with
 limits on their dimensions and memory, since a small file can claim a huge size.
 
-**`origin_device`** is the device ID of the device where the clip was first copied. A device
-never re-sends a clip it received (see *Echo loops*), and ignores offers whose
-`origin_device` is itself.
+**`origin_device`** is the device ID of the device where the clip was first copied, and
+**`origin_clip_id`** names that copy: 16 random bytes the origin picks once per copy, and sends
+unchanged each time it sends that copy (to each device, and again after a reconnection). A device
+that passes the clip on keeps both (section 6). Neither says anything about the content: the same
+text copied twice is two copies. An offer without `origin_clip_id` comes from an older sender. A
+device ignores offers whose `origin_device` is itself.
 
 **`sensitive`** means the source marked the clip as secret (password, 2FA code). Receivers put it
 on the clipboard but must keep it out of history and OS clipboard managers. A notification may
@@ -235,7 +249,7 @@ The query uses `application/x-www-form-urlencoded` encoding.
 | `v` | Invite format version: `0` |
 | `id` | Device ID of the PC (52 base32 characters) |
 | `s` | One-time secret: 16 random bytes, unpadded base32 (26 characters) |
-| `a` | Comma-separated socket addresses where the PC listens, likeliest to work first, e.g. `192.168.1.20:47290,[fe80::1]:47290` |
+| `a` | Comma-separated socket addresses where the PC listens, likeliest to work first, e.g. `192.168.1.20:47290,[fe80::1]:47290`. Only addresses on the local network (below) |
 | `n` | PC name, for display |
 
 Rules for readers:
@@ -243,13 +257,24 @@ Rules for readers:
   missing `id`, `s` or `a`.
 - Ignore unknown keys: they are reserved for later versions.
 - Device names are untrusted: strip control characters, trim, keep at most 64 characters.
+- **Dial only addresses on the local network**: private IPv4 (`10.0.0.0/8`, `172.16.0.0/12`,
+  `192.168.0.0/16`), link-local (`169.254.0.0/16`, `fe80::/10`) and IPv6 unique local
+  (`fc00::/7`); IPv4-mapped IPv6 addresses count as their IPv4 address. Never public addresses,
+  `100.64.0.0/10` (carrier networks, VPNs such as Tailscale), multicast, broadcast or
+  unspecified ones. A phone never pairs through an address of its own either: what listens there
+  is another app. It doesn't dial loopback, and closes, before TLS, a connection whose source
+  address is the address it dialed: that is how a connection to one of its own addresses (Wi-Fi,
+  hotspot, VPN) looks. A computer may (`pasteget join` with another profile on the same machine).
+  The others are reported as not tried. An invite can come from a link that any web page or app
+  opens: this keeps it from making the device connect across the Internet.
 
 ### 5.2 Exchange
 
 1. The PC opens a **pairing window**: a fresh secret, valid for **5 minutes**, for **one**
-   successful pairing, and closed after **3 wrong secrets**.
-2. The phone connects to the addresses, **pinning the device ID from the QR code** (section
-   2.3). It may try them all at once and keep the first that pairs: a window pairs one device
+   successful pairing. Wrong secrets don't close it, however many: anyone on the network can
+   send a `PairRequest`, and could otherwise close every window as it opens.
+2. The phone connects to the addresses it may dial (section 5.1), **pinning the device ID from
+   the QR code** (section 2.3). It may try them all at once and keep the first that pairs: a window pairs one device
    once, so two attempts that both reach the PC can't both succeed.
 3. The PC sees an unknown client while its window is open. It waits for a `PairRequest`, and
    anything else closes the connection.
@@ -273,21 +298,48 @@ A device that isn't paired and connects while no window is open gets the `Refusa
   device ID, and TLS fails for any other key.
 - **The PC only pairs with a device that saw its screen**: the secret is only in the QR code and
   only travels inside TLS.
-- **Guessing is useless**: 128-bit secret, 3 attempts, 5 minutes.
+- **Guessing is useless**: a 128-bit secret for 5 minutes. Each try is a TLS handshake, and the
+  connection limits (section 2.3) allow a few dozen at once: even a million tries give a chance
+  of about 1 in 3·10³².
+- **Not closed by junk**: wrong secrets don't close the window, so a device on the network
+  can't keep the owner from pairing by sending them.
+- **A link can't send the phone across the Internet**: only addresses on the local network are
+  dialed (section 5.1), so a pairing link on a web page can't make the phone pair with a server
+  of the attacker's. Nor through the phone's own addresses, so one opened by another app can't
+  make it pair with that app.
 - **Not protected**: someone who photographs the QR code and pairs before the owner does within
   the 5 minutes. The PC shows which device just paired, and can unpair it (section 2.3).
 
-## 6. Echo loops
+## 6. Echo loops and relays
 
-Putting a received clip on the clipboard makes the local clipboard watcher fire. Without care,
-the clip would be sent straight back, forever. Two rules prevent it:
+Two things could send a clip round forever: putting a received clip on the clipboard makes the
+local clipboard watcher fire, and devices pass clips on to each other. These rules prevent it:
 
 1. **Send only what's new.** Each device remembers a fingerprint of the clipboard's last known
    content: SHA-256 over the MIME type, a zero byte, and the data. A received clip updates that
    fingerprint when it's applied. A local change is sent only if its fingerprint differs. This also
    absorbs operating systems that report one change several times.
 2. **Never accept your own clip.** Offers whose `origin_device` is the receiver's own device ID
-   are ignored (they can come back once devices relay clips to each other).
+   are ignored.
+3. **Take each copy once.** A device remembers the `origin_device` and `origin_clip_id` of each
+   copy it received, for **10 minutes**, and **512** of them at most (the oldest go first). A copy
+   that arrives again meanwhile, through another device or sent again after its `Ack` was lost,
+   is acknowledged with `OK` and dropped: not applied, no notification, not passed on. Only these
+   IDs are kept, in memory, no hash of the content: they say nothing about what was copied.
+4. **Pass a copy on at most once.** A device may pass a clip it received on to its other
+   sessions, except the one it came from and its origin, with the same `origin_device`,
+   `origin_clip_id` and age (`age_ms`). Since it takes each copy once, it passes each one on at
+   most once. It never passes on:
+   - a `sensitive` clip or a one-time code: its origin sends it to every device that trusts it
+     directly, and it goes no further;
+   - a clip without `origin_clip_id` (from an older sender), which a device reached twice
+     couldn't tell from a new copy. It is still applied;
+   - a clip copied more than 10 minutes ago (`age_ms`): a device may have forgotten taking it.
+
+In version 0 the PC passes on what it receives, so that two phones paired with it, or a phone and
+a computer that joined it, get each other's copies; the phone passes nothing on. Where devices
+are also paired directly (a phone paired with two computers that joined each other), each copy
+reaches a device twice and rule 3 drops the second.
 
 On Android 13+, clips put on the clipboard from a peer also carry `EXTRA_IS_REMOTE_DEVICE`, so
 the system UI shows them correctly.

@@ -16,7 +16,15 @@ use pasteget_core::pairing::PairingInvite;
 use pasteget_desktop::clipboard::{Content, MemoryClipboard, Raw, RgbaImage};
 use pasteget_desktop::config::Profile;
 use pasteget_desktop::daemon::{Daemon, DaemonOptions};
-use pasteget_ffi::{ClipDelivery, PairedComputer, PastegetError, PhoneClient, PhoneListener};
+use pasteget_desktop::notify::{Notifier, Received};
+use pasteget_ffi::history::{
+    HistoryDevice, HistoryItem, HistoryKept, HistoryQuery, HistorySource, KeptOutCount,
+    KeptOutReason,
+};
+use pasteget_ffi::{
+    ClipDelivery, History, HistorySettings, PairedComputer, PastegetError, PhoneClient,
+    PhoneListener,
+};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 
@@ -81,7 +89,24 @@ struct Pc {
     runtime: tokio::runtime::Runtime,
     daemon: Daemon,
     clipboard: MemoryClipboard,
+    /// The "Image from …" notifications it showed: one per image it put on its clipboard.
+    notifications: Arc<Notifications>,
     _home: tempfile::TempDir,
+}
+
+#[derive(Debug, Default)]
+struct Notifications(Mutex<Vec<Received>>);
+
+impl Notifier for Notifications {
+    fn received(&self, received: Received) {
+        self.0.lock().unwrap().push(received);
+    }
+}
+
+impl Pc {
+    fn notified(&self) -> usize {
+        self.notifications.0.lock().unwrap().len()
+    }
 }
 
 fn start_pc() -> Pc {
@@ -92,12 +117,13 @@ fn start_pc_in(home: tempfile::TempDir) -> Pc {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let profile = Profile::open_in(home.path(), "pc").unwrap();
     let clipboard = MemoryClipboard::default();
+    let notifications = Arc::new(Notifications::default());
     let options = DaemonOptions {
         listen: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         advertised_ips: Some(vec![IpAddr::V4(Ipv4Addr::LOCALHOST)]),
         poll_interval: Duration::from_millis(10),
         announce: false,
-        notifier: None,
+        notifier: Some(Arc::clone(&notifications) as Arc<dyn Notifier>),
         hotkeys: false,
     };
     let daemon = runtime
@@ -107,6 +133,7 @@ fn start_pc_in(home: tempfile::TempDir) -> Pc {
         runtime,
         daemon,
         clipboard,
+        notifications,
         _home: home,
     }
 }
@@ -128,6 +155,14 @@ fn path_of(dir: &tempfile::TempDir) -> String {
     dir.path().to_str().unwrap().to_owned()
 }
 
+/// A phone app with its data in `dir`. It may pair with the test daemons, which listen on
+/// loopback; the app never does.
+fn phone_client(dir: &tempfile::TempDir, name: &str) -> Arc<PhoneClient> {
+    let client = PhoneClient::new(path_of(dir), name.into()).unwrap();
+    client.pair_on_loopback_for_tests();
+    client
+}
+
 /// A phone paired with `pc` and connected to it.
 struct Phone {
     client: Arc<PhoneClient>,
@@ -142,7 +177,7 @@ fn connected_phone(pc: &Pc, name: &str) -> Phone {
         .unwrap()
         .to_uri();
     let dir = tempfile::tempdir().unwrap();
-    let client = PhoneClient::new(path_of(&dir), name.into()).unwrap();
+    let client = phone_client(&dir, name);
     client.pair(qr_code).unwrap();
     let listener = Arc::new(Recorder::default());
     client.start(listener.clone());
@@ -173,7 +208,7 @@ fn phone_pairs_then_shares_text_and_screenshots_with_the_pc() {
         .unwrap()
         .to_uri();
     let phone_dir = tempfile::tempdir().unwrap();
-    let phone = PhoneClient::new(path_of(&phone_dir), "POCO M8 5G".into()).unwrap();
+    let phone = phone_client(&phone_dir, "POCO M8 5G");
 
     // Scan the QR code.
     let computer = phone.pair(qr_code).unwrap();
@@ -240,9 +275,146 @@ fn phone_pairs_then_shares_text_and_screenshots_with_the_pc() {
 
     // The app restarts: same identity, same pairing.
     drop(phone);
-    let again = PhoneClient::new(path_of(&phone_dir), "POCO M8 5G".into()).unwrap();
+    let again = phone_client(&phone_dir, "POCO M8 5G");
     assert_eq!(again.device_id(), phone_id);
-    assert_eq!(again.paired_computers(), vec![computer]);
+    let saved = again.paired_computers();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(
+        (&saved[0].device_id, &saved[0].name, &saved[0].addresses),
+        (&computer.device_id, &computer.name, &computer.addresses)
+    );
+}
+
+/// The platform of this test's PC, as the phone names it.
+fn this_platform() -> Option<String> {
+    match std::env::consts::OS {
+        "windows" | "linux" | "macos" => Some(std::env::consts::OS.to_owned()),
+        _ => None,
+    }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
+
+/// Step 24: the phone knows when each computer was last there, what it runs, and which one sent
+/// a clip.
+#[test]
+fn the_phone_knows_each_computer_and_which_one_sent_a_clip() {
+    let pc = start_pc();
+    let before = now_ms();
+    let phone = connected_phone(&pc, "POCO");
+    let pc_id = pc.daemon.device_id().to_string();
+    let pc_name = pc.runtime.block_on(pc.daemon.status()).device_name;
+
+    let computer = phone.client.paired_computers()[0].clone();
+    assert_eq!(computer.platform, this_platform());
+    assert_eq!(
+        computer.app_version.as_deref(),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
+    let connected_at = computer.last_seen_ms.unwrap();
+    assert!((before..=now_ms()).contains(&connected_at));
+    assert_eq!(phone.client.last_received(), None);
+
+    pc.daemon.send(Content {
+        mime_type: mime::TEXT.into(),
+        data: b"from the PC".to_vec(),
+        sensitive: false,
+    });
+    phone.clip(1);
+    let received = phone.client.last_received().unwrap();
+    assert_eq!(received.device_id, pc_id);
+    assert_eq!(received.device_name, pc_name);
+    assert_eq!(received.origin_device_id, pc_id);
+    assert_eq!(received.mime_type, mime::TEXT);
+    assert_eq!(received.size, 11);
+    assert!(!received.sensitive);
+    assert!((connected_at..=now_ms()).contains(&received.received_at_ms));
+
+    // Leaving counts as being seen too, and it's all saved.
+    std::thread::sleep(Duration::from_millis(5));
+    phone.client.stop();
+    wait_until("the disconnection to be noted", || {
+        phone.client.paired_computers()[0].last_seen_ms > Some(connected_at)
+    });
+    let left = phone.client.paired_computers();
+    drop(phone.client);
+    let again = phone_client(&phone._dir, "POCO");
+    assert_eq!(again.paired_computers(), left);
+}
+
+/// Called from `on_clip_received`, `last_received` describes that clip, even while two computers
+/// send at once.
+#[test]
+fn last_received_describes_the_clip_being_reported() {
+    #[derive(Default)]
+    struct Asks {
+        client: std::sync::OnceLock<std::sync::Weak<PhoneClient>>,
+        /// The size of each clip, and what `last_received` said meanwhile.
+        heard: Mutex<Vec<(usize, Option<pasteget_ffi::ReceivedClip>)>>,
+    }
+
+    impl PhoneListener for Asks {
+        fn on_connection_changed(&self, _device_id: String, _connected: bool) {}
+
+        fn on_clip_received(&self, _mime_type: String, data: Vec<u8>, _sensitive: bool) {
+            // The first clip takes long to handle: the other computer's clips may arrive
+            // meanwhile, and wait for their turn (`last_received_waits_its_turn` makes sure).
+            if data.len() == 1 {
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            let said = self
+                .client
+                .get()
+                .and_then(|c| c.upgrade())
+                .unwrap()
+                .last_received();
+            self.heard.lock().unwrap().push((data.len(), said));
+        }
+
+        fn on_clip_delivered(&self, _delivery: ClipDelivery) {}
+
+        fn on_unpaired(&self, _computer: PairedComputer) {}
+    }
+
+    let (first, second) = (start_pc(), start_pc());
+    let dir = tempfile::tempdir().unwrap();
+    let client = phone_client(&dir, "POCO");
+    for pc in [&first, &second] {
+        let code = pc.runtime.block_on(pc.daemon.open_pairing()).unwrap();
+        client.pair(code.to_uri()).unwrap();
+    }
+    let asks = Arc::new(Asks::default());
+    asks.client.set(Arc::downgrade(&client)).unwrap();
+    client.start(asks.clone());
+    wait_until("both connections", || client.connected_count() == 2);
+
+    // Sizes 1 to 10 from the first computer, 101 to 110 from the second.
+    for n in 1..=10 {
+        for (pc, size) in [(&first, n), (&second, 100 + n)] {
+            pc.daemon.send(Content {
+                mime_type: mime::TEXT.into(),
+                data: vec![b'x'; size],
+                sensitive: false,
+            });
+        }
+    }
+    wait_until("every clip", || asks.heard.lock().unwrap().len() == 20);
+    let (first_id, second_id) = (
+        first.daemon.device_id().to_string(),
+        second.daemon.device_id().to_string(),
+    );
+    for (size, said) in asks.heard.lock().unwrap().iter() {
+        let said = said.as_ref().unwrap();
+        assert_eq!(said.size, *size as u64);
+        let from = if *size > 100 { &second_id } else { &first_id };
+        assert_eq!(&said.device_id, from);
+    }
+    client.stop();
 }
 
 #[test]
@@ -254,7 +426,7 @@ fn forgetting_a_computer_disconnects_it() {
         .unwrap()
         .to_uri();
     let phone_dir = tempfile::tempdir().unwrap();
-    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    let phone = phone_client(&phone_dir, "POCO");
     let computer = phone.pair(qr_code).unwrap();
     phone.start(Arc::new(Recorder::default()));
     wait_until("the connection", || phone.connected_count() == 1);
@@ -293,7 +465,9 @@ fn a_phone_that_forgot_the_pc_pairs_again() {
     let computer = phone.client.pair(qr_code).unwrap();
 
     assert_eq!(computer.device_id, pc_id);
-    assert_eq!(phone.client.paired_computers(), [computer]);
+    let paired = phone.client.paired_computers();
+    assert_eq!(paired.len(), 1);
+    assert_eq!(paired[0].device_id, pc_id);
     wait_until("the new connection", || phone.client.connected_count() == 1);
     let status = pc.runtime.block_on(pc.daemon.status());
     assert_eq!(status.devices.len(), 1);
@@ -316,7 +490,7 @@ fn renames_reach_the_other_side() {
     // The phone was renamed: the app starts again with its new name.
     client.stop();
     drop(client);
-    let client = PhoneClient::new(path_of(&dir), "Mon téléphone".into()).unwrap();
+    let client = phone_client(&dir, "Mon téléphone");
     client.start(Arc::new(Recorder::default()));
     wait_until("the new name on the PC", || {
         let status = pc.runtime.block_on(pc.daemon.status());
@@ -343,7 +517,7 @@ fn renames_reach_the_other_side() {
     assert_eq!(known.iter().next().unwrap().name, "Mon téléphone");
     client.stop();
     drop(client);
-    let again = PhoneClient::new(path_of(&dir), "Mon téléphone".into()).unwrap();
+    let again = phone_client(&dir, "Mon téléphone");
     assert_eq!(again.paired_computers()[0].name, "Bureau");
 }
 
@@ -519,7 +693,7 @@ fn copies_made_while_a_session_is_silently_dead_arrive_when_it_reconnects() {
         .unwrap();
     invite.addresses = vec![proxy.address];
     let phone_dir = tempfile::tempdir().unwrap();
-    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    let phone = phone_client(&phone_dir, "POCO");
     phone.pair(invite.to_uri()).unwrap();
     let listener = Arc::new(Recorder::default());
     phone.start(listener.clone());
@@ -607,7 +781,7 @@ fn a_computer_found_at_a_new_address_is_reconnected() {
         .unwrap()
         .to_uri();
     let phone_dir = tempfile::tempdir().unwrap();
-    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    let phone = phone_client(&phone_dir, "POCO");
     let computer = phone.pair(qr_code).unwrap();
     phone.start(Arc::new(Recorder::default()));
     wait_until("the connection", || phone.connected_count() == 1);
@@ -647,7 +821,7 @@ fn a_screenshot_sized_image_is_delivered_in_under_a_second() {
         .unwrap()
         .to_uri();
     let phone_dir = tempfile::tempdir().unwrap();
-    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    let phone = phone_client(&phone_dir, "POCO");
     let computer = phone.pair(qr_code).unwrap();
     let listener = Arc::new(Recorder::default());
     phone.start(listener.clone());
@@ -683,7 +857,7 @@ fn an_image_copied_on_the_pc_reaches_the_phone() {
         .unwrap()
         .to_uri();
     let phone_dir = tempfile::tempdir().unwrap();
-    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    let phone = phone_client(&phone_dir, "POCO");
     phone.pair(qr_code).unwrap();
     let listener = Arc::new(Recorder::default());
     phone.start(listener.clone());
@@ -720,7 +894,7 @@ fn copies_on_the_phone_reach_the_pc_without_echo() {
         .unwrap()
         .to_uri();
     let phone_dir = tempfile::tempdir().unwrap();
-    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    let phone = phone_client(&phone_dir, "POCO");
     phone.pair(qr_code).unwrap();
     let listener = Arc::new(Recorder::default());
     phone.start(listener.clone());
@@ -894,9 +1068,114 @@ fn a_jpeg_from_one_phone_reaches_another_through_the_pc() {
     assert_eq!(first.client.send_image(photo.clone()).unwrap(), 1);
 
     assert_eq!(second.clip(1), (mime::JPEG.to_owned(), photo));
+    // Sent by the PC, copied on the first phone.
+    let received = second.client.last_received().unwrap();
+    assert_eq!(received.device_id, pc.daemon.device_id().to_string());
+    assert_eq!(received.origin_device_id, first.client.device_id());
     // Not back to the phone it came from.
     std::thread::sleep(Duration::from_millis(200));
     assert!(first.listener.clips.lock().unwrap().is_empty());
+}
+
+/// `joiner` pairs with `host`, as `pasteget join` does, and both connect.
+fn link(joiner: &Pc, host: &Pc) {
+    let invite = host.runtime.block_on(host.daemon.open_pairing()).unwrap();
+    joiner
+        .runtime
+        .block_on(joiner.daemon.join(&invite))
+        .unwrap();
+    for pc in [joiner, host] {
+        wait_until("the computers to connect", || {
+            let status = pc.runtime.block_on(pc.daemon.status());
+            status.devices.iter().any(|d| d.connected)
+        });
+    }
+}
+
+fn holds_image(pc: &Pc, size: (u32, u32)) -> bool {
+    matches!(
+        pc.clipboard.get(),
+        Some(Raw::Image(RgbaImage { width, height, .. })) if (width, height) == size
+    )
+}
+
+/// The phone is paired with two computers that are linked too: each copy reaches every device
+/// twice, straight and through the other computer, and each takes it once, with one
+/// notification.
+#[test]
+fn a_phone_and_two_linked_computers_take_each_copy_once() {
+    let (first, second) = (start_pc(), start_pc());
+    link(&second, &first);
+    let phone = connected_phone(&first, "POCO");
+    let qr_code = second
+        .runtime
+        .block_on(second.daemon.open_pairing())
+        .unwrap()
+        .to_uri();
+    phone.client.pair(qr_code).unwrap();
+    wait_until("both connections", || phone.client.connected_count() == 2);
+
+    assert_eq!(phone.client.send_image(PNG_1X1.to_vec()).unwrap(), 2);
+    wait_until("the image on both computers", || {
+        holds_image(&first, (1, 1)) && holds_image(&second, (1, 1))
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!((first.notified(), second.notified()), (1, 1));
+
+    let screenshot = RgbaImage {
+        width: 4,
+        height: 3,
+        pixels: vec![200; 4 * 3 * 4],
+    };
+    first.clipboard.set(Raw::Image(screenshot));
+    wait_until("the screenshot on the phone and the other computer", || {
+        !phone.listener.clips.lock().unwrap().is_empty() && holds_image(&second, (4, 3))
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(phone.listener.clips.lock().unwrap().len(), 1);
+    assert_eq!((first.notified(), second.notified()), (1, 2));
+}
+
+/// Two phones paired with one computer, which joined another: what one phone copies reaches the
+/// others through it, but a secret or a 2FA code goes no further than the computer.
+#[test]
+fn secrets_from_a_phone_go_no_further_than_its_computers() {
+    let (pc, other_pc) = (start_pc(), start_pc());
+    link(&pc, &other_pc);
+    let (phone, other_phone) = (connected_phone(&pc, "POCO"), connected_phone(&pc, "Tablet"));
+    let text = |text: &str| Some(Raw::Text(text.into()));
+
+    assert_eq!(
+        phone
+            .client
+            .send_one_time_code("482913".into(), "Messages".into()),
+        1
+    );
+    wait_until("the code on the PC", || {
+        pc.clipboard.get() == text("482913")
+    });
+    assert_eq!(phone.client.copied_text("hunter2".into(), true), Some(1));
+    wait_until("the secret on the PC", || {
+        pc.clipboard.get() == text("hunter2")
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(other_pc.clipboard.get(), None);
+    assert!(other_phone.listener.clips.lock().unwrap().is_empty());
+
+    // What isn't secret is passed on, also the same text copied again later.
+    for copy in ["plain", "something else", "plain"] {
+        assert_eq!(phone.client.copied_text(copy.into(), false), Some(1));
+        wait_until("the copy on the other computer", || {
+            other_pc.clipboard.get() == text(copy)
+        });
+    }
+    wait_until("the copies on the other phone", || {
+        other_phone.listener.clips.lock().unwrap().len() == 3
+    });
+    assert_eq!(
+        other_phone.listener.sensitive.lock().unwrap().as_slice(),
+        [false; 3]
+    );
 }
 
 /// The error names every address of the code, with its own reason.
@@ -918,7 +1197,7 @@ fn pairing_says_why_each_address_failed() {
     let other = other_pc.daemon.local_addr();
     invite.addresses = vec![closed, other];
     let phone_dir = tempfile::tempdir().unwrap();
-    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    let phone = phone_client(&phone_dir, "POCO");
 
     let error = phone.pair(invite.to_uri()).unwrap_err();
     assert!(matches!(error, PastegetError::Unreachable(_)));
@@ -948,7 +1227,7 @@ fn an_unreadable_computer_list_is_set_aside() {
     let saved = phone_dir.path().join("computers.json");
     std::fs::write(&saved, b"[{\"device_id\": \"ABC\", \"na").unwrap();
 
-    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    let phone = phone_client(&phone_dir, "POCO");
 
     assert!(phone.paired_computers().is_empty());
     assert_eq!(
@@ -963,14 +1242,51 @@ fn an_unreadable_computer_list_is_set_aside() {
         .to_uri();
     let computer = phone.pair(qr_code).unwrap();
     drop(phone);
-    let again = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    let again = phone_client(&phone_dir, "POCO");
     assert_eq!(again.paired_computers(), [computer]);
+}
+
+/// A code can come from a link that any web page or app opens: the phone dials only computers
+/// on the local network, never an address on the Internet or one of its own, where another app
+/// would answer.
+#[test]
+fn a_code_pointing_off_the_local_network_is_not_dialed() {
+    let pc = start_pc();
+    let mut invite: PairingInvite = pc
+        .runtime
+        .block_on(pc.daemon.open_pairing())
+        .unwrap()
+        .to_uri()
+        .parse()
+        .unwrap();
+    let on_the_phone = pc.daemon.local_addr();
+    let internet: SocketAddr = "203.0.113.9:47290".parse().unwrap();
+    invite.addresses = vec![internet, on_the_phone];
+    let phone_dir = tempfile::tempdir().unwrap();
+    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+
+    let started = Instant::now();
+    let error = phone.pair(invite.to_uri()).unwrap_err();
+
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "an address was dialed"
+    );
+    assert!(matches!(error, PastegetError::Unreachable(_)));
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "could not reach the computer: {internet}: not on the local network, not tried; \
+             {on_the_phone}: an address of this device, not tried"
+        )
+    );
+    assert!(phone.paired_computers().is_empty());
 }
 
 #[test]
 fn bad_input_is_refused() {
     let phone_dir = tempfile::tempdir().unwrap();
-    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    let phone = phone_client(&phone_dir, "POCO");
 
     assert!(matches!(
         phone.pair("https://example.com".into()),
@@ -981,4 +1297,237 @@ fn bad_input_is_refused() {
         Err(PastegetError::UnsupportedImage)
     ));
     assert_eq!(phone.send_text("nobody listening".into(), false), 0);
+}
+
+// The phone's clipboard history (step 46).
+
+/// The phone's history, in its own folder.
+fn history_of(phone: &Phone) -> Arc<History> {
+    let dir = phone._dir.path().join("history");
+    let history = phone
+        .client
+        .open_history(dir.to_str().unwrap().into(), HistorySettings::default())
+        .unwrap();
+    // Opening it again gives the same one.
+    let again = phone
+        .client
+        .open_history(dir.to_str().unwrap().into(), HistorySettings::default())
+        .unwrap();
+    assert!(Arc::ptr_eq(&history, &again));
+    history
+}
+
+/// Every item, newest first, once what was queued is recorded.
+fn items(history: &History) -> Vec<HistoryItem> {
+    history.wait_for_recorder_for_tests();
+    history.page(HistoryQuery::default()).unwrap().items
+}
+
+fn pc_device(pc: &Pc) -> HistoryDevice {
+    HistoryDevice {
+        device_id: pc.daemon.device_id().to_string(),
+        name: pc.runtime.block_on(pc.daemon.status()).device_name,
+        platform: this_platform(),
+    }
+}
+
+#[test]
+fn the_history_keeps_what_the_phone_copies_sends_and_receives() {
+    let pc = start_pc();
+    let phone = connected_phone(&pc, "POCO");
+    let history = history_of(&phone);
+
+    assert_eq!(phone.client.copied_text("copié ici".into(), false), Some(1));
+    pc.daemon.send(Content {
+        mime_type: mime::TEXT.into(),
+        data: b"du PC".to_vec(),
+        sensitive: false,
+    });
+    phone.clip(1);
+    assert_eq!(phone.client.send_text("partagé".into(), false), 1);
+
+    let items = items(&history);
+    let summary: Vec<_> = items
+        .iter()
+        .map(|item| (item.preview.as_str(), item.source))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            ("partagé", HistorySource::SentByHand),
+            ("du PC", HistorySource::Received),
+            ("copié ici", HistorySource::CopiedHere),
+        ]
+    );
+    let pc = pc_device(&pc);
+    assert_eq!(items[1].origin.as_ref(), Some(&pc));
+    assert_eq!(items[1].via.as_ref(), Some(&pc));
+    assert_eq!((&items[2].origin, &items[2].via), (&None, &None));
+}
+
+/// Passwords from the PC or the phone and 2FA codes are counted, never kept.
+#[test]
+fn the_history_never_keeps_a_secret() {
+    let pc = start_pc();
+    let phone = connected_phone(&pc, "POCO");
+    let history = history_of(&phone);
+
+    pc.daemon.send(Content {
+        mime_type: mime::TEXT.into(),
+        data: b"hunter2 from KeePassXC".to_vec(),
+        sensitive: true,
+    });
+    phone.clip(1);
+    assert_eq!(
+        phone
+            .client
+            .copied_text("hunter2 from Bitwarden".into(), true),
+        Some(1)
+    );
+    phone
+        .client
+        .send_one_time_code("482913".into(), "Messages".into());
+    // Copied by hand right after: kept out too.
+    assert!(phone.client.record_copied_text("482 913".into(), false));
+
+    assert!(items(&history).is_empty());
+    assert_eq!(
+        history.kept_out(0).unwrap(),
+        [
+            KeptOutCount {
+                reason: KeptOutReason::Sensitive,
+                count: 2
+            },
+            KeptOutCount {
+                reason: KeptOutReason::OneTimeCode,
+                count: 2
+            },
+        ]
+    );
+}
+
+/// A clip the PC passed on from another phone says where it was copied first.
+#[test]
+fn a_clip_passed_on_keeps_its_first_origin() {
+    let pc = start_pc();
+    let first = connected_phone(&pc, "POCO");
+    let second = connected_phone(&pc, "Tablet");
+    let history = history_of(&second);
+
+    assert_eq!(first.client.copied_text("du POCO".into(), false), Some(1));
+    second.clip(1);
+
+    let items = items(&history);
+    assert_eq!(items.len(), 1);
+    let origin = items[0].origin.as_ref().unwrap();
+    // The tablet never paired with the POCO, so it doesn't know its name.
+    assert_eq!(
+        (origin.device_id.as_str(), origin.name.as_str()),
+        (first.client.device_id().as_str(), "")
+    );
+    assert_eq!(items[0].via, Some(pc_device(&pc)));
+}
+
+/// A history that can't open is an error the app shows; syncing goes on as before.
+#[test]
+fn syncing_goes_on_when_the_history_cant_open() {
+    let pc = start_pc();
+    let phone = connected_phone(&pc, "POCO");
+    let not_a_folder = phone._dir.path().join("history");
+    std::fs::write(&not_a_folder, b"").unwrap();
+
+    let error = phone
+        .client
+        .open_history(
+            not_a_folder.to_str().unwrap().into(),
+            HistorySettings::default(),
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, PastegetError::Storage(_)), "{error:?}");
+    assert_eq!(
+        phone.client.copied_text("still syncing".into(), false),
+        Some(1)
+    );
+    wait_until("the copy on the PC", || {
+        pc.clipboard.get() == Some(Raw::Text("still syncing".into()))
+    });
+    pc.clipboard.set(Raw::Text("both ways".into()));
+    assert_eq!(
+        phone.clip(1),
+        (mime::TEXT.to_owned(), b"both ways".to_vec())
+    );
+}
+
+/// An item put back on the phone's clipboard isn't sent when the automatic copy reports it, and
+/// what's kept while sending is off never goes out.
+#[test]
+fn copying_an_item_back_does_not_send_it() {
+    let pc = start_pc();
+    let phone = connected_phone(&pc, "POCO");
+    let history = history_of(&phone);
+    assert_eq!(phone.client.copied_text("un".into(), false), Some(1));
+    wait_until("the copy on the PC", || {
+        pc.clipboard.get() == Some(Raw::Text("un".into()))
+    });
+    pc.clipboard.set(Raw::Text("deux".into()));
+    phone.clip(1);
+    let first = items(&history)
+        .into_iter()
+        .find(|item| item.preview == "un")
+        .unwrap();
+
+    assert_eq!(
+        phone.client.copy_back(first.id).unwrap().as_deref(),
+        Some("un")
+    );
+    // The phone's clipboard now holds it, and reports it.
+    assert_eq!(phone.client.copied_text("un".into(), false), None);
+    assert!(
+        phone
+            .client
+            .record_copied_text("seulement ici".into(), false)
+    );
+
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(pc.clipboard.get(), Some(Raw::Text("deux".into())));
+    let items = items(&history);
+    assert_eq!(items[0].preview, "seulement ici");
+    assert_eq!(items.len(), 3);
+    assert_eq!(phone.client.copy_back(i64::MAX).unwrap(), None);
+}
+
+/// A screenshot with its MediaStore ID is kept as a reference to the gallery, sent or not.
+#[test]
+fn screenshots_are_kept_as_gallery_references() {
+    let pc = start_pc();
+    let phone = connected_phone(&pc, "POCO");
+    let history = history_of(&phone);
+
+    assert_eq!(
+        phone.client.send_screenshot(jpeg(4, 3), Some(7)).unwrap(),
+        1
+    );
+    wait_until("the screenshot on the PC", || holds_image(&pc, (4, 3)));
+    phone.client.record_screenshot(jpeg(5, 3), Some(8)).unwrap();
+    assert!(matches!(
+        phone.client.send_screenshot(b"GIF89a".to_vec(), None),
+        Err(PastegetError::UnsupportedImage)
+    ));
+
+    let items = items(&history);
+    let summary: Vec<_> = items
+        .iter()
+        .map(|item| (item.source, item.kept, item.media_id))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            (HistorySource::Screenshot, HistoryKept::Gallery, Some(8)),
+            (HistorySource::Screenshot, HistoryKept::Gallery, Some(7)),
+        ]
+    );
+    // Only the first went out.
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(holds_image(&pc, (4, 3)));
 }

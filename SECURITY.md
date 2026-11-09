@@ -25,7 +25,8 @@ Supported versions: only the latest release, while paste-get is below 1.0.
   other's key is one it paired with; there are no certificate authorities. TLS 1.2 is off.
 - **Pairing**: the PC shows a QR code with its device ID, its addresses and a one-time 128-bit
   secret. The phone connects pinning that device ID and sends the secret inside TLS. The secret
-  works once, for 5 minutes, and 3 wrong tries close the window.
+  works once, for 5 minutes. Wrong tries don't close the window, so someone on the network can't
+  keep closing it; guessing a 128-bit secret in 5 minutes is hopeless.
 - **No server, no account, no telemetry.** Clips go straight from one device to another on the
   local network.
 
@@ -39,14 +40,16 @@ The full protocol is in [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 | Someone on the network pretending to be your PC or phone | Their key isn't the pinned one: the handshake fails |
 | Pairing with the wrong PC | The QR code carries the PC's device ID; TLS fails for any other key |
 | A device pairing without seeing your screen | It needs the one-time secret from the QR code |
-| A web page or message opening a pairing link (`pasteget://pair?…`) on the phone | The phone never pairs on its own: it shows the name and addresses the link gives (unchecked, without characters that could disguise them) and pairs only when you tap *Pair* under "Only continue if this code is on your computer's screen right now". Another link arriving while that question is shown is ignored, so it can't take the place of the code you are reading |
+| A web page or message opening a pairing link (`pasteget://pair?…`) on the phone | The phone never pairs on its own: it shows the name and addresses the link gives (unchecked, without characters that could disguise them) and pairs only when you tap *Pair* under "Only continue if this code is on your computer's screen right now". Another link arriving while that question is shown is ignored, so it can't take the place of the code you are reading. Even then it connects only to addresses on the local network: never to a server on the Internet, nor to another app on the phone itself (at none of the phone's own addresses: loopback, Wi-Fi, hotspot) |
 | Another user of the same computer | The local control channel is a socket in a directory only you can open (Linux), or a named pipe that rejects remote clients and includes your user name (Windows) |
 | Passwords ending up in logs | Logs contain sizes, MIME types and hashes only, never clipboard contents |
 | Passwords lingering | A copy that a password manager marks as secret is sent marked sensitive. On the PC that is `x-kde-passwordManagerHint` on Wayland (KeePassXC, KDE apps) and the formats KeePass, KeePassXC, Bitwarden and 1Password set on Windows; on the phone, Android's `IS_SENSITIVE` flag. When the PC can't check a copy for the mark (another app holds the clipboard, or the copy changed meanwhile), it checks again and, failing that, sends it as sensitive. Sensitive clips, whether the phone sends them by itself or by hand (tile, notification, shortcut), stay out of the tray's *Recent* list and never wait for a device that is away. Where they arrive, they skip Windows' clipboard history and Klipper on the PC, and are flagged sensitive on the phone's clipboard, which hides Android's preview |
 | 2FA codes leaking | Opt-in. The phone reads notifications on the phone only; just the code's digits go to paired computers, as a secret (out of history and *Recent*). The PC's notification names the app, never the code. Neither the code nor the message is logged |
 | A link from a paired device opening by itself | Nothing opens without a click on its notification. Only `http`/`https` links that are the whole clip; the site is shown first; links with a `user@` part (which hide the real site) and non-ASCII hosts are refused |
 | Clips leaving the local network through the OS | On Windows, received clips are marked so the cloud clipboard doesn't upload them to the Microsoft account (they stay in the local Win+V history unless sensitive) |
+| A secret spreading past the devices you paired | A password or 2FA code goes only to the devices paired with the one where it was copied: a computer never passes it on to its other devices (another phone, a computer that joined it). Other copies are passed on once, and a device takes each copy once; to tell copies apart it keeps random IDs for 10 minutes, in memory, never a hash of what was copied |
 | A copy kept for a device that is away | Only the last non-sensitive clip waits, until the device confirms it got it, in memory, never on disk; passwords and 2FA codes are never kept, and a copy made before one stops waiting. Forgetting the device drops it |
+| Someone on the network opening connections to the PC by the thousand | Connections not known to come from a paired device get 3 s for the TLS handshake and 3 s for their first message, 8 at once per address and 64 in all. Past 64, the oldest of the address holding the most is closed, and never one from an address a paired device connected from since the PC started: a paired device still connects during a flood of silent connections, and during one that never pauses if it connects from such an address or the flood comes from fewer than 64 addresses. Not protected: a device with more addresses than that, flooding without pause, can keep out one connecting from a new address |
 | Oversized or malformed input from a paired device | Frames are limited to 1 MiB, clips to 64 MiB, images are size-checked before decoding; the parsers are fuzzed |
 | A lost or stolen phone, once you unpair it | On the PC: tray menu → the phone → *Forget this device*, or `pasteget forget <name>`. Its connection ends at once and it can't connect again without a new pairing code; the phone is told before the clips still queued for it, which it no longer gets, and forgets the PC too. The phone can forget a PC too (*Devices* → the PC → *Forget this computer…*, which asks first): if connected, the PC is told and forgets the phone too |
 
@@ -71,10 +74,16 @@ running `adb`: that is how it starts its shell helper. Consequences:
 
 ## The clipboard history (being built, off by default)
 
-The history store is in the core (`core/src/history`) but no app turns it on yet. When one does:
+The history store is in the core (`core/src/history`). The phone API can record into it
+(`ffi/src/history.rs`), but the app doesn't turn it on yet. On a PC it is on only once
+`settings.toml` says so (`[history]`, `enabled = true`). When it is on:
 - It stays on the device, in a folder only paste-get can open on the phone (one that is never
   backed up), and only your user account on a PC (mode 0700 on Linux and macOS, set when the
-  history opens). It is never sent anywhere.
+  history opens): `%LOCALAPPDATA%\paste-get\<profile>\history` on Windows, which doesn't roam
+  with the profile, and `~/.local/share/paste-get/<profile>/history` on Linux, outside
+  `~/.config`, which dotfile repositories often hold. It is never sent anywhere.
+- Images from other devices are decoded on the PC to make thumbnails (`image` crate, 512 MiB
+  of memory at most); they come from paired devices only.
 - **Never kept:** clips marked sensitive (password managers), 2FA codes (and copies of their
   digits made just before or in the 15 minutes after), and anything that looks like a private
   key, a 2FA seed (`otpauth://`), an API token, a card number or a generated password

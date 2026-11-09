@@ -100,6 +100,7 @@ Watch terminal 2 (the fake phone): each clip it receives logs `clip received …
 | 9 | `pasteget recent` | The last clips, newest first, with where they came from |
 | 12 | Stop terminal 1 and start it on another port: `pasteget daemon --port 47295`, as if its address had changed | Within about 30 s terminal 2 finds it by mDNS and logs `connected` (and `reached at a new address`); the fake phone's `devices.toml` lists the `…:47295` address first. Start terminal 1 again as before afterwards |
 | 11 | Stop terminal 1. Copy the PC's `devices.toml` (`%APPDATA%\paste-get\default\` on Windows, `~/.config/paste-get/default/` on Linux) somewhere safe, replace it with a line of garbage, start terminal 1 again | It starts, logs `the paired devices could not be read: starting with none` and shows a notice; the garbage is now in `devices.toml.bad`. Terminal 2 keeps retrying and doesn't forget the PC: `pasteget --profile phone status` still lists it. Stop terminal 1, put the safe copy back as `devices.toml`, start terminal 1: terminal 2 connects again |
+| 13 | Linux, or Git Bash on Windows: open 20 idle connections, `for i in $(seq 20); do timeout 10 nc 127.0.0.1 47290 & done`, then right away `pasteget --profile phone send "toujours là"` | `toujours là` is pasted. Within about 3 s every `nc` has exited: the daemon closed the idle connections |
 | 10 | Last: `pasteget forget phone` | `Unpaired phone.` Terminal 1 logs `unpaired`; terminal 2 logs `the device unpaired this one` and forgets the PC too (`pasteget --profile phone status` lists no device). Pair again (section 2) to go on |
 
 Screenshot to clipboard:
@@ -168,7 +169,12 @@ The phone and the PC must be on the **same Wi-Fi**. On the PC, run `pasteget dae
 | P22 | In a password manager (Bitwarden, KeePassDX), copy a password, then tap **Send clipboard** in paste-get's notification. Then quit the PC's daemon, send it again, start the daemon | The PC pastes it, and it is not in Win+V history, Klipper or the tray's *Recent*. With the daemon stopped: "Not sent: no computer is connected", and nothing arrives when it's back |
 | P23 | In **Devices**, open the PC's page. Go to Settings → Apps → paste-get → Permissions (or Notifications) and turn one off: Android stops paste-get. Come back to it from recent apps | The PC's page shows again, not the Devices list |
 | P24 | PC: `pasteget pair`, then quit the daemon. Phone: scan the code, **Pair**. Then start the daemon, `pasteget pair` again, turn the phone's Wi-Fi off, scan, **Pair**; turn Wi-Fi back on, **Try again**, **Pair** | After a few seconds: "Pairing didn't work" and what to check (same Wi-Fi, paste-get open on the PC), in the phone's language, with **Try again**. **Details** shows the technical error. **Try again** asks "Pair with this computer?" again for the same code, and **Pair** then pairs |
-| P25 | Last, with the phone connected: in the **Devices** tab, tap the PC, then **Forget this computer…**, then **Cancel**; tap it again, then **Forget** | Cancel keeps the PC. Forget removes it from the list, and the phone stops connecting to it. Within 2 s the PC's tray no longer lists the phone and shows "<phone> unpaired this computer"; `pasteget status` lists no device. Pair again to go on |
+| P25 | Start a second computer, or on the PC a second daemon: `pasteget --profile laptop daemon --memory-clipboard --port 47292`. Join it to the PC (`pasteget pair`, then `pasteget --profile laptop join "…"`), and pair the phone with it too (`pasteget --profile laptop pair`). Copy a line on the phone, then `pasteget --profile laptop send "from the laptop"` | `Ctrl+V` on the PC pastes the phone's line. The PC and the laptop each log `clip received` for it once, and `clip dropped: already received` for the copy that came through the other. The phone gets "from the laptop" once (Recent on its home screen lists it once), and the PC pastes it |
+| P26 | Same setup, but forget the laptop on the phone. Copy a password from a password manager on the phone, then get a 2FA code | The PC gets both; the laptop gets neither (its log shows no `clip received`). A plain line copied next reaches the laptop through the PC |
+| P27 | PC: `pasteget pair`, copy the `pasteget://pair?…` link it prints and replace the address after `a=` with `203.0.113.9%3A47290`. Send the link to yourself (a note, a chat), tap it on the phone, then **Pair** | Within a second, "Pairing didn't work"; **Details** says `203.0.113.9:47290: not on the local network, not tried`. Nothing is paired |
+| P28 | PC: `pasteget pair` (terminal 3). Copy the `pasteget join "…"` line it prints, change one letter of the value after `s=`, and run it three times with `--profile phone` (the fake phone of section 2 must be running). Then scan the code on the phone and tap **Pair** | Each wrong try prints `A device tried to pair but failed: wrong pairing code` on the PC, and the code stays: the phone still pairs with it |
+| P29 | Phone: Settings → About phone → Status, note its IP address (say `192.168.1.50`). PC: `adb shell nc -l -p 47299` (it listens on every address of the phone, like an app could). Take the link of P27 and put the phone's address instead: `a=192.168.1.50%3A47299`. Tap it on the phone, then **Pair** | "Pairing didn't work"; **Details** says `192.168.1.50:47299: an address of this device, not tried`. Nothing is paired, and `nc` printed nothing |
+| P30 | Last, with the phone connected: in the **Devices** tab, tap the PC, then **Forget this computer…**, then **Cancel**; tap it again, then **Forget** | Cancel keeps the PC. Forget removes it from the list, and the phone stops connecting to it. Within 2 s the PC's tray no longer lists the phone and shows "<phone> unpaired this computer"; `pasteget status` lists no device. Pair again to go on |
 
 Phone logs never contain clipboard contents either. To get them: `adb logcat -s paste-get`.
 
@@ -561,6 +567,37 @@ relies on elsewhere on Linux.
 | G4 | Section 9, T1–T8 | The menu opens from the top-bar icon |
 | G5 | *Start at login*, log out and in | The icon comes back (`~/.config/autostart` works on GNOME) |
 
+## 16. Clipboard history on the PC (v0.2)
+
+Off by default. To turn it on, open `settings.toml` (`%APPDATA%\paste-get\default\` on
+Windows, `~/.config/paste-get/default/` on Linux) and set `enabled = true` under `[history]`.
+paste-get writes that table, with `enabled = false`, when it creates the file or saves the tray's
+*Settings…* window: change that line rather than adding a second `[history]`, which makes the
+file invalid. Only a `settings.toml` without the table (from an older version) needs it added:
+
+```toml
+[history]
+enabled = true
+```
+
+Then restart paste-get, or open the tray's *Settings…* window and save it, which applies it at
+once.
+
+Use the two daemons of section 2.
+
+| # | Do this | Expected |
+|---|---|---|
+| H1 | Turn the history on as above | The log says `history: on`, with its folder: `%LOCALAPPDATA%\paste-get\default\history` on Windows (not under Roaming), `~/.local/share/paste-get/default/history` on Linux, where `ls -ld` shows `drwx------` |
+| H2 | Copy `vérification du compte` in any app, then `pasteget --profile phone send "du téléphone"` | `pasteget history list`: "du téléphone" first, from the second daemon's name (as `pasteget status` shows it), then the copy, from "this computer" |
+| H3 | `pasteget history search verif`, then `pasteget history search site:github.com` after copying a GitHub link | Each lists only what it should; accents don't matter |
+| H4 | Copy something else, then `pasteget history copy <ID>` with the ID of H2's copy; `Ctrl+V` | The H2 text is pasted. Terminal 2 logs no `clip received` for it: it isn't sent again |
+| H5 | Copy a password from KeePassXC (Linux) or Bitwarden (Windows); on the phone, get a 2FA code sent to the PC | Neither is in `pasteget history list`; `pasteget history stats` counts them as kept out |
+| H6 | Take a screenshot to the clipboard; `pasteget history list` | "Image (PNG, …)" is listed; `pasteget history copy <ID>` puts it back, and it pastes in an image editor |
+| H7 | Stop paste-get and start it again; `pasteget history list` | The same items |
+| H8 | Hyprland: `pasteget history list --plain \| fuzzel --dmenu \| pasteget history copy --stdin` (or `wofi --dmenu`) | One line per item, even for texts of several lines; the one picked is on the clipboard |
+| H9 | `pasteget history pin <ID>`, `pasteget history clear`, then `pasteget history clear --last 1h --pinned` | The first clear keeps the pinned item (marked `*`); the second deletes it if it was copied in the last hour |
+| H10 | Set `enabled = false`, restart; `pasteget history list` | "the clipboard history is off…". The folder is left as it was: delete it to remove what was kept |
+
 ## Known limitations
 
 - If the PC changes address while the phone (or a PC that joined it) is connected, the other
@@ -594,6 +631,9 @@ relies on elsewhere on Linux.
 - The identity key is a file readable only by your user, not yet in the OS keystore.
 - The tray's *Recent* list is in memory only, holds the last 10 clips, and forgets them when the
   daemon stops. Sensitive clips (passwords) never appear in it. Pausing doesn't survive a restart.
+- The PC's clipboard history has no window in the tray yet: `pasteget history`. It records what
+  syncs, so nothing while syncing is paused but what is sent on purpose. Turning it off keeps
+  what it holds until it is cleared or its folder deleted.
 - Hotkeys are read from `settings.toml` at start: restart paste-get after changing them. On
   GNOME and other desktops without the global shortcuts portal, bind the commands yourself.
 - Text and images only (PNG and JPEG on the wire). Copying a file in a file manager isn't synced.

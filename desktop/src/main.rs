@@ -2,9 +2,11 @@
 
 //! `pasteget`: desktop daemon and command-line tool.
 
+use std::io::BufRead;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use anstream::{eprintln, println};
 use anyhow::{Context, Result, bail};
@@ -13,8 +15,10 @@ use data_encoding::BASE64;
 use pasteget_core::clip::{DEFAULT_MAX_CLIP_LEN, mime};
 use pasteget_desktop::clipboard::{MemoryClipboard, SystemClipboard};
 use pasteget_desktop::config::{DEFAULT_PROFILE, Profile};
-use pasteget_desktop::control::{self, Endpoint, Request, Response};
+use pasteget_desktop::control::{self, Endpoint, HistoryItemReply, Request, Response};
 use pasteget_desktop::daemon::{Daemon, DaemonOptions};
+use pasteget_desktop::history::{parse_duration, picked_id, plain_line};
+use pasteget_desktop::i18n::{self, Lang};
 use pasteget_desktop::notify::DesktopNotifier;
 use pasteget_desktop::recent;
 use qrcode::QrCode;
@@ -87,6 +91,74 @@ enum Command {
     },
     /// Stop the running daemon, and the tray if it runs it.
     Quit,
+    /// The clipboard history, once turned on in settings.toml (`[history]`, `enabled = true`).
+    History {
+        #[command(subcommand)]
+        command: HistoryCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum HistoryCommand {
+    /// List the newest items, pinned ones marked with *.
+    List {
+        /// How many.
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        /// One "ID<TAB>preview" line per item, for a picker: fuzzel, wofi, fzf…
+        #[arg(long)]
+        plain: bool,
+    },
+    /// List the items that hold these words (any part of a word, accents ignored), newest
+    /// first. Also site:github.com, from:<device>, type:link|image|code…, is:pinned,
+    /// after:2026-11-01, before:….
+    Search {
+        #[arg(required = true)]
+        words: Vec<String>,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        /// One "ID<TAB>preview" line per item, for a picker.
+        #[arg(long)]
+        plain: bool,
+    },
+    /// Put an item back on the clipboard. It isn't sent to the other devices.
+    Copy {
+        /// Its ID, as `list` shows it.
+        #[arg(required_unless_present = "stdin")]
+        id: Option<i64>,
+        /// Read a line of `list --plain` from standard input, as a picker prints it.
+        #[arg(long, conflicts_with = "id")]
+        stdin: bool,
+    },
+    /// Pin an item: it stays until deleted.
+    Pin {
+        id: i64,
+    },
+    Unpin {
+        id: i64,
+    },
+    /// Delete items, pinned or not.
+    Delete {
+        #[arg(required = true)]
+        ids: Vec<i64>,
+    },
+    /// Delete what wasn't pinned, or only what was copied in the last 30m, 2h, 7d…
+    Clear {
+        /// Only the items copied in the last 30s, 15m, 2h, 7d…
+        #[arg(long, value_parser = duration)]
+        last: Option<i64>,
+        /// Pinned items too.
+        #[arg(long)]
+        pinned: bool,
+    },
+    /// How many items, how much space, how many secrets were kept out.
+    Stats,
+}
+
+/// A `--last` value, in milliseconds.
+fn duration(text: &str) -> Result<i64, String> {
+    parse_duration(text)
+        .ok_or_else(|| format!("{text:?} is not a duration like 30s, 15m, 2h or 7d"))
 }
 
 #[tokio::main]
@@ -102,6 +174,10 @@ async fn main() -> ExitCode {
 }
 
 async fn run(cli: Cli) -> Result<()> {
+    // The command speaks English; the daemon, which shows notifications, the system's language.
+    if !matches!(cli.command, Command::Daemon { .. }) {
+        i18n::force(Lang::En);
+    }
     let profile = Profile::open(&cli.profile)?;
     let endpoint = Endpoint::for_profile(&profile);
     match cli.command {
@@ -128,6 +204,7 @@ async fn run(cli: Cli) -> Result<()> {
             println!("Stopped.");
             Ok(())
         }
+        Command::History { command } => history(&endpoint, command).await,
     }
 }
 
@@ -370,6 +447,133 @@ async fn recent(endpoint: &Endpoint) -> Result<()> {
     .await
 }
 
+async fn history(endpoint: &Endpoint, command: HistoryCommand) -> Result<()> {
+    let page = |query: String, limit: u32| Request::History {
+        query,
+        after: None,
+        limit: Some(limit),
+        utc_offset_minutes: 0,
+    };
+    match command {
+        HistoryCommand::List { limit, plain } => {
+            list_history(endpoint, &page(String::new(), limit), plain).await
+        }
+        HistoryCommand::Search {
+            words,
+            limit,
+            plain,
+        } => list_history(endpoint, &page(words.join(" "), limit), plain).await,
+        HistoryCommand::Copy { id, stdin } => {
+            let id = match (id, stdin) {
+                (Some(id), _) => id,
+                (None, _) => {
+                    let mut line = String::new();
+                    std::io::stdin().lock().read_line(&mut line)?;
+                    // Nothing picked: the picker was closed.
+                    if line.trim().is_empty() {
+                        return Ok(());
+                    }
+                    picked_id(&line).context("that line doesn't start with an item's ID")?
+                }
+            };
+            expect_one(endpoint, &Request::HistoryCopy { id }, |response| {
+                matches!(response, Response::Copied)
+            })
+            .await
+        }
+        HistoryCommand::Pin { id } => pin(endpoint, id, true).await,
+        HistoryCommand::Unpin { id } => pin(endpoint, id, false).await,
+        HistoryCommand::Delete { ids } => deleted(endpoint, &Request::HistoryDelete { ids }).await,
+        HistoryCommand::Clear { last, pinned } => {
+            let since_ms = last.map(|last| control::unix_ms(SystemTime::now()) - last);
+            let request = Request::HistoryClear {
+                since_ms,
+                pinned_too: pinned,
+            };
+            deleted(endpoint, &request).await
+        }
+        HistoryCommand::Stats => {
+            expect_one(endpoint, &Request::HistoryStats, |response| {
+                let Response::HistoryStats(stats) = response else {
+                    return false;
+                };
+                println!(
+                    "{} items, {} pinned, {} images",
+                    stats.items, stats.pinned, stats.images
+                );
+                println!("{} on disk", recent::size(stats.bytes as usize));
+                println!(
+                    "{} passwords, codes and keys kept out in the last 7 days",
+                    stats.kept_out_this_week
+                );
+                true
+            })
+            .await
+        }
+    }
+}
+
+async fn list_history(endpoint: &Endpoint, request: &Request, plain: bool) -> Result<()> {
+    expect_one(endpoint, request, |response| {
+        let Response::HistoryPage { items, .. } = response else {
+            return false;
+        };
+        if items.is_empty() && !plain {
+            println!("Nothing found.");
+        }
+        let now = control::unix_ms(SystemTime::now());
+        for item in items {
+            println!("{}", history_line(&item, now, plain));
+        }
+        true
+    })
+    .await
+}
+
+/// One item as `pasteget history list` prints it.
+fn history_line(item: &HistoryItemReply, now_ms: i64, plain: bool) -> String {
+    if plain {
+        let preview = if item.mime_type == mime::TEXT {
+            item.preview.clone()
+        } else {
+            item.describe()
+        };
+        return plain_line(item.id, &preview);
+    }
+    let age_secs = u64::try_from((now_ms - item.last_at_ms) / 1000).unwrap_or(0);
+    let from = match item.from.as_deref() {
+        None => "this computer",
+        Some("") => "another device",
+        Some(name) => name,
+    };
+    format!(
+        "{:>6} {}{:>9}  {:<20}  {}",
+        item.id,
+        if item.pinned { '*' } else { ' ' },
+        recent::ago(age_secs),
+        pasteget_desktop::history::escape(from),
+        item.describe()
+    )
+}
+
+async fn pin(endpoint: &Endpoint, id: i64, pinned: bool) -> Result<()> {
+    expect_one(endpoint, &Request::HistoryPin { id, pinned }, |response| {
+        matches!(response, Response::HistoryPinned { .. })
+    })
+    .await
+}
+
+async fn deleted(endpoint: &Endpoint, request: &Request) -> Result<()> {
+    expect_one(endpoint, request, |response| {
+        let Response::HistoryDeleted { items } = response else {
+            return false;
+        };
+        println!("Deleted {items} item(s).");
+        true
+    })
+    .await
+}
+
 /// Sends a one-answer request. `on_success` returns `false` for unexpected answers.
 async fn expect_one(
     endpoint: &Endpoint,
@@ -408,4 +612,74 @@ fn print_qr(text: &str) -> Result<()> {
         println!("\x1b[30;47m{line}\x1b[0m");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(preview: &str) -> HistoryItemReply {
+        HistoryItemReply {
+            id: 12,
+            mime_type: mime::TEXT.into(),
+            category: "text".into(),
+            size: preview.len() as u64,
+            from: Some("POCO".into()),
+            via: Some("POCO".into()),
+            last_at_ms: 1_000_000 - 120_000,
+            times: 1,
+            pinned: true,
+            preview: preview.into(),
+            highlights: Vec::new(),
+        }
+    }
+
+    /// Whatever a clip holds, each item is one line, and no terminal escape gets through.
+    #[test]
+    fn history_lines_are_escaped() {
+        let clip = "first line\n\tsecond\u{1b}[2J";
+
+        let shown = history_line(&item(clip), 1_000_000, false);
+        let plain = history_line(&item(clip), 1_000_000, true);
+
+        assert_eq!(
+            shown,
+            "    12 *    2 min  POCO                  Text: first line second\\u{1b}[2J"
+        );
+        assert_eq!(plain, "12\tfirst line\\n\\tsecond\\u{1b}[2J");
+        for line in [&shown, &plain] {
+            assert!(!line.contains('\n') && !line.contains('\u{1b}'), "{line:?}");
+        }
+        assert_eq!(picked_id(&plain), Some(12));
+    }
+
+    #[test]
+    fn a_device_never_named_is_another_device() {
+        let unnamed = HistoryItemReply {
+            from: Some(String::new()),
+            ..item("hello")
+        };
+        let here = HistoryItemReply {
+            from: None,
+            ..item("hello")
+        };
+
+        assert!(history_line(&unnamed, 1_000_000, false).contains("  another device  "));
+        assert!(history_line(&here, 1_000_000, false).contains("  this computer  "));
+    }
+
+    #[test]
+    fn images_are_described_in_plain_lines_too() {
+        let image = HistoryItemReply {
+            mime_type: mime::PNG.into(),
+            size: 1_500_000,
+            preview: String::new(),
+            ..item("")
+        };
+
+        assert_eq!(
+            history_line(&image, 1_000_000, true),
+            format!("12\tImage (PNG, {})", recent::size(1_500_000))
+        );
+    }
 }

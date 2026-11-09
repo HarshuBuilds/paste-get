@@ -19,6 +19,8 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result, anyhow, bail};
 use data_encoding::BASE64;
 use pasteget_core::clip::mime;
+use pasteget_core::detect::Category;
+use pasteget_core::history::{Cursor, Format, Item, ItemId, MAX_PAGE_SIZE, PAGE_SIZE, Query};
 use pasteget_core::identity::DeviceId;
 use pasteget_core::pairing::{PAIRING_TTL, PairingInvite};
 use serde::{Deserialize, Serialize};
@@ -36,8 +38,8 @@ const MAX_REQUEST_LEN: u64 = 96 * 1024 * 1024;
 
 /// Version of the control channel, in [`StatusReply::control_version`]. Bumped when a client
 /// needs to know what a daemon understands. 1: the first to say it, and to know
-/// [`Request::Quit`].
-pub const CONTROL_VERSION: u32 = 1;
+/// [`Request::Quit`]. 2: the history requests ([`Request::History`] and the ones after it).
+pub const CONTROL_VERSION: u32 = 2;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
@@ -71,6 +73,44 @@ pub enum Request {
     /// Stops the daemon, and the tray or `pasteget daemon` running it: a newer version takes
     /// over. Unknown to daemons without a [`StatusReply::control_version`].
     Quit,
+    /// A page of the clipboard history, newest first: the items `query` finds (words, any part
+    /// of them, accents ignored; `site:`, `from:`, `type:`, `is:pinned`, `after:`, `before:`), or
+    /// all of them. Answered with [`Response::HistoryPage`]. This one and the history requests
+    /// below are unknown to daemons before [`CONTROL_VERSION`] 2.
+    History {
+        #[serde(default)]
+        query: String,
+        /// The `next` of the page before.
+        #[serde(default)]
+        after: Option<HistoryCursorReply>,
+        /// At most 200; 50 by default.
+        #[serde(default)]
+        limit: Option<u32>,
+        /// The user's offset from UTC, for `after:` and `before:` dates.
+        #[serde(default)]
+        utc_offset_minutes: i32,
+    },
+    /// Puts an item of the history back on the clipboard. It isn't sent again.
+    HistoryCopy {
+        id: i64,
+    },
+    HistoryPin {
+        id: i64,
+        pinned: bool,
+    },
+    /// Deletes items of the history, pinned or not.
+    HistoryDelete {
+        ids: Vec<i64>,
+    },
+    /// Deletes the items last copied since `since_ms` (unix ms), or all of them; pinned ones
+    /// too only if `pinned_too`.
+    HistoryClear {
+        #[serde(default)]
+        since_ms: Option<i64>,
+        #[serde(default)]
+        pinned_too: bool,
+    },
+    HistoryStats,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -103,6 +143,20 @@ pub enum Response {
     },
     /// Answer to [`Request::Quit`]: the daemon stops once it has said so.
     Quitting,
+    HistoryPage {
+        items: Vec<HistoryItemReply>,
+        /// Where the next page starts; `None` when this one is the last.
+        next: Option<HistoryCursorReply>,
+    },
+    HistoryPinned {
+        id: i64,
+        pinned: bool,
+    },
+    /// Answer to [`Request::HistoryDelete`] and [`Request::HistoryClear`].
+    HistoryDeleted {
+        items: usize,
+    },
+    HistoryStats(HistoryStatsReply),
     Error {
         message: String,
     },
@@ -168,6 +222,122 @@ impl RecentReply {
 pub struct DeviceReply {
     pub id: String,
     pub name: String,
+}
+
+/// An item of the history.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryItemReply {
+    pub id: i64,
+    pub mime_type: String,
+    /// "text", "link", "email", "phone", "code", "json", "color", "screenshot" or "image".
+    pub category: String,
+    /// Bytes of the original.
+    pub size: u64,
+    /// The name of the device where it was first copied, empty if it was never named; `None`
+    /// for this computer.
+    pub from: Option<String>,
+    /// The name of the paired device it came through, empty if it was never named; `None` when
+    /// it didn't come from one.
+    pub via: Option<String>,
+    /// Unix ms.
+    pub last_at_ms: i64,
+    /// How many times it was copied or received.
+    pub times: u32,
+    pub pinned: bool,
+    /// The start of a text, or the part around what a search found. Empty for an image.
+    pub preview: String,
+    /// What a search found in `preview`, as `[start, end)` in UTF-16 code units (JavaScript's
+    /// string indexes).
+    #[serde(default)]
+    pub highlights: Vec<[u32; 2]>,
+}
+
+/// Never prints contents.
+impl std::fmt::Debug for HistoryItemReply {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HistoryItemReply")
+            .field("id", &self.id)
+            .field("mime_type", &self.mime_type)
+            .field("category", &self.category)
+            .field("size", &self.size)
+            .finish_non_exhaustive()
+    }
+}
+
+impl HistoryItemReply {
+    /// Device names stay as the history has them, empty ones too: each client says "another
+    /// device" in its own language.
+    fn of(item: Item) -> Self {
+        let name = |device: Option<pasteget_core::history::Device>| device.map(|d| d.name);
+        Self {
+            id: item.id.0,
+            mime_type: match item.format {
+                Format::Text => mime::TEXT,
+                Format::Png => mime::PNG,
+                Format::Jpeg => mime::JPEG,
+            }
+            .to_owned(),
+            category: category_name(item.category).to_owned(),
+            size: item.size,
+            from: name(item.origin),
+            via: name(item.via),
+            last_at_ms: item.last_at,
+            times: item.times,
+            pinned: item.pinned_at.is_some(),
+            preview: item.preview,
+            highlights: item
+                .highlights
+                .into_iter()
+                .map(|range| [range.start, range.end])
+                .collect(),
+        }
+    }
+
+    /// "Text: hello world" or "Image (PNG, 1.2 MB)", on one line, escaped.
+    pub fn describe(&self) -> String {
+        if self.mime_type == mime::TEXT {
+            let text = crate::history::escape(&recent::preview(&self.preview));
+            format!("{} {text}", crate::i18n::tr("Text:", "Texte :"))
+        } else {
+            let kind = self
+                .mime_type
+                .strip_prefix("image/")
+                .map_or_else(|| self.mime_type.clone(), str::to_uppercase);
+            format!("Image ({kind}, {})", recent::size(self.size as usize))
+        }
+    }
+}
+
+fn category_name(category: Category) -> &'static str {
+    match category {
+        Category::Text => "text",
+        Category::Link => "link",
+        Category::Email => "email",
+        Category::Phone => "phone",
+        Category::Code => "code",
+        Category::Json => "json",
+        Category::Color => "color",
+        Category::Screenshot => "screenshot",
+        Category::Image => "image",
+    }
+}
+
+/// Where the next page of the history starts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryCursorReply {
+    pub last_at_ms: i64,
+    pub id: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryStatsReply {
+    pub items: u64,
+    pub pinned: u64,
+    pub images: u64,
+    /// The database and its log, plus the original images.
+    pub bytes: u64,
+    /// Passwords, codes and keys kept out in the last 7 days.
+    pub kept_out_this_week: u64,
 }
 
 /// Where a profile's daemon listens for commands.
@@ -461,6 +631,72 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(daemon: Arc<Daemon>, stream: 
                     .await?;
                 quit = true;
             }
+            Request::History {
+                query,
+                after,
+                limit,
+                utc_offset_minutes,
+            } => {
+                let query = Query {
+                    text: query,
+                    after: after.map(|after| Cursor {
+                        last_at: after.last_at_ms,
+                        id: after.id,
+                    }),
+                    limit: limit.unwrap_or(PAGE_SIZE).min(MAX_PAGE_SIZE),
+                    utc_offset_minutes,
+                    ..Query::default()
+                };
+                let page = daemon.history()?.page(&query)?;
+                let response = Response::HistoryPage {
+                    items: page.items.into_iter().map(HistoryItemReply::of).collect(),
+                    next: page.next.map(|next| HistoryCursorReply {
+                        last_at_ms: next.last_at,
+                        id: next.id,
+                    }),
+                };
+                write_half.write_all(line_of(response).as_bytes()).await?;
+            }
+            Request::HistoryCopy { id } => {
+                daemon.copy_from_history(ItemId(id))?;
+                write_half
+                    .write_all(line_of(Response::Copied).as_bytes())
+                    .await?;
+            }
+            Request::HistoryPin { id, pinned } => {
+                daemon.history()?.pin(ItemId(id), pinned)?;
+                let response = Response::HistoryPinned { id, pinned };
+                write_half.write_all(line_of(response).as_bytes()).await?;
+            }
+            Request::HistoryDelete { ids } => {
+                let ids: Vec<ItemId> = ids.into_iter().map(ItemId).collect();
+                let items = daemon.history()?.delete(&ids)?;
+                let response = Response::HistoryDeleted { items };
+                write_half.write_all(line_of(response).as_bytes()).await?;
+            }
+            Request::HistoryClear {
+                since_ms,
+                pinned_too,
+            } => {
+                let since = since_ms.unwrap_or(i64::MIN);
+                let items = daemon.history()?.clear(since..i64::MAX, pinned_too)?;
+                let response = Response::HistoryDeleted { items };
+                write_half.write_all(line_of(response).as_bytes()).await?;
+            }
+            Request::HistoryStats => {
+                let history = daemon.history()?;
+                let stats = history.stats()?;
+                let week_ago = unix_ms(SystemTime::now()) - 7 * 24 * 60 * 60 * 1000;
+                let kept_out = history.kept_out(week_ago)?.iter().map(|(_, n)| n).sum();
+                let response = Response::HistoryStats(HistoryStatsReply {
+                    items: stats.items,
+                    pinned: stats.pinned,
+                    images: stats.images,
+                    bytes: stats.database_bytes + stats.originals_bytes,
+                    kept_out_this_week: kept_out,
+                });
+                write_half.write_all(line_of(response).as_bytes()).await?;
+            }
         }
         Ok(())
     }
@@ -503,6 +739,14 @@ fn find_device(devices: &[DeviceStatus], query: &str) -> Result<DeviceId> {
                 .join(", ")
         ),
     }
+}
+
+/// `time` in unix ms.
+pub fn unix_ms(time: SystemTime) -> i64 {
+    time.duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |since| {
+            i64::try_from(since.as_millis()).unwrap_or(i64::MAX)
+        })
 }
 
 fn line_of(response: Response) -> String {
@@ -563,8 +807,16 @@ mod tests {
     }
 
     async fn run(name: &str) -> Running {
+        run_with(name, None).await
+    }
+
+    /// A daemon whose `settings.toml` is `settings`, when given.
+    async fn run_with(name: &str, settings: Option<&str>) -> Running {
         let home = tempfile::tempdir().unwrap();
         let profile = Profile::open_in(home.path(), name).unwrap();
+        if let Some(settings) = settings {
+            std::fs::write(profile.dir().join("settings.toml"), settings).unwrap();
+        }
         let clipboard = MemoryClipboard::default();
         let options = DaemonOptions {
             listen: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
@@ -835,6 +1087,195 @@ mod tests {
         assert!(matches!(
             serde_json::from_str::<Response>(&answer).unwrap(),
             Response::Quitting
+        ));
+    }
+
+    /// A device the history knows by its ID only comes with an empty name, whatever the
+    /// daemon's language: never a word a device could be named.
+    #[test]
+    fn a_device_never_named_has_an_empty_name() {
+        use pasteget_core::history::{Device, Kept, Source, Thumb};
+        let device = |name: &str| Device {
+            id: DeviceId::from_bytes([3; DeviceId::LEN]),
+            name: name.into(),
+            platform: None,
+        };
+        let item = Item {
+            id: ItemId(7),
+            sha256: [0; 32],
+            format: Format::Text,
+            size: 5,
+            category: Category::Text,
+            host: None,
+            source: Source::Received,
+            origin: Some(device("")),
+            via: Some(device("HP-AIO")),
+            first_at: 0,
+            last_at: 0,
+            times: 1,
+            pinned_at: None,
+            expires_at: None,
+            kept: Kept::Original,
+            media_id: None,
+            width: None,
+            height: None,
+            thumb: Thumb::None,
+            preview: "hello".into(),
+            highlights: Vec::new(),
+        };
+
+        let reply = HistoryItemReply::of(item);
+
+        assert_eq!(reply.from.as_deref(), Some(""));
+        assert_eq!(reply.via.as_deref(), Some("HP-AIO"));
+    }
+
+    /// The history requests, as `pasteget history` sends them.
+    #[tokio::test]
+    async fn the_history_through_the_control_channel() {
+        let pc = run_with("pc", Some("[history]\nenabled = true\n")).await;
+        for text in ["  remember\nme  ", "vérification 482"] {
+            let sent = ask(
+                &pc.endpoint,
+                Request::Send {
+                    mime_type: mime::TEXT.into(),
+                    data_base64: BASE64.encode(text.as_bytes()),
+                },
+            )
+            .await;
+            assert!(matches!(&sent[..], [Response::Sent { devices: 0 }]));
+        }
+        pc.daemon.history().unwrap().wait_for_recorder();
+        let page =
+            |query: &str, after: Option<HistoryCursorReply>, limit: Option<u32>| Request::History {
+                query: query.into(),
+                after,
+                limit,
+                utc_offset_minutes: 0,
+            };
+
+        let listed = ask(&pc.endpoint, page("", None, None)).await;
+        let [Response::HistoryPage { items, next: None }] = &listed[..] else {
+            panic!("expected a page");
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[1].preview, "  remember\nme  ");
+        assert_eq!(items[1].describe(), "Text: remember me");
+        assert_eq!(
+            (items[1].from.as_deref(), items[1].category.as_str()),
+            (None, "text")
+        );
+        let remember = items[1].id;
+
+        // Accents ignored, found in UTF-16.
+        let found = ask(&pc.endpoint, page("verif", None, None)).await;
+        let [Response::HistoryPage { items, .. }] = &found[..] else {
+            panic!("expected a page");
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].highlights, [[0, 5]]);
+
+        // One item per page, then the next.
+        let first = ask(&pc.endpoint, page("", None, Some(1))).await;
+        let [
+            Response::HistoryPage {
+                next: Some(next), ..
+            },
+        ] = &first[..]
+        else {
+            panic!("expected a first page");
+        };
+        let rest = ask(&pc.endpoint, page("", Some(*next), None)).await;
+        assert!(
+            matches!(&rest[..], [Response::HistoryPage { items, next: None }] if items[0].id == remember)
+        );
+
+        let pinned = ask(
+            &pc.endpoint,
+            Request::HistoryPin {
+                id: remember,
+                pinned: true,
+            },
+        )
+        .await;
+        assert!(matches!(
+            &pinned[..],
+            [Response::HistoryPinned { pinned: true, .. }]
+        ));
+        let copied = ask(&pc.endpoint, Request::HistoryCopy { id: remember }).await;
+        assert!(matches!(&copied[..], [Response::Copied]));
+        for _ in 0..300 {
+            if pc.clipboard.get() == Some(Raw::Text("  remember\nme  ".into())) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            pc.clipboard.get(),
+            Some(Raw::Text("  remember\nme  ".into()))
+        );
+
+        // Clearing leaves the pinned one, deleting takes it.
+        let cleared = ask(
+            &pc.endpoint,
+            Request::HistoryClear {
+                since_ms: None,
+                pinned_too: false,
+            },
+        )
+        .await;
+        assert!(matches!(
+            &cleared[..],
+            [Response::HistoryDeleted { items: 1 }]
+        ));
+        let stats = ask(&pc.endpoint, Request::HistoryStats).await;
+        assert!(matches!(&stats[..], [Response::HistoryStats(s)] if s.items == 1 && s.pinned == 1));
+        let deleted = ask(
+            &pc.endpoint,
+            Request::HistoryDelete {
+                ids: vec![remember],
+            },
+        )
+        .await;
+        assert!(matches!(
+            &deleted[..],
+            [Response::HistoryDeleted { items: 1 }]
+        ));
+        let gone = ask(&pc.endpoint, Request::HistoryCopy { id: remember }).await;
+        assert!(matches!(&gone[..], [Response::Error { .. }]));
+    }
+
+    #[tokio::test]
+    async fn the_history_requests_say_when_it_is_off() {
+        let pc = run("pc").await;
+
+        let answer = ask(&pc.endpoint, Request::HistoryStats).await;
+
+        let [Response::Error { message }] = &answer[..] else {
+            panic!("expected an error");
+        };
+        assert!(message.contains("[history]"), "{message}");
+    }
+
+    #[test]
+    fn history_requests_read_with_their_defaults() {
+        let request: Request = serde_json::from_str(r#"{"cmd":"history"}"#).unwrap();
+        assert!(matches!(
+            request,
+            Request::History {
+                ref query,
+                after: None,
+                limit: None,
+                utc_offset_minutes: 0
+            } if query.is_empty()
+        ));
+        let clear: Request = serde_json::from_str(r#"{"cmd":"history_clear"}"#).unwrap();
+        assert!(matches!(
+            clear,
+            Request::HistoryClear {
+                since_ms: None,
+                pinned_too: false
+            }
         ));
     }
 

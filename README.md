@@ -70,6 +70,8 @@ The first time, the phone's app guides you through these steps, and ends with a 
 4. Optional: **Send new screenshots**, **Send 2FA codes**.
 
 On the PC, the tray menu has **Settings…** for the computer's name, notifications and hotkeys.
+A clipboard history, off by default, can be turned on in `settings.toml` and searched with
+`pasteget history` (`docs/TESTING.md`, section 16).
 
 ## If the phone doesn't find the PC
 

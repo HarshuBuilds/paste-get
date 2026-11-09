@@ -47,6 +47,7 @@ mod tests {
                 kind: ClipKind::OneTimeCode.into(),
                 source_app: "Messages".into(),
                 age_ms: 90_000,
+                origin_clip_id: vec![3; 16],
             })),
         };
 

@@ -9,6 +9,9 @@
 //! The app finds computers on the local network itself (Android's `NsdManager`) and passes what
 //! it finds to [`PhoneClient::computer_found`].
 //!
+//! The clipboard history ([`History`], opened with [`PhoneClient::open_history`]) records what
+//! the client copies, sends and receives.
+//!
 //! Methods that touch the network block: call them off the main thread.
 
 // UniFFI's generated scaffolding is `extern "C"` glue that needs `unsafe`. Our own code here
@@ -20,13 +23,15 @@ use std::fs;
 use std::io::Write;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use pasteget_core::clip::{Clip, Kind, mime};
 use pasteget_core::echo::EchoGuard;
+use pasteget_core::history::{Context, Source};
 use pasteget_core::identity::{DeviceId, Identity};
-use pasteget_core::pairing::{self, PairingInvite, sanitize_device_name};
+use pasteget_core::pairing::{self, Dial, PairingInvite, sanitize_device_name};
 use pasteget_core::proto::{AckStatus, Hello, PROTOCOL_VERSION, Platform};
 use pasteget_core::session::{self, Delivery, Peers, SessionEvents, found_first};
 use serde::{Deserialize, Serialize};
@@ -36,8 +41,11 @@ use tokio::task::JoinHandle;
 
 uniffi::setup_scaffolding!();
 
+pub mod history;
 #[cfg(not(windows))]
 pub mod wireless_adb;
+
+pub use history::{History, HistorySettings};
 
 const IDENTITY_FILE: &str = "identity.key";
 const COMPUTERS_FILE: &str = "computers.json";
@@ -78,6 +86,37 @@ pub struct PairedComputer {
     /// Socket addresses, e.g. `192.168.1.20:47290`: from the pairing code, then the last one
     /// that worked moves to the front.
     pub addresses: Vec<String>,
+    /// When its last connection started or ended (unix ms), whichever came last: while it is
+    /// connected, when it connected. `None` until it first connects.
+    #[serde(default)]
+    #[uniffi(default = None)]
+    pub last_seen_ms: Option<i64>,
+    /// The system it said it runs when it last connected: "windows", "linux", "macos" or
+    /// "android". `None` until it connects, or if it didn't say.
+    #[serde(default)]
+    #[uniffi(default = None)]
+    pub platform: Option<String>,
+    /// The paste-get version it said it runs when it last connected, e.g. "0.1.0".
+    #[serde(default)]
+    #[uniffi(default = None)]
+    pub app_version: Option<String>,
+}
+
+/// A clip a computer sent, without its contents: [`PhoneClient::last_received`].
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct ReceivedClip {
+    /// The computer it came from.
+    pub device_id: String,
+    /// Its name, as [`PhoneClient::paired_computers`] has it.
+    pub device_name: String,
+    /// The device where it was copied: that computer, or a device paired with it (another
+    /// phone, a computer linked with it) that it passed the clip on from.
+    pub origin_device_id: String,
+    pub mime_type: String,
+    pub size: u64,
+    pub sensitive: bool,
+    /// When it arrived (unix ms).
+    pub received_at_ms: i64,
 }
 
 /// What a pairing code says about the computer, for the user to check before pairing. Never its
@@ -87,7 +126,8 @@ pub struct InviteSummary {
     pub device_id: String,
     /// `None` when the code gives no name.
     pub name: Option<String>,
-    /// Socket addresses, in the order pairing tries them.
+    /// Socket addresses, in the order pairing tries them: only those it dials (on the local
+    /// network, not this phone's own).
     pub addresses: Vec<String>,
 }
 
@@ -110,6 +150,7 @@ pub trait PhoneListener: Send + Sync {
     fn on_connection_changed(&self, device_id: String, connected: bool);
 
     /// A clip arrived from a computer. `sensitive` clips must stay out of history.
+    /// [`PhoneClient::last_received`], called from here, says which computer sent it.
     fn on_clip_received(&self, mime_type: String, data: Vec<u8>, sensitive: bool);
 
     /// A computer acknowledged a clip sent with `send_text` or `send_image`.
@@ -126,6 +167,8 @@ pub struct PhoneClient {
     state: Arc<State>,
     /// One per paired computer while the client runs.
     dialers: Mutex<HashMap<DeviceId, Dialer>>,
+    /// Set by [`PhoneClient::pair_on_loopback_for_tests`] only.
+    pair_on_loopback: AtomicBool,
 }
 
 /// Keeps a session with one computer.
@@ -143,6 +186,12 @@ struct State {
     peers: Peers,
     guard: Mutex<EchoGuard>,
     listener: Mutex<Option<Arc<dyn PhoneListener>>>,
+    /// Held while the app hears of a received clip, so that it hears of them one at a time and
+    /// `last_received` describes the clip it is hearing of.
+    reporting_clip: Mutex<()>,
+    last_received: Mutex<Option<ReceivedClip>>,
+    /// Where clips are recorded, once the app opened it.
+    history: Mutex<Option<Arc<History>>>,
 }
 
 #[uniffi::export]
@@ -176,8 +225,12 @@ impl PhoneClient {
                 computers: Mutex::new(computers),
                 peers,
                 listener: Mutex::new(None),
+                reporting_clip: Mutex::new(()),
+                last_received: Mutex::new(None),
+                history: Mutex::new(None),
             }),
             dialers: Mutex::new(HashMap::new()),
+            pair_on_loopback: AtomicBool::new(false),
         }))
     }
 
@@ -189,19 +242,27 @@ impl PhoneClient {
         lock(&self.state.computers).clone()
     }
 
-    /// Pairs with the computer whose QR code was scanned. Tries all the code's addresses at
-    /// once and blocks for up to ~10 s. The error names each address and why it failed.
+    /// Pairs with the computer whose QR code was scanned. Tries all the code's addresses on the
+    /// local network at once, and blocks for up to ~10 s. Never through an address of this phone
+    /// (loopback, its Wi-Fi or hotspot address…): another app listens there. The error names
+    /// each address and why it failed.
     pub fn pair(&self, invite_uri: String) -> Result<PairedComputer, PastegetError> {
         let invite: PairingInvite = invite_uri
             .trim()
             .parse()
             .map_err(|_| PastegetError::InvalidCode)?;
+        let dial = if self.pair_on_loopback.load(Ordering::Relaxed) {
+            Dial::LocalNetwork
+        } else {
+            Dial::OtherDevicesOnly
+        };
         let (paired, worked) = self
             .runtime
             .block_on(pairing::pair_with_any_address(
                 &self.state.identity,
                 &invite,
                 &self.state.device_name,
+                dial,
             ))
             .map_err(|failed| {
                 if failed.reached_the_device() {
@@ -213,11 +274,17 @@ impl PhoneClient {
         let computer = PairedComputer {
             device_id: paired.device_id.to_string(),
             name: paired.device_name,
-            // The address that worked is dialed first.
-            addresses: found_first([worked], invite.addresses.iter().copied())
-                .iter()
-                .map(SocketAddr::to_string)
-                .collect(),
+            // The address that worked is dialed first, then the others it may dial.
+            addresses: found_first(
+                [worked],
+                invite.addresses.iter().copied().filter(|a| dial.allows(*a)),
+            )
+            .iter()
+            .map(SocketAddr::to_string)
+            .collect(),
+            last_seen_ms: None,
+            platform: None,
+            app_version: None,
         };
         {
             let mut computers = lock(&self.state.computers);
@@ -322,20 +389,44 @@ impl PhoneClient {
         u32::try_from(self.state.peers.connected().len()).unwrap_or(u32::MAX)
     }
 
+    /// The last clip a computer sent, since the client was created. Called from
+    /// [`PhoneListener::on_clip_received`], it is the clip that call reports: the app hears of
+    /// received clips one at a time.
+    pub fn last_received(&self) -> Option<ReceivedClip> {
+        lock(&self.state.last_received).clone()
+    }
+
     /// Sends text to every connected computer. Returns how many.
     ///
     /// `sensitive` text (a password manager marked it so on the clipboard) is sent marked as
     /// such, so computers keep it out of history, and it doesn't wait for computers that are
     /// away.
     pub fn send_text(&self, text: String, sensitive: bool) -> u32 {
-        self.send(mime::TEXT, text.into_bytes(), sensitive)
+        self.send(
+            mime::TEXT,
+            text.into_bytes(),
+            sensitive,
+            Context::new(Source::SentByHand),
+        )
     }
 
     /// Sends a PNG or JPEG image, as it is, to every connected computer. Returns how many.
     /// Other formats must be converted to PNG first.
     pub fn send_image(&self, image: Vec<u8>) -> Result<u32, PastegetError> {
         let mime_type = mime::of_image(&image).ok_or(PastegetError::UnsupportedImage)?;
-        Ok(self.send(mime_type, image, false))
+        Ok(self.send(mime_type, image, false, Context::new(Source::SentByHand)))
+    }
+
+    /// Sends a screenshot taken on the phone, like [`PhoneClient::send_image`]. The history
+    /// keeps it as a reference to the gallery when `media_id` (its MediaStore `_ID`) is given,
+    /// instead of a copy.
+    pub fn send_screenshot(
+        &self,
+        image: Vec<u8>,
+        media_id: Option<i64>,
+    ) -> Result<u32, PastegetError> {
+        let mime_type = mime::of_image(&image).ok_or(PastegetError::UnsupportedImage)?;
+        Ok(self.send(mime_type, image, false, screenshot(media_id)))
     }
 
     /// Text the phone's clipboard now holds, seen by the automatic copy rather than shared by
@@ -350,7 +441,34 @@ impl PhoneClient {
         if !lock(&self.state.guard).should_send(mime::TEXT, &data) {
             return None;
         }
-        Some(self.broadcast(mime::TEXT, data, sensitive))
+        let clip = self.local_clip(mime::TEXT, data, sensitive);
+        self.state.keep(&clip, Context::new(Source::CopiedHere));
+        Some(self.broadcast_clip(&clip))
+    }
+
+    /// Like [`PhoneClient::copied_text`] while sending copies is off: kept in the history only,
+    /// never sent. Returns whether it was new.
+    pub fn record_copied_text(&self, text: String, sensitive: bool) -> bool {
+        let data = text.into_bytes();
+        if !lock(&self.state.guard).should_send(mime::TEXT, &data) {
+            return false;
+        }
+        let clip = self.local_clip(mime::TEXT, data, sensitive);
+        self.state.keep(&clip, Context::new(Source::CopiedHere));
+        true
+    }
+
+    /// Like [`PhoneClient::send_screenshot`] while sending screenshots is off: kept in the
+    /// history only, never sent.
+    pub fn record_screenshot(
+        &self,
+        image: Vec<u8>,
+        media_id: Option<i64>,
+    ) -> Result<(), PastegetError> {
+        let mime_type = mime::of_image(&image).ok_or(PastegetError::UnsupportedImage)?;
+        let clip = self.local_clip(mime_type, image, false);
+        self.state.keep(&clip, screenshot(media_id));
+        Ok(())
     }
 
     /// Sends a one-time code found in a notification of `app` (its name, e.g. "Messages") to
@@ -359,7 +477,55 @@ impl PhoneClient {
         let clip = Clip::one_time_code(code, &app, self.state.identity.device_id());
         // If the user also copies it, the automatic copy doesn't send it a second time.
         lock(&self.state.guard).should_send(&clip.mime_type, &clip.data);
+        // Never kept: the history remembers its digits for a while, to keep copies of it out.
+        self.state.keep(&clip, Context::new(Source::CopiedHere));
         self.broadcast_clip(&clip)
+    }
+
+    /// Opens the clipboard history kept in `dir` (a folder only the app reads, left out of
+    /// backups: Android's no-backup files folder), and records into it from now on what the
+    /// phone copies, sends and receives. If it is already open, applies `settings` and returns
+    /// it. A history that can't be opened is an error, and syncing goes on without one.
+    pub fn open_history(
+        &self,
+        dir: String,
+        settings: HistorySettings,
+    ) -> Result<Arc<History>, PastegetError> {
+        if let Some(history) = self.state.history() {
+            history.set_settings(settings)?;
+            return Ok(history);
+        }
+        // Not under the lock: sessions look for the history meanwhile.
+        let history = History::open(Path::new(&dir), self.state.identity.device_id(), &settings)?;
+        for computer in lock(&self.state.computers).iter() {
+            if let Ok(id) = computer.device_id.parse() {
+                let platform = platform_number(computer.platform.as_deref());
+                history.name_device(id, computer.name.clone(), platform);
+            }
+        }
+        let mut open = lock(&self.state.history);
+        Ok(Arc::clone(open.get_or_insert(history)))
+    }
+
+    /// Stops recording into the history ("Keep a history" off). The [`History`] the app holds
+    /// still lists and deletes, until it lets it go.
+    pub fn close_history(&self) {
+        *lock(&self.state.history) = None;
+    }
+
+    /// An item of the history to put back on the phone's clipboard: its whole text. When the
+    /// automatic copy then reports it, it isn't sent to the computers (the app may offer to,
+    /// with [`PhoneClient::send_text`]). `None` for an image ([`History::original_path`]), a
+    /// text too large to keep, or without a history.
+    pub fn copy_back(&self, id: i64) -> Result<Option<String>, PastegetError> {
+        let Some(history) = self.state.history() else {
+            return Ok(None);
+        };
+        let text = history.full_text(id)?;
+        if let Some(text) = &text {
+            lock(&self.state.guard).should_send(mime::TEXT, text.as_bytes());
+        }
+        Ok(text)
     }
 }
 
@@ -375,7 +541,13 @@ pub fn describe_invite(invite_uri: String) -> Option<InviteSummary> {
     Some(InviteSummary {
         device_id: invite.device_id.to_string(),
         name,
-        addresses: invite.addresses.iter().map(SocketAddr::to_string).collect(),
+        // The addresses pairing will dial, so the user checks what is really used.
+        addresses: invite
+            .addresses
+            .iter()
+            .filter(|address| Dial::OtherDevicesOnly.allows(**address))
+            .map(SocketAddr::to_string)
+            .collect(),
     })
 }
 
@@ -386,22 +558,32 @@ pub fn find_one_time_code(text: String) -> Option<String> {
 }
 
 impl PhoneClient {
-    /// Sends what the user shared, even if it was sent before.
-    fn send(&self, mime_type: &str, data: Vec<u8>, sensitive: bool) -> u32 {
-        // Remember it, so the automatic copy doesn't send it a second time.
-        lock(&self.state.guard).should_send(mime_type, &data);
-        self.broadcast(mime_type, data, sensitive)
+    /// Lets [`PhoneClient::pair`] dial loopback addresses, for tests against a desktop daemon on
+    /// the same machine. Not exported to the app: a phone never pairs with something on itself.
+    #[doc(hidden)]
+    pub fn pair_on_loopback_for_tests(&self) {
+        self.pair_on_loopback.store(true, Ordering::Relaxed);
     }
 
-    fn broadcast(&self, mime_type: &str, data: Vec<u8>, sensitive: bool) -> u32 {
-        let clip = Clip {
+    /// Sends what the user shared, even if it was sent before.
+    fn send(&self, mime_type: &str, data: Vec<u8>, sensitive: bool, context: Context) -> u32 {
+        // Remember it, so the automatic copy doesn't send it a second time.
+        lock(&self.state.guard).should_send(mime_type, &data);
+        let clip = self.local_clip(mime_type, data, sensitive);
+        self.state.keep(&clip, context);
+        self.broadcast_clip(&clip)
+    }
+
+    /// A clip copied on this phone.
+    fn local_clip(&self, mime_type: &str, data: Vec<u8>, sensitive: bool) -> Clip {
+        Clip {
             mime_type: mime_type.to_owned(),
             data,
             sensitive,
             origin: self.state.identity.device_id(),
             kind: Kind::Copy,
-        };
-        self.broadcast_clip(&clip)
+            origin_clip_id: None,
+        }
     }
 
     fn broadcast_clip(&self, clip: &Clip) -> u32 {
@@ -450,22 +632,87 @@ impl State {
         lock(&self.listener).clone()
     }
 
-    /// A computer connected with a new name: it was renamed there.
-    fn renamed(&self, peer: DeviceId, name: &str) {
+    fn history(&self) -> Option<Arc<History>> {
+        lock(&self.history).clone()
+    }
+
+    /// Records a clip in the history, if one is open. Never waits on the disk.
+    fn keep(&self, clip: &Clip, context: Context) {
+        if let Some(history) = self.history() {
+            history.record(clip.clone(), context);
+        }
+    }
+
+    /// A connection with `peer` started, with its `hello`, or ended: remembers when, and what
+    /// its Hello said (a new name means it was renamed there).
+    fn seen(&self, peer: DeviceId, hello: Option<&Hello>) {
         let id = peer.to_string();
-        let name = sanitize_device_name(name);
         let mut computers = lock(&self.computers);
         let Some(computer) = computers.iter_mut().find(|c| c.device_id == id) else {
             return;
         };
-        if computer.name == name {
-            return;
+        computer.last_seen_ms = Some(now_ms());
+        if let Some(hello) = hello {
+            computer.name = sanitize_device_name(&hello.device_name);
+            computer.platform = platform_name(hello.platform);
+            computer.app_version = clean_version(&hello.app_version);
         }
-        computer.name = name;
-        // Best effort: if saving fails, it shows the old name again after a restart, until it
+        // Best effort: if saving fails, it shows what it knew before after a restart, until it
         // connects.
         let _ = save_computers(&self.data_dir, &computers);
     }
+}
+
+/// How the history records a screenshot: as a reference to the gallery when it has its
+/// MediaStore `_ID`.
+fn screenshot(media_id: Option<i64>) -> Context {
+    Context {
+        media_id,
+        ..Context::new(Source::Screenshot)
+    }
+}
+
+/// The protocol's `Platform` number of a [`platform_name`].
+fn platform_number(name: Option<&str>) -> i32 {
+    let platform = match name {
+        Some("android") => Platform::Android,
+        Some("windows") => Platform::Windows,
+        Some("linux") => Platform::Linux,
+        Some("macos") => Platform::Macos,
+        _ => Platform::Unspecified,
+    };
+    platform.into()
+}
+
+/// The name of a `Hello.platform`, `None` when unspecified or unknown.
+fn platform_name(platform: i32) -> Option<String> {
+    let name = match Platform::try_from(platform).ok()? {
+        Platform::Unspecified => return None,
+        Platform::Android => "android",
+        Platform::Windows => "windows",
+        Platform::Linux => "linux",
+        Platform::Macos => "macos",
+    };
+    Some(name.to_owned())
+}
+
+/// A version a peer sent, without control characters and at most 32 characters long. `None`
+/// if it sent none.
+fn clean_version(version: &str) -> Option<String> {
+    let cleaned: String = version
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(32)
+        .collect();
+    Some(cleaned.trim().to_owned()).filter(|version| !version.is_empty())
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| {
+            i64::try_from(since.as_millis()).unwrap_or(i64::MAX)
+        })
 }
 
 impl SessionEvents for State {
@@ -515,19 +762,24 @@ impl SessionEvents for State {
             self.peers.unpair(&peer);
             return;
         }
-        self.renamed(peer, &hello.device_name);
+        self.seen(peer, Some(hello));
+        if let Some(history) = self.history() {
+            let name = sanitize_device_name(&hello.device_name);
+            history.name_device(peer, name, hello.platform);
+        }
         if let Some(listener) = self.listener() {
             listener.on_connection_changed(peer.to_string(), true);
         }
     }
 
     fn disconnected(&self, peer: DeviceId) {
+        self.seen(peer, None);
         if let Some(listener) = self.listener() {
             listener.on_connection_changed(peer.to_string(), false);
         }
     }
 
-    fn clip_received(&self, _peer: DeviceId, clip: Clip) {
+    fn clip_received(&self, peer: DeviceId, clip: Clip) {
         {
             let mut guard = lock(&self.guard);
             if !guard.accepts_origin(&clip.origin) {
@@ -535,6 +787,24 @@ impl SessionEvents for State {
             }
             guard.applied_remote(&clip);
         }
+        let id = peer.to_string();
+        let device_name = lock(&self.computers)
+            .iter()
+            .find(|c| c.device_id == id)
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
+        let received = ReceivedClip {
+            device_id: id,
+            device_name,
+            origin_device_id: clip.origin.to_string(),
+            mime_type: clip.mime_type.clone(),
+            size: clip.data.len() as u64,
+            sensitive: clip.sensitive,
+            received_at_ms: now_ms(),
+        };
+        self.keep(&clip, Context::received_from(peer));
+        let _one_at_a_time = lock(&self.reporting_clip);
+        *lock(&self.last_received) = Some(received);
         if let Some(listener) = self.listener() {
             listener.on_clip_received(clip.mime_type, clip.data, clip.sensitive);
         }
@@ -665,6 +935,23 @@ mod tests {
     }
 
     #[test]
+    fn an_invite_lists_only_the_addresses_pairing_dials() {
+        let (_, uri) = invite_uri(
+            "HP-AIO",
+            vec![
+                addr("203.0.113.7:47290"),
+                addr("192.168.1.20:47290"),
+                addr("127.0.0.1:47290"),
+            ],
+        );
+
+        assert_eq!(
+            describe_invite(uri).unwrap().addresses,
+            vec!["192.168.1.20:47290".to_owned()]
+        );
+    }
+
+    #[test]
     fn a_nameless_invite_has_no_name() {
         let (_, uri) = invite_uri("", vec![addr("192.168.1.20:47290")]);
 
@@ -756,6 +1043,98 @@ mod tests {
         assert_eq!(*pc_events.0.lock().unwrap(), [state.identity.device_id()]);
         assert!(!connections.0.lock().unwrap().contains(&true));
         assert!(phone.paired_computers().is_empty());
+    }
+
+    /// Asks `last_received` from inside `on_clip_received`, after taking its time.
+    #[derive(Default)]
+    struct SlowAsker {
+        client: std::sync::OnceLock<std::sync::Weak<PhoneClient>>,
+        /// The size of each clip, and the size `last_received` gave meanwhile.
+        heard: Mutex<Vec<(usize, Option<u64>)>>,
+    }
+
+    impl PhoneListener for SlowAsker {
+        fn on_connection_changed(&self, _device_id: String, _connected: bool) {}
+
+        fn on_clip_received(&self, _mime_type: String, data: Vec<u8>, _sensitive: bool) {
+            if data.len() == 1 {
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            let client = self.client.get().and_then(|c| c.upgrade()).unwrap();
+            let said = client.last_received().map(|clip| clip.size);
+            self.heard.lock().unwrap().push((data.len(), said));
+        }
+
+        fn on_clip_delivered(&self, _delivery: ClipDelivery) {}
+
+        fn on_unpaired(&self, _computer: PairedComputer) {}
+    }
+
+    /// A clip arriving while the app handles another one waits: `last_received` still describes
+    /// the one being handled.
+    #[test]
+    fn last_received_waits_its_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let phone = PhoneClient::new(dir.path().to_str().unwrap().into(), "POCO".into()).unwrap();
+        let asker = Arc::new(SlowAsker::default());
+        asker.client.set(Arc::downgrade(&phone)).unwrap();
+        phone.start(asker.clone());
+        let (first, second) = (
+            Identity::generate().unwrap().device_id(),
+            Identity::generate().unwrap().device_id(),
+        );
+
+        std::thread::scope(|threads| {
+            let state = &phone.state;
+            threads.spawn(|| state.clip_received(first, Clip::text("1", first)));
+            std::thread::sleep(Duration::from_millis(50));
+            threads.spawn(|| state.clip_received(second, Clip::text("22", second)));
+        });
+
+        assert_eq!(*asker.heard.lock().unwrap(), [(1, Some(1)), (2, Some(2))]);
+        assert_eq!(phone.last_received().unwrap().device_id, second.to_string());
+    }
+
+    /// Saved before computers had a last-seen time, a platform and a version.
+    #[test]
+    fn computers_saved_by_an_older_version_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = Identity::generate().unwrap().device_id().to_string();
+        let old = format!(
+            r#"[{{"device_id": "{id}", "name": "HP-AIO", "addresses": ["192.168.1.20:47290"]}}]"#
+        );
+        fs::write(dir.path().join(COMPUTERS_FILE), old).unwrap();
+
+        let computers = load_computers(dir.path()).unwrap();
+
+        assert_eq!(
+            computers,
+            [PairedComputer {
+                device_id: id,
+                name: "HP-AIO".into(),
+                addresses: vec!["192.168.1.20:47290".into()],
+                last_seen_ms: None,
+                platform: None,
+                app_version: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn what_a_hello_says_is_cleaned() {
+        assert_eq!(
+            platform_name(Platform::Windows.into()).as_deref(),
+            Some("windows")
+        );
+        assert_eq!(
+            platform_name(Platform::Linux.into()).as_deref(),
+            Some("linux")
+        );
+        assert_eq!(platform_name(Platform::Unspecified.into()), None);
+        assert_eq!(platform_name(99), None);
+        assert_eq!(clean_version(" 0.1.0\n"), Some("0.1.0".into()));
+        assert_eq!(clean_version(""), None);
+        assert_eq!(clean_version(&"9".repeat(100)).unwrap().len(), 32);
     }
 
     #[test]

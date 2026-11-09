@@ -121,15 +121,20 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
 - [ ] Human review of crypto and protocol code: `docs/REVIEW.md` lists the files and the
   31 properties to check
 - [x] Pairing from the tray: a *Pair a phone* window with the QR code, opened by itself on the
-  first start, so no terminal is needed
+  first start, so no terminal is needed. Wrong secrets never close the code, so a device on the
+  network can't close it with junk requests (`TESTING.md`, P28). The window isn't protected
+  from screenshots yet
 - [x] PC side can revoke a paired phone: `pasteget forget <name>`, or the tray menu → the phone
   → *Forget this device*; its session ends at once. The phone is told (`Unpaired` in the
   session, or `Refusal`, `NOT_PAIRED`, when it next dials), forgets the PC too and shows "<PC>
   unpaired this phone". Forgetting a connected PC on the phone tells the PC the same way
-  (`TESTING.md`, P25)
+  (`TESTING.md`, P30)
 - [x] The phone asks before pairing: a scanned code or a `pasteget://` link (which any web page
   or message can open) shows the name and addresses it gives and pairs only on *Pair*. Pairing
-  errors are explained in the phone's language, with the technical message under *Details*
+  errors are explained in the phone's language, with the technical message under *Details*.
+  Only the code's addresses on the local network are dialed, never one on the Internet, and
+  the phone never pairs through an address of its own: loopback, Wi-Fi, hotspot (`TESTING.md`,
+  P27, P29)
 - [x] The phone's screens, redrawn: Home (a status card with one next step, what paste-get
   sends, the last clips with their latency), History (what was sent and received since the app
   started: kind, size, time, never contents, until the history store exists), Devices (each
@@ -148,6 +153,11 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
   pairing, notifications (asked on their own page), what to send and each choice's set-up,
   keeping it running, then a test sentence copied for real and "Arrived on <PC> in … ms", or
   what to check after 5 s (`TESTING.md`, P0)
+- [x] Connections not known to come from a paired device are limited: 3 s for the TLS handshake
+  and the first message, 8 at once per address, 64 in all. Past that the oldest of the address
+  holding the most closes, never one from an address a paired device connected from for one
+  from another address, so a paired device still gets in during a flood (`TESTING.md`, section
+  3, row 13)
 - [x] *Settings…* window in the tray: this computer's name, notifications, links, hotkeys and
   starting at login, checked before saving. Notifications and links apply at once
   (`pasteget` control request `reload_settings`); a new name or hotkeys restart the daemon the
@@ -165,6 +175,9 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
   its processes if it's too old to know it: only those of its profile, the tray and `pasteget
   daemon` (`TESTING.md`, T22–T25, T27, T28). The uninstaller also removes *Start at login*,
   for every profile
+- [x] The phone API says which computer sent a clip, and where it was copied
+  (`PhoneClient::last_received`), and when each computer was last seen, its system and its
+  paste-get version (`PairedComputer`), for the new phone screens
 
 ## v0.2 — "smart"
 History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart actions.
@@ -186,6 +199,11 @@ History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart ac
   `x-kde-passwordManagerHint` on Wayland (KeePassXC, KDE), the formats KeePass, KeePassXC,
   Bitwarden and 1Password set on Windows. Out of the phone's clipboard preview, the tray's
   *Recent* list, and never kept for a device that is away (`TESTING.md`, C7 and Q11)
+- [x] A clip is passed on at most once, and secrets never: each copy carries a random ID
+  (`ClipOffer.origin_clip_id`) that devices remember for 10 minutes, so a phone paired with two
+  linked computers, or computers linked in a ring, take each copy once and nothing loops.
+  Passwords and 2FA codes reach only the devices paired with the one where they were copied
+  (`TESTING.md`, P25–P26)
 - [ ] Clipboard history, on the phone first, then on each PC. Off by default; passwords, codes,
   keys and card numbers never reach the disk. The store is in the core, so both sides share it:
   - [x] Shelves and secrets: `detect::category` (link, email, phone number, colour, code,
@@ -211,7 +229,22 @@ History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart ac
     tells the app when to run retention); space goes back to the disk. Measured on 1,000
     texts: the trigram index is 3.2 times the text, 1.4 KB per item
   - [ ] Phone: recording through `ffi`, then the Android screens
+    - [x] `ffi`: a `History` object for the app (pages, search, item, pin, delete, clear,
+      stats, the "kept out" counter, settings, thumbnails) and a recording thread: what the
+      phone copies (also with sending off), sends and receives, with the computer it came
+      through and the device where it was copied. Sync never waits on it, and goes on if it
+      can't open; an item copied back isn't sent again (`ffi/tests/phone_and_pc.rs`)
+    - [ ] Android: turning it on, the screens
   - [ ] PC: history in the daemon, `pasteget history`, the tray's history window
+    - [x] Daemon: `[history]` in `settings.toml` (off by default, applied without a restart),
+      kept in `%LOCALAPPDATA%` or `~/.local/share` (`PASTEGET_HOME` too), what the *Recent* list
+      gets (sensitive clips only counted), JPEG thumbnails of images, items deleted when they
+      expire; a history that can't open leaves syncing as it was
+    - [x] Control requests (`history`, `history_copy`, `history_pin`, `history_delete`,
+      `history_clear`, `history_stats`; control version 2) and `pasteget history list`, `search`,
+      `copy` (also `--stdin`, for pickers), `pin`, `unpin`, `delete`, `clear`, `stats`; `--plain`
+      prints one escaped line per item for fuzzel or wofi (`TESTING.md`, section 16)
+    - [ ] The tray's history window
 Desktop identity key in the OS keystore when one is available (M2 stores it in a user-only file,
 like SSH keys, because Hyprland setups often run no Secret Service).
 
