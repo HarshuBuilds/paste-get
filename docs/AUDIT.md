@@ -129,8 +129,10 @@ OS-specific extras (sensitive markers, file lists, HTML) can be added per platfo
 - **Pairing:** the PC shows a QR code (device id, key fingerprint, IPs, port, one-time secret); the
   phone scans it. Fallback: 6-digit code with SPAKE2. Devices can be revoked from either side.
 - **Transfers:** the sender offers metadata first (hash, MIME types, size), then streams resumable chunks.
-- **No echo loops:** every clip carries origin device + content hash. Clips we just applied are
-  ignored by the local watcher. On Android 13+, clips we write carry `EXTRA_IS_REMOTE_DEVICE`.
+- **No echo loops:** every clip carries its origin device and a random ID for that copy; a
+  device takes each copy once and passes it on at most once, never a secret (`PROTOCOL.md`,
+  section 6). Clips we just applied are ignored by the local watcher, by their content hash. On
+  Android 13+, clips we write carry `EXTRA_IS_REMOTE_DEVICE`.
 - **History:** SQLite + FTS5 in the core, kept on each device (section 10). Version 1 relies on
   the OS's disk encryption; encrypting it with a key in the OS keystore (Android Keystore, Windows
   DPAPI, Secret Service on Linux, Keychain on macOS) comes later, with the identity key.

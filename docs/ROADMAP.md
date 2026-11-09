@@ -148,6 +148,11 @@ History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart ac
   when the connection died without closing: a copy waits until the device acknowledges it.
   Copies made on both sides meanwhile cross on reconnection, and both keep the newer one (each
   offer says how old its clip is, `ClipOffer.age_ms`)
+- [x] A clip is passed on at most once, and secrets never: each copy carries a random ID
+  (`ClipOffer.origin_clip_id`) that devices remember for 10 minutes, so a phone paired with two
+  linked computers, or computers linked in a ring, take each copy once and nothing loops.
+  Passwords and 2FA codes reach only the devices paired with the one where they were copied
+  (`TESTING.md`, P16–P17)
 - [ ] Clipboard history, on the phone first, then on each PC. Off by default; passwords, codes,
   keys and card numbers never reach the disk. The store is in the core, so both sides share it:
   - [x] Shelves and secrets: `detect::category` (link, email, phone number, colour, code,

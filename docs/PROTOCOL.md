@@ -149,8 +149,8 @@ Only one clip is in flight per direction at a time: a new `ClipOffer` cancels an
 - A chunk carries **1 to 262 144 bytes** (256 KiB). Senders use full-size chunks except the last.
 - Receivers choose their maximum clip size (default **64 MiB**) and answer `TOO_LARGE` to bigger
   offers right away. They must not allocate `size` bytes up front based on the offer alone.
-- `clip_id` is 16 bytes, `sha256` and `origin_device` are 32 bytes; anything else is a
-  `PROTOCOL_ERROR`.
+- `clip_id` is 16 bytes, `sha256` and `origin_device` are 32 bytes, `origin_clip_id` is empty
+  or 16 bytes; anything else is a `PROTOCOL_ERROR`.
 - When the clip is complete, the receiver checks the hash, then that the content matches its type:
   valid UTF-8 for text, the PNG or JPEG signature for images. Failing content is a
   `PROTOCOL_ERROR`.
@@ -174,9 +174,12 @@ Only one clip is in flight per direction at a time: a new `ClipOffer` cancels an
 Images in any other format are converted to PNG before sending. A receiver decodes images with
 limits on their dimensions and memory, since a small file can claim a huge size.
 
-**`origin_device`** is the device ID of the device where the clip was first copied. A device
-never re-sends a clip it received (see *Echo loops*), and ignores offers whose
-`origin_device` is itself.
+**`origin_device`** is the device ID of the device where the clip was first copied, and
+**`origin_clip_id`** names that copy: 16 random bytes the origin picks once per copy, and sends
+unchanged each time it sends that copy (to each device, and again after a reconnection). A device
+that passes the clip on keeps both (section 6). Neither says anything about the content: the same
+text copied twice is two copies. An offer without `origin_clip_id` comes from an older sender. A
+device ignores offers whose `origin_device` is itself.
 
 **`sensitive`** means the source marked the clip as secret (password, 2FA code). Receivers put it
 on the clipboard but must keep it out of history and OS clipboard managers. A notification may
@@ -277,17 +280,36 @@ A device that isn't paired and connects while no window is open gets the `Refusa
 - **Not protected**: someone who photographs the QR code and pairs before the owner does within
   the 5 minutes. The PC shows which device just paired, and can unpair it (section 2.3).
 
-## 6. Echo loops
+## 6. Echo loops and relays
 
-Putting a received clip on the clipboard makes the local clipboard watcher fire. Without care,
-the clip would be sent straight back, forever. Two rules prevent it:
+Two things could send a clip round forever: putting a received clip on the clipboard makes the
+local clipboard watcher fire, and devices pass clips on to each other. These rules prevent it:
 
 1. **Send only what's new.** Each device remembers a fingerprint of the clipboard's last known
    content: SHA-256 over the MIME type, a zero byte, and the data. A received clip updates that
    fingerprint when it's applied. A local change is sent only if its fingerprint differs. This also
    absorbs operating systems that report one change several times.
 2. **Never accept your own clip.** Offers whose `origin_device` is the receiver's own device ID
-   are ignored (they can come back once devices relay clips to each other).
+   are ignored.
+3. **Take each copy once.** A device remembers the `origin_device` and `origin_clip_id` of each
+   copy it received, for **10 minutes**, and **512** of them at most (the oldest go first). A copy
+   that arrives again meanwhile, through another device or sent again after its `Ack` was lost,
+   is acknowledged with `OK` and dropped: not applied, no notification, not passed on. Only these
+   IDs are kept, in memory, no hash of the content: they say nothing about what was copied.
+4. **Pass a copy on at most once.** A device may pass a clip it received on to its other
+   sessions, except the one it came from and its origin, with the same `origin_device`,
+   `origin_clip_id` and age (`age_ms`). Since it takes each copy once, it passes each one on at
+   most once. It never passes on:
+   - a `sensitive` clip or a one-time code: its origin sends it to every device that trusts it
+     directly, and it goes no further;
+   - a clip without `origin_clip_id` (from an older sender), which a device reached twice
+     couldn't tell from a new copy. It is still applied;
+   - a clip copied more than 10 minutes ago (`age_ms`): a device may have forgotten taking it.
+
+In version 0 the PC passes on what it receives, so that two phones paired with it, or a phone and
+a computer that joined it, get each other's copies; the phone passes nothing on. Where devices
+are also paired directly (a phone paired with two computers that joined each other), each copy
+reaches a device twice and rule 3 drops the second.
 
 On Android 13+, clips put on the clipboard from a peer also carry `EXTRA_IS_REMOTE_DEVICE`, so
 the system UI shows them correctly.

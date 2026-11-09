@@ -16,6 +16,7 @@ use pasteget_core::pairing::PairingInvite;
 use pasteget_desktop::clipboard::{Content, MemoryClipboard, Raw, RgbaImage};
 use pasteget_desktop::config::Profile;
 use pasteget_desktop::daemon::{Daemon, DaemonOptions};
+use pasteget_desktop::notify::{Notifier, Received};
 use pasteget_ffi::{ClipDelivery, PairedComputer, PastegetError, PhoneClient, PhoneListener};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
@@ -81,7 +82,24 @@ struct Pc {
     runtime: tokio::runtime::Runtime,
     daemon: Daemon,
     clipboard: MemoryClipboard,
+    /// The "Image from …" notifications it showed: one per image it put on its clipboard.
+    notifications: Arc<Notifications>,
     _home: tempfile::TempDir,
+}
+
+#[derive(Debug, Default)]
+struct Notifications(Mutex<Vec<Received>>);
+
+impl Notifier for Notifications {
+    fn received(&self, received: Received) {
+        self.0.lock().unwrap().push(received);
+    }
+}
+
+impl Pc {
+    fn notified(&self) -> usize {
+        self.notifications.0.lock().unwrap().len()
+    }
 }
 
 fn start_pc() -> Pc {
@@ -92,12 +110,13 @@ fn start_pc_in(home: tempfile::TempDir) -> Pc {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let profile = Profile::open_in(home.path(), "pc").unwrap();
     let clipboard = MemoryClipboard::default();
+    let notifications = Arc::new(Notifications::default());
     let options = DaemonOptions {
         listen: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         advertised_ips: Some(vec![IpAddr::V4(Ipv4Addr::LOCALHOST)]),
         poll_interval: Duration::from_millis(10),
         announce: false,
-        notifier: None,
+        notifier: Some(Arc::clone(&notifications) as Arc<dyn Notifier>),
         hotkeys: false,
     };
     let daemon = runtime
@@ -107,6 +126,7 @@ fn start_pc_in(home: tempfile::TempDir) -> Pc {
         runtime,
         daemon,
         clipboard,
+        notifications,
         _home: home,
     }
 }
@@ -863,6 +883,107 @@ fn a_jpeg_from_one_phone_reaches_another_through_the_pc() {
     // Not back to the phone it came from.
     std::thread::sleep(Duration::from_millis(200));
     assert!(first.listener.clips.lock().unwrap().is_empty());
+}
+
+/// `joiner` pairs with `host`, as `pasteget join` does, and both connect.
+fn link(joiner: &Pc, host: &Pc) {
+    let invite = host.runtime.block_on(host.daemon.open_pairing()).unwrap();
+    joiner
+        .runtime
+        .block_on(joiner.daemon.join(&invite))
+        .unwrap();
+    for pc in [joiner, host] {
+        wait_until("the computers to connect", || {
+            let status = pc.runtime.block_on(pc.daemon.status());
+            status.devices.iter().any(|d| d.connected)
+        });
+    }
+}
+
+fn holds_image(pc: &Pc, size: (u32, u32)) -> bool {
+    matches!(
+        pc.clipboard.get(),
+        Some(Raw::Image(RgbaImage { width, height, .. })) if (width, height) == size
+    )
+}
+
+/// The phone is paired with two computers that are linked too: each copy reaches every device
+/// twice, straight and through the other computer, and each takes it once, with one
+/// notification.
+#[test]
+fn a_phone_and_two_linked_computers_take_each_copy_once() {
+    let (first, second) = (start_pc(), start_pc());
+    link(&second, &first);
+    let phone = connected_phone(&first, "POCO");
+    let qr_code = second
+        .runtime
+        .block_on(second.daemon.open_pairing())
+        .unwrap()
+        .to_uri();
+    phone.client.pair(qr_code).unwrap();
+    wait_until("both connections", || phone.client.connected_count() == 2);
+
+    assert_eq!(phone.client.send_image(PNG_1X1.to_vec()).unwrap(), 2);
+    wait_until("the image on both computers", || {
+        holds_image(&first, (1, 1)) && holds_image(&second, (1, 1))
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!((first.notified(), second.notified()), (1, 1));
+
+    let screenshot = RgbaImage {
+        width: 4,
+        height: 3,
+        pixels: vec![200; 4 * 3 * 4],
+    };
+    first.clipboard.set(Raw::Image(screenshot));
+    wait_until("the screenshot on the phone and the other computer", || {
+        !phone.listener.clips.lock().unwrap().is_empty() && holds_image(&second, (4, 3))
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(phone.listener.clips.lock().unwrap().len(), 1);
+    assert_eq!((first.notified(), second.notified()), (1, 2));
+}
+
+/// Two phones paired with one computer, which joined another: what one phone copies reaches the
+/// others through it, but a secret or a 2FA code goes no further than the computer.
+#[test]
+fn secrets_from_a_phone_go_no_further_than_its_computers() {
+    let (pc, other_pc) = (start_pc(), start_pc());
+    link(&pc, &other_pc);
+    let (phone, other_phone) = (connected_phone(&pc, "POCO"), connected_phone(&pc, "Tablet"));
+    let text = |text: &str| Some(Raw::Text(text.into()));
+
+    assert_eq!(
+        phone
+            .client
+            .send_one_time_code("482913".into(), "Messages".into()),
+        1
+    );
+    wait_until("the code on the PC", || {
+        pc.clipboard.get() == text("482913")
+    });
+    assert_eq!(phone.client.copied_text("hunter2".into(), true), Some(1));
+    wait_until("the secret on the PC", || {
+        pc.clipboard.get() == text("hunter2")
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(other_pc.clipboard.get(), None);
+    assert!(other_phone.listener.clips.lock().unwrap().is_empty());
+
+    // What isn't secret is passed on, also the same text copied again later.
+    for copy in ["plain", "something else", "plain"] {
+        assert_eq!(phone.client.copied_text(copy.into(), false), Some(1));
+        wait_until("the copy on the other computer", || {
+            other_pc.clipboard.get() == text(copy)
+        });
+    }
+    wait_until("the copies on the other phone", || {
+        other_phone.listener.clips.lock().unwrap().len() == 3
+    });
+    assert_eq!(
+        other_phone.listener.sensitive.lock().unwrap().as_slice(),
+        [false; 3]
+    );
 }
 
 /// The error names every address of the code, with its own reason.

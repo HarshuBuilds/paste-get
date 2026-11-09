@@ -369,6 +369,7 @@ impl PhoneClient {
             sensitive,
             origin: self.state.identity.device_id(),
             kind: Kind::Copy,
+            origin_clip_id: None,
         };
         self.broadcast_clip(&clip)
     }

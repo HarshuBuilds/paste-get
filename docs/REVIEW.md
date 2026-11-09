@@ -16,7 +16,7 @@ make trust decisions. In order of risk:
 | `core/src/transport.rs` | TLS 1.3 setup, custom certificate verifiers (pinning), ALPN, `UnverifiedConnection` | ~620 |
 | `core/src/pairing.rs` | Invite (QR code) parsing, pairing window, secret check, `pair_with` / `accept_pairing` | ~540 |
 | `core/src/identity.rs` | Ed25519 key, device ID = SHA-256 of the SPKI, certificate generation | ~200 |
-| `core/src/session.rs` | Session per device, reconnects, who may stay connected | ~670 |
+| `core/src/session.rs` | Session per device, reconnects, who may stay connected, which clips are taken and passed on | ~920 |
 | `core/src/clip.rs` | Clip offer/chunks/ack: sizes, offsets, hash check, reassembly | ~510 |
 | `core/src/framing.rs` | Length-prefixed frames, 1 MiB limit | ~190 |
 | `core/src/echo.rs` | Echo-loop guard (not a security boundary, but it hashes untrusted data) | ~120 |
@@ -86,7 +86,12 @@ Each line is a claim to check. "→" points at where it's enforced.
 14. A reassembled clip is checked against the offered SHA-256 before use.
 15. Images are checked (dimensions ≤ 16,384 px, decoded size ≤ 512 MiB) before decoding.
     → `desktop/src/clipboard.rs`
-16. A clip whose origin is this device is dropped (echo through another device). → `echo.rs`
+16. A clip whose origin is this device is dropped (echo through another device). → `echo.rs`.
+    A copy (`origin_device`, `origin_clip_id`) is taken once while it is remembered (10 minutes,
+    512 copies), and passed on at most once; a sensitive clip, a one-time code, a clip without
+    an ID or one copied over 10 minutes ago never. Nothing about the content is kept for this.
+    → `session.rs` (`SeenClips`, `Peers::relay`, `read_loop`), `desktop/src/daemon.rs`
+    `clip_received`
 
 ### Local attack surface
 17. Another user on the same machine can't talk to the daemon: socket in a 0700 profile

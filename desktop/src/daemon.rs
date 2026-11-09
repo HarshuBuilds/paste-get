@@ -8,6 +8,10 @@
 //!   session (per device) ──received clips──▶ clipboard thread + relay to other sessions
 //! ```
 //!
+//! A received clip is passed on once, so that a phone paired with this computer only reaches the
+//! others through it; a copy that arrives a second time is dropped by the session. Secrets and
+//! 2FA codes are never passed on (`Peers::relay`).
+//!
 //! Devices that paired with us (phones) connect in. Devices we paired with by scanning their
 //! code (`pasteget join`) are dialed out and redialed after disconnects, also at the addresses
 //! mDNS finds them at, since their address may change.
@@ -343,6 +347,7 @@ impl Daemon {
             sensitive: content.sensitive,
             origin: self.device_id(),
             kind: Kind::Copy,
+            origin_clip_id: None,
         };
         self.shared.remember_clip(&clip, None);
         self.shared.peers.broadcast(&clip, None)
@@ -563,6 +568,7 @@ impl Shared {
             sensitive: content.sensitive,
             origin: self.identity.device_id(),
             kind: Kind::Copy,
+            origin_clip_id: None,
         };
         self.remember_clip(&clip, None);
         let sent_to = self.peers.broadcast(&clip, None);
@@ -677,7 +683,7 @@ impl Shared {
     }
 }
 
-/// Received clips go to the clipboard and on to the other devices.
+/// Received clips go to the clipboard, and on to the other devices unless they are secrets.
 impl SessionEvents for Shared {
     /// A computer this one joined answered at `address`: it's dialed there first from now on,
     /// also after a restart.
@@ -809,7 +815,10 @@ impl SessionEvents for Shared {
         if let Err(e) = self.clipboard.write(content, applied) {
             tracing::warn!(error = %e, "received clip not applied");
         }
-        self.peers.relay(&clip, peer);
+        let relayed = self.peers.relay(&clip, peer);
+        if relayed > 0 {
+            tracing::debug!(relayed, "clip passed on");
+        }
     }
 }
 
@@ -1021,6 +1030,7 @@ async fn local_changes_loop(shared: Arc<Shared>, mut changes: mpsc::Receiver<Con
             sensitive: content.sensitive,
             origin: shared.identity.device_id(),
             kind: Kind::Copy,
+            origin_clip_id: None,
         };
         shared.remember_clip(&clip, None);
         let sent_to = shared.peers.broadcast(&clip, None);
@@ -1798,6 +1808,100 @@ mod tests {
                 == Some(Raw::Text("sent with pasteget send".into())))
             .await
         );
+    }
+
+    /// Pairs `joiner` with `host`, as `pasteget join` does, and waits for their session.
+    async fn link(joiner: &TestDaemon, host: &TestDaemon) {
+        let invite = host.daemon.open_pairing().await.unwrap();
+        joiner.daemon.join(&invite).await.unwrap();
+        let (joiner_id, host_id) = (joiner.daemon.device_id(), host.daemon.device_id());
+        assert!(wait_for(|| host.daemon.shared.peers.is_connected(&joiner_id)).await);
+        assert!(wait_for(|| joiner.daemon.shared.peers.is_connected(&host_id)).await);
+    }
+
+    /// A daemon that shows a notification for every clip it puts on its clipboard.
+    async fn start_notifying(name: &str) -> TestDaemon {
+        let home = tempfile::tempdir().unwrap();
+        let profile = Profile::open_in(home.path(), name).unwrap();
+        std::fs::write(
+            profile.dir().join("settings.toml"),
+            format!("device_name = \"{name}\"\nnotify = \"all\"\n"),
+        )
+        .unwrap();
+        start_in(home, profile).await
+    }
+
+    /// How many clips from other devices it put on its clipboard.
+    fn applied(test: &TestDaemon) -> usize {
+        test.notifications.0.lock().unwrap().len()
+    }
+
+    /// Three computers linked in a ring, and a fourth that joined one of them: a copy made on
+    /// the fourth reaches each of the three once, through every path, and nothing loops.
+    #[tokio::test]
+    async fn computers_in_a_ring_take_each_copy_once() {
+        let [a, b, c, outside] = [
+            start_notifying("a").await,
+            start_notifying("b").await,
+            start_notifying("c").await,
+            start_notifying("outside").await,
+        ];
+        link(&b, &a).await;
+        link(&c, &b).await;
+        link(&a, &c).await;
+        link(&outside, &a).await;
+        let ring = [&a, &b, &c];
+        let all = [&a, &b, &c, &outside];
+        let everywhere = |text: &str| {
+            let text = Raw::Text(text.into());
+            move || {
+                all.iter()
+                    .all(|pc| pc.clipboard.get() == Some(text.clone()))
+            }
+        };
+
+        outside.clipboard.set(Raw::Text("copied outside".into()));
+        assert!(wait_for(everywhere("copied outside")).await);
+        sleep(Duration::from_millis(300)).await;
+        assert_eq!(ring.map(applied), [1, 1, 1]);
+        assert_eq!(applied(&outside), 0);
+
+        // The same text copied again later is a new copy: it arrives again.
+        outside.clipboard.set(Raw::Text("something else".into()));
+        assert!(wait_for(everywhere("something else")).await);
+        outside.clipboard.set(Raw::Text("copied outside".into()));
+        assert!(wait_for(everywhere("copied outside")).await);
+        sleep(Duration::from_millis(300)).await;
+        assert_eq!(ring.map(applied), [3, 3, 3]);
+
+        // A copy made in the ring reaches the others once too.
+        b.clipboard.set(Raw::Text("copied on b".into()));
+        assert!(wait_for(everywhere("copied on b")).await);
+        sleep(Duration::from_millis(300)).await;
+        assert_eq!(ring.map(applied), [4, 3, 4]);
+        assert_eq!(applied(&outside), 1);
+    }
+
+    /// `outside` joined `a`, which joined `b`: `a` passes copies on to `b`, but not secrets.
+    #[tokio::test]
+    async fn secrets_are_not_passed_on() {
+        let [a, b, outside] = [start("a").await, start("b").await, start("outside").await];
+        link(&a, &b).await;
+        link(&outside, &a).await;
+
+        let content = |text: &str, sensitive| Content {
+            mime_type: mime::TEXT.into(),
+            data: text.as_bytes().to_vec(),
+            sensitive,
+        };
+        assert_eq!(outside.daemon.send(content("hunter2", true)), 1);
+        assert!(wait_for(|| a.clipboard.get() == Some(Raw::Text("hunter2".into()))).await);
+        sleep(Duration::from_millis(300)).await;
+        assert_eq!(b.clipboard.get(), None);
+
+        // The next copy, which isn't secret, is passed on.
+        assert_eq!(outside.daemon.send(content("not a secret", false)), 1);
+        assert!(wait_for(|| b.clipboard.get() == Some(Raw::Text("not a secret".into()))).await);
     }
 
     #[tokio::test]
