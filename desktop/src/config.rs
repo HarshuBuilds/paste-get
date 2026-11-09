@@ -219,6 +219,9 @@ impl Default for Settings {
     }
 }
 
+/// Addresses kept per device this one dials.
+pub const MAX_ADDRESSES: usize = 8;
+
 /// A paired device.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KnownDevice {
@@ -279,6 +282,22 @@ impl KnownDevices {
             }
             _ => false,
         }
+    }
+
+    /// A device this one dials answered at `address`, which proved its identity: it is dialed
+    /// there first from now on, and kept if it was new (the device moved). At most
+    /// [`MAX_ADDRESSES`] are kept. Returns whether anything changed.
+    pub fn reached(&mut self, id: &DeviceId, address: SocketAddr) -> bool {
+        let Some(device) = self.0.iter_mut().find(|device| device.id == *id) else {
+            return false;
+        };
+        if device.addresses.first() == Some(&address) {
+            return false;
+        }
+        device.addresses.retain(|known| *known != address);
+        device.addresses.insert(0, address);
+        device.addresses.truncate(MAX_ADDRESSES);
+        true
     }
 
     /// Removes a device. Returns it, if it was there.
@@ -379,6 +398,43 @@ mod tests {
         let base = tempfile::tempdir().unwrap();
         let profile = Profile::open_in(base.path(), "test").unwrap();
         (base, profile)
+    }
+
+    #[test]
+    fn the_address_that_worked_goes_first() {
+        let address = |s: &str| s.parse::<SocketAddr>().unwrap();
+        let joined = KnownDevice {
+            id: Identity::generate().unwrap().device_id(),
+            name: "pc".into(),
+            addresses: vec![address("192.168.1.20:47290"), address("10.0.0.2:47290")],
+        };
+        let mut known = KnownDevices::default();
+        known.insert(joined.clone());
+
+        assert!(known.reached(&joined.id, address("10.0.0.2:47290")));
+        assert!(!known.reached(&joined.id, address("10.0.0.2:47290")));
+        assert!(known.reached(&joined.id, address("192.168.1.31:47290")));
+        assert_eq!(
+            known.get(&joined.id).unwrap().addresses,
+            [
+                address("192.168.1.31:47290"),
+                address("10.0.0.2:47290"),
+                address("192.168.1.20:47290")
+            ]
+        );
+        // At most MAX_ADDRESSES, the oldest dropped.
+        for last in 1..=MAX_ADDRESSES {
+            known.reached(&joined.id, address(&format!("10.0.1.{last}:47290")));
+        }
+        let addresses = &known.get(&joined.id).unwrap().addresses;
+        assert_eq!(addresses.len(), MAX_ADDRESSES);
+        assert_eq!(
+            addresses[0],
+            address(&format!("10.0.1.{MAX_ADDRESSES}:47290"))
+        );
+        // A device it doesn't know.
+        let stranger = Identity::generate().unwrap().device_id();
+        assert!(!known.reached(&stranger, address("10.0.0.2:47290")));
     }
 
     #[test]

@@ -93,6 +93,7 @@ Watch terminal 2 (the fake phone): each clip it receives logs `clip received …
 | 7 | Stop terminal 2 (Ctrl+C), start it again | Terminal 1 logs `connected` again within ~30 s |
 | 8 | `pasteget pause`, copy some text, then `pasteget --profile phone send "hi"` | Terminal 1 logs `local copy not sent: paused` and `clip dropped: paused`; `Ctrl+V` doesn't paste `hi`. `pasteget resume` brings syncing back |
 | 9 | `pasteget recent` | The last clips, newest first, with where they came from |
+| 12 | Stop terminal 1 and start it on another port: `pasteget daemon --port 47295`, as if its address had changed | Within about 30 s terminal 2 finds it by mDNS and logs `connected` (and `reached at a new address`); the fake phone's `devices.toml` lists the `…:47295` address first. Start terminal 1 again as before afterwards |
 | 10 | Last: `pasteget forget phone` | `Unpaired phone.` Terminal 1 logs `unpaired`; terminal 2 logs `the device unpaired this one` and forgets the PC too (`pasteget --profile phone status` lists no device). Pair again (section 2) to go on |
 | 11 | Stop terminal 2, replace the fake phone's `devices.toml` (`%APPDATA%\paste-get\phone\` on Windows, `~/.config/paste-get/phone/` on Linux) with a line of garbage, start terminal 2 again | It starts and logs `the paired devices could not be read: starting with none`; the garbage is now in `devices.toml.bad`. Pair again (section 2) to go on |
 
@@ -488,9 +489,10 @@ codes never wait: a code would be stale by then.
 
 ## Known limitations
 
-- If the PC changes address while the phone is connected, the phone notices only when the old
-  connection times out (up to 90 s), then finds it again by mDNS. Phones that can't receive
-  mDNS (some guest or office networks block it) still need a new pairing.
+- If the PC changes address while the phone (or a PC that joined it) is connected, the other
+  side notices only when the old connection times out (up to 90 s), then finds it again by
+  mDNS. Devices that can't receive mDNS (some guest or office networks block it) still need a
+  new pairing.
 - Only the last copy made while a device is away waits for it, in memory: it's lost if the
   sending side restarts first. Passwords and 2FA codes never wait.
 - The phone shows nothing of its own when a clip from the PC arrives (Android 13 and later may

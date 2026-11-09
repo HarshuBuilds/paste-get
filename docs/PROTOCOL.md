@@ -81,6 +81,11 @@ Devices that accept connections announce themselves with mDNS / DNS-SD:
 | TXT `id` | Full device ID |
 | TXT `name` | Device name, for display (untrusted, sanitize as in section 5.1) |
 
+Devices that connect (phones, and a PC that joined another with `pasteget join`) look for the
+devices they paired with among these announcements, by `id`, and dial them at the announced
+addresses first, then at the ones they knew: the accepting device's address may have changed
+since pairing.
+
 Discovery only helps find an address. Trust still comes from the pinned device ID: a forged
 announcement can make a device connect to the wrong address, but the TLS handshake then fails.
 For the same reason, a device remembers an announced address only after a connection through it

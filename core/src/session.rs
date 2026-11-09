@@ -513,6 +513,21 @@ pub async fn keep_connected(
     }
 }
 
+/// Where to dial a device just found at `found` (by mDNS): there first, then at the addresses it
+/// had (`known`) that aren't among them.
+pub fn found_first(
+    found: impl IntoIterator<Item = SocketAddr>,
+    known: impl IntoIterator<Item = SocketAddr>,
+) -> Vec<SocketAddr> {
+    let mut merged: Vec<SocketAddr> = Vec::new();
+    for address in found.into_iter().chain(known) {
+        if !merged.contains(&address) {
+            merged.push(address);
+        }
+    }
+    merged
+}
+
 async fn read_loop<R: AsyncRead + Unpin>(
     peer: DeviceId,
     mut reader: EnvelopeReader<R>,
@@ -1096,6 +1111,22 @@ mod tests {
         let dialed = timeout(Duration::from_secs(2), listener.accept()).await;
         dialer.abort();
         assert!(dialed.is_ok(), "the new address was not dialed in time");
+    }
+
+    #[test]
+    fn found_addresses_come_first_without_duplicates() {
+        let address = |s: &str| s.parse::<SocketAddr>().unwrap();
+        let found = [address("192.168.1.30:47290"), address("10.0.0.2:47290")];
+        let known = [address("192.168.1.20:47290"), address("10.0.0.2:47290")];
+
+        assert_eq!(
+            found_first(found, known),
+            [
+                address("192.168.1.30:47290"),
+                address("10.0.0.2:47290"),
+                address("192.168.1.20:47290")
+            ]
+        );
     }
 
     #[tokio::test]

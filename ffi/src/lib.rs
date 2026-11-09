@@ -28,7 +28,7 @@ use pasteget_core::echo::EchoGuard;
 use pasteget_core::identity::{DeviceId, Identity};
 use pasteget_core::pairing::{self, PairingInvite, sanitize_device_name};
 use pasteget_core::proto::{AckStatus, Hello, PROTOCOL_VERSION, Platform};
-use pasteget_core::session::{self, Delivery, Peers, SessionEvents};
+use pasteget_core::session::{self, Delivery, Peers, SessionEvents, found_first};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Runtime;
 use tokio::sync::watch;
@@ -526,20 +526,6 @@ fn parse_addresses(addresses: &[String]) -> Vec<SocketAddr> {
     addresses.iter().filter_map(|a| a.parse().ok()).collect()
 }
 
-/// `first`, then the addresses of `then` that aren't in it.
-fn found_first(
-    first: impl IntoIterator<Item = SocketAddr>,
-    then: impl IntoIterator<Item = SocketAddr>,
-) -> Vec<SocketAddr> {
-    let mut merged: Vec<SocketAddr> = Vec::new();
-    for address in first.into_iter().chain(then) {
-        if !merged.contains(&address) {
-            merged.push(address);
-        }
-    }
-    merged
-}
-
 fn load_or_create_identity(dir: &Path) -> Result<Identity, PastegetError> {
     let path = dir.join(IDENTITY_FILE);
     match fs::read(&path) {
@@ -613,21 +599,6 @@ mod tests {
 
     fn addr(s: &str) -> SocketAddr {
         s.parse().unwrap()
-    }
-
-    #[test]
-    fn found_addresses_come_first_without_duplicates() {
-        let found = [addr("192.168.1.30:47290"), addr("10.0.0.2:47290")];
-        let known = [addr("192.168.1.20:47290"), addr("10.0.0.2:47290")];
-
-        assert_eq!(
-            found_first(found, known),
-            [
-                addr("192.168.1.30:47290"),
-                addr("10.0.0.2:47290"),
-                addr("192.168.1.20:47290")
-            ]
-        );
     }
 
     #[test]

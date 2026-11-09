@@ -122,6 +122,8 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
   AppUserModelID is registered for the user, and removed by the uninstaller
 - [x] Received clips never go to the Windows cloud clipboard (Microsoft account sync); they stay
   in the local `Win+V` history unless sensitive
+- [x] A PC that joined another finds it again by mDNS after its address changed, like the phone
+  does, and remembers the address that worked (`TESTING.md`, section 3, row 12)
 - [x] Updates replace the running version: the installer stops paste-get first, and a newer
   tray asks an older running one to quit (control request `quit`, `pasteget quit`), or ends
   its processes if it's too old to know it (`TESTING.md`, T22–T25). The uninstaller also removes
