@@ -327,6 +327,10 @@ mod tests {
         );
         assert_eq!(fts_match(&["a\"b\"c".into()]).unwrap(), r#""a""b""c""#);
         assert_eq!(fts_match(&["ab".into()]), None);
+        // Counted as the index counts: a decomposed accent it drops is no character.
+        let parsed = parse("e\u{301}t re\u{301}s");
+        assert_eq!(parsed.terms, ["et", "res"]);
+        assert_eq!(fts_match(&parsed.terms).unwrap(), r#""res""#);
     }
 
     #[test]

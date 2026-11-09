@@ -814,6 +814,22 @@ fn words_under_three_characters_are_searched_too() {
 }
 
 #[test]
+fn decomposed_accents_are_found_and_highlighted() {
+    let mut test = Test::new();
+    // From a PDF, or typed with combining accents: R, e, U+0301, s…
+    let id = test.added("Re\u{301}sume\u{301} du projet");
+    let page = test.page(&Query {
+        text: "résumé".into(),
+        ..Query::default()
+    });
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].highlights, vec![Range { start: 0, end: 8 }]);
+    // Three characters, but two letters for the index: searched as a short word.
+    assert_eq!(test.search("e\u{301}s"), [id]);
+    assert_eq!(test.search("ume\u{301} du"), [id]);
+}
+
+#[test]
 fn short_words_find_pinned_items_of_any_age() {
     let mut test = Test::new();
     let pinned = test.added("lock 42, the old one");

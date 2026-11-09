@@ -17,20 +17,23 @@ const SNIPPET_AFTER: usize = 60;
 const SNIPPET_LEAD: usize = 20;
 
 /// `c` lowercase and without its accents, as SQLite folds it: 'É' → 'e', 'ấ' → 'a', 'ς' → 'σ'.
-/// Accents come off Latin letters only ('ά' stays). Always one character for one, so positions
-/// in folded text are positions in the original.
-pub fn fold(c: char) -> char {
+/// Accents come off Latin letters only ('ά' stays). `None` for a combining accent SQLite drops,
+/// as in a decomposed "é" (e, U+0301); any other character gives one.
+pub fn fold(c: char) -> Option<char> {
     if c.is_ascii() {
-        return c.to_ascii_lowercase();
+        return Some(c.to_ascii_lowercase());
+    }
+    if is_dropped_accent(c) {
+        return None;
     }
     let c = case_fold(c);
     // SQLite's own exception.
     if c == 'ǡ' {
-        return c;
+        return Some(c);
     }
     let mut parts = Vec::with_capacity(4);
     decompose_canonical(c, |part| parts.push(part));
-    match parts[..] {
+    Some(match parts[..] {
         [base, ref marks @ ..]
             if !marks.is_empty()
                 && base.is_ascii_alphabetic()
@@ -39,7 +42,22 @@ pub fn fold(c: char) -> char {
             base.to_ascii_lowercase()
         }
         _ => c,
-    }
+    })
+}
+
+/// The combining accents SQLite's tokenizer skips (`sqlite3Fts5UnicodeIsdiacritic`).
+fn is_dropped_accent(c: char) -> bool {
+    matches!(
+        c,
+        '\u{300}'..='\u{304}'
+            | '\u{306}'..='\u{30c}'
+            | '\u{30f}'
+            | '\u{311}'
+            | '\u{31b}'
+            | '\u{323}'..='\u{328}'
+            | '\u{32d}'..='\u{32e}'
+            | '\u{330}'..='\u{331}'
+    )
 }
 
 /// Unicode's simple case folding: lowercase, and one form for letters with two lowercase ones.
@@ -73,18 +91,32 @@ fn case_fold(c: char) -> char {
 
 /// `text` folded character by character (see [`fold`]).
 pub fn fold_str(text: &str) -> String {
-    text.chars().map(fold).collect()
+    text.chars().filter_map(fold).collect()
+}
+
+/// `chars` folded, and where each folded character is in `chars`.
+fn fold_chars(chars: &[char]) -> (Vec<char>, Vec<usize>) {
+    let mut folded = Vec::with_capacity(chars.len());
+    let mut at = Vec::with_capacity(chars.len());
+    for (i, &c) in chars.iter().enumerate() {
+        if let Some(c) = fold(c) {
+            folded.push(c);
+            at.push(i);
+        }
+    }
+    (folded, at)
 }
 
 /// What a list shows of `text`: its start, or with `terms` (folded) the part around the first
 /// one found, and where each term is, as UTF-16 ranges.
 pub fn preview(text: &str, terms: &[Vec<char>], max_chars: usize) -> (String, Vec<Range<u32>>) {
     let chars: Vec<char> = text.chars().collect();
-    let folded: Vec<char> = chars.iter().map(|&c| fold(c)).collect();
+    let (folded, at) = fold_chars(&chars);
     let first = terms
         .iter()
         .filter_map(|term| find(&folded, term).next())
-        .min();
+        .min()
+        .map(|start| at[start]);
     let shown: String = match first {
         Some(at) if at > SNIPPET_AFTER && chars.len() > SNIPPET_CHARS => {
             let start = at - SNIPPET_LEAD;
@@ -105,10 +137,12 @@ pub fn preview(text: &str, terms: &[Vec<char>], max_chars: usize) -> (String, Ve
 /// Where `terms` (folded) are in `text`, as sorted, merged UTF-16 ranges.
 pub fn highlights(text: &str, terms: &[Vec<char>]) -> Vec<Range<u32>> {
     let chars: Vec<char> = text.chars().collect();
-    let folded: Vec<char> = chars.iter().map(|&c| fold(c)).collect();
+    let (folded, at) = fold_chars(&chars);
+    // Back to positions in `chars`. Dropped accents after the last character found are its own.
     let mut found: Vec<Range<usize>> = terms
         .iter()
-        .flat_map(|term| find(&folded, term).map(move |at| at..at + term.len()))
+        .flat_map(|term| find(&folded, term).map(move |start| start..start + term.len()))
+        .map(|range| at[range.start]..at.get(range.end).copied().unwrap_or(chars.len()))
         .collect();
     found.sort_by_key(|range| (range.start, range.end));
     let mut merged: Vec<Range<usize>> = Vec::new();
@@ -165,18 +199,18 @@ mod tests {
              CREATE VIRTUAL TABLE terms USING fts5vocab(t, 'instance');",
         )
         .unwrap();
+        // Combining marks included: SQLite drops some of them.
         let ranges = [
             0x20..0x7f,
-            0x80..0x250,
-            0x370..0x530,
+            0x80..0x530,
             0x1e00..0x2000,
             0x2100..0x2200,
             0xff00..0xff60,
         ];
-        let mut inserted = 0;
+        let mut ours = std::collections::BTreeMap::new();
         for code in ranges.into_iter().flatten() {
             if let Some(c) = char::from_u32(code) {
-                inserted += 1;
+                ours.insert(code, fold(c));
                 conn.execute(
                     "INSERT INTO t (rowid, x) VALUES (?1, ?2)",
                     rusqlite::params![code, format!("a{c}a")],
@@ -184,26 +218,28 @@ mod tests {
                 .unwrap();
             }
         }
+        // A dropped character leaves "aa", too short for a trigram.
+        let mut theirs = std::collections::BTreeMap::new();
         let mut statement = conn.prepare("SELECT doc, term FROM terms").unwrap();
         let rows = statement
             .query_map([], |row| {
                 Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?))
             })
             .unwrap();
-        let mut checked = 0;
         for row in rows {
             let (code, term) = row.unwrap();
-            let c = char::from_u32(code).unwrap();
-            let theirs: Vec<char> = term.chars().collect();
-            assert_eq!(theirs.len(), 3, "U+{code:04X}");
-            assert_eq!(fold(c), theirs[1], "U+{code:04X} {c}");
-            checked += 1;
+            let term: Vec<char> = term.chars().collect();
+            assert_eq!(term.len(), 3, "U+{code:04X}");
+            theirs.insert(code, term[1]);
         }
-        assert_eq!(checked, inserted);
+        for (code, ours) in ours {
+            let c = char::from_u32(code).unwrap();
+            assert_eq!(ours, theirs.get(&code).copied(), "U+{code:04X} {c}");
+        }
     }
 
     #[test]
-    fn folding_is_one_character_for_one_and_stable() {
+    fn folding_is_stable_and_one_for_one_but_dropped_accents() {
         for (from, to) in [
             ("Vérification", "verification"),
             ("ÉTÉ", "ete"),
@@ -213,9 +249,14 @@ mod tests {
             ("Ὀδυσσεύς", "ὀδυσσεύσ"),
             ("Tiếng Việt", "tieng viet"),
             ("👋 x", "👋 x"),
+            // Decomposed: the accents SQLite drops go, the others stay.
+            ("Re\u{301}sume\u{301}", "resume"),
+            ("Tie\u{302}\u{301}ng", "tieng"),
+            ("x\u{305}", "x\u{305}"),
         ] {
             assert_eq!(fold_str(from), to);
-            assert_eq!(fold_str(from).chars().count(), from.chars().count());
+            let kept = from.chars().filter(|&c| !is_dropped_accent(c)).count();
+            assert_eq!(fold_str(from).chars().count(), kept);
             assert_eq!(fold_str(to), to);
         }
     }
@@ -229,16 +270,27 @@ mod tests {
         let utf16: Vec<u16> = text.encode_utf16().collect();
         assert_eq!(String::from_utf16(&utf16[3..8]).unwrap(), "Vérif");
 
-        // Overlapping and touching terms are merged; combining accents count as characters.
+        // Overlapping and touching terms are merged.
         assert_eq!(
             highlights("abcdef", &terms(&["abc", "cde", "f"])),
             vec![Range { start: 0, end: 6 }]
         );
+        assert!(highlights("abc", &terms(&["zz", ""])).is_empty());
+
+        // Decomposed accents SQLite drops are found as the index finds them, and go with the
+        // letter before them.
         assert_eq!(
             highlights("e\u{301}te\u{301}", &terms(&["te"])),
-            vec![Range { start: 2, end: 4 }]
+            vec![Range { start: 2, end: 5 }]
         );
-        assert!(highlights("abc", &terms(&["zz", ""])).is_empty());
+        assert_eq!(
+            highlights("Re\u{301}sume\u{301}!", &terms(&["résumé"])),
+            vec![Range { start: 0, end: 8 }]
+        );
+        assert_eq!(
+            highlights("Re\u{301}sume\u{301}", &terms(&["e\u{301}s"])),
+            vec![Range { start: 1, end: 4 }]
+        );
     }
 
     #[test]
