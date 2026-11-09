@@ -24,6 +24,7 @@ files=(
   /usr/bin/pasteget-tray
   /usr/share/applications/paste-get.desktop
   /usr/share/icons/hicolor/512x512/apps/pasteget-tray.png
+  /usr/share/metainfo/io.github.nexoryx.pasteget.metainfo.xml
 )
 # WebKitGTK and GTK are linked; the app indicator library (the tray icon) is loaded at run time,
 # so nothing would notice it missing before the icon fails to show.

@@ -53,5 +53,7 @@ package() {
   install -Dm644 packaging/linux/paste-get.desktop -t "$pkgdir/usr/share/applications/"
   install -Dm644 desktop/tray/icons/icon.png \
     "$pkgdir/usr/share/icons/hicolor/512x512/apps/pasteget-tray.png"
+  install -Dm644 packaging/linux/io.github.nexoryx.pasteget.metainfo.xml \
+    -t "$pkgdir/usr/share/metainfo/"
   install -Dm644 README.md docs/TESTING.md -t "$pkgdir/usr/share/doc/$pkgname/"
 }

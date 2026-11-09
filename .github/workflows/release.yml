@@ -65,6 +65,14 @@ jobs:
         run: packaging/build-desktop.sh appimage,deb,rpm
       - name: Check what the .deb and .rpm install
         run: packaging/linux/check-packages.sh target/release/bundle
+      - name: The AppStream metainfo lists this version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          grep -qF "<release version=\"$version\"" packaging/linux/io.github.nexoryx.pasteget.metainfo.xml || {
+            echo "::error::add a <release> for $version to the metainfo: see docs/RELEASING.md"
+            exit 1
+          }
       - name: Name the packages
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
@@ -107,6 +115,12 @@ jobs:
         run: |
           pasteget --version
           pasteget-tray --version
+      - name: The installed desktop entry and AppStream metainfo are valid
+        if: matrix.package == '.rpm'
+        run: |
+          dnf install -y appstream desktop-file-utils
+          desktop-file-validate /usr/share/applications/paste-get.desktop
+          appstreamcli validate --no-net /usr/share/metainfo/io.github.nexoryx.pasteget.metainfo.xml
 
   android:
     name: Android APK

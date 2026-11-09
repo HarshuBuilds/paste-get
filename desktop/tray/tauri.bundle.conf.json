@@ -21,10 +21,21 @@
     "linux": {
       "deb": {
         "section": "utils",
-        "desktopTemplate": "../../packaging/linux/paste-get.desktop"
+        "desktopTemplate": "../../packaging/linux/paste-get.desktop",
+        "files": {
+          "/usr/share/metainfo/io.github.nexoryx.pasteget.metainfo.xml": "../../packaging/linux/io.github.nexoryx.pasteget.metainfo.xml"
+        }
       },
       "rpm": {
-        "desktopTemplate": "../../packaging/linux/paste-get.desktop"
+        "desktopTemplate": "../../packaging/linux/paste-get.desktop",
+        "files": {
+          "/usr/share/metainfo/io.github.nexoryx.pasteget.metainfo.xml": "../../packaging/linux/io.github.nexoryx.pasteget.metainfo.xml"
+        }
+      },
+      "appimage": {
+        "files": {
+          "/usr/share/metainfo/io.github.nexoryx.pasteget.metainfo.xml": "../../packaging/linux/io.github.nexoryx.pasteget.metainfo.xml"
+        }
       }
     }
   }

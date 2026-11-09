@@ -9,10 +9,10 @@ How the packages are built, and the steps of a release. CI does the building
 |---|---|---|
 | Windows installer, `paste-get_<version>_x64-setup.exe` | `packaging/build-desktop.sh nsis` on `windows-latest` | Installs for the current user (no admin prompt) in `%LOCALAPPDATA%\paste-get`, with a Start menu entry and an uninstaller. `pasteget.exe` is installed next to `pasteget-tray.exe` |
 | Linux AppImage, `paste-get_<version>_amd64.AppImage` | `packaging/build-desktop.sh appimage,deb,rpm` on Ubuntu 22.04 | One file; runs on distributions at least as new as Ubuntu 22.04. Contains `pasteget` too, but only the tray is started from outside |
-| Debian/Ubuntu package, `paste-get_<version>_amd64.deb` | the same run | `/usr/bin/pasteget` and `pasteget-tray`, a desktop entry and an icon. Depends on the system's WebKitGTK 4.1, GTK 3 and libayatana-appindicator3 (the tray icon). Ubuntu 22.04, Debian 12 or newer |
+| Debian/Ubuntu package, `paste-get_<version>_amd64.deb` | the same run | `/usr/bin/pasteget` and `pasteget-tray`, a desktop entry, an icon and the AppStream metainfo. Depends on the system's WebKitGTK 4.1, GTK 3 and libayatana-appindicator3 (the tray icon). Ubuntu 22.04, Debian 12 or newer |
 | Fedora/openSUSE package, `paste-get_<version>_x86_64.rpm` | the same run (Tauri names it `paste-get-<version>-1.x86_64.rpm`; the workflow renames it) | The same files. Requires the same libraries by their file names (`libwebkit2gtk-4.1.so.0()(64bit)` and so on), which works across RPM distributions |
 | Android APK, `paste-get_<version>_foss.apk` | `./gradlew assembleFossRelease` on `ubuntu-latest` | Signed with the release key, for both phone ABIs (`arm64-v8a`, `x86_64`). Without the key (forks, before it's set up) it comes out as `…_foss-unsigned.apk`, which Android won't install; a tag refuses to release without it |
-| Arch package `paste-get-git` | `packaging/aur/paste-get-git/PKGBUILD`, tested with `makepkg` in an Arch container | `/usr/bin/pasteget` and `pasteget-tray`, a desktop entry and an icon. Built from source on the user's machine |
+| Arch package `paste-get-git` | `packaging/aur/paste-get-git/PKGBUILD`, tested with `makepkg` in an Arch container | `/usr/bin/pasteget` and `pasteget-tray`, a desktop entry, an icon and the metainfo. Built from source on the user's machine |
 
 Every push that changes the packaging builds them all, without releasing: they're in the run's
 artifacts. A `v*` tag builds them and puts them, with a `SHA256SUMS` file, in a **draft**
@@ -22,6 +22,14 @@ Before that, CI checks the Linux packages: `packaging/linux/check-packages.sh` l
 .deb and .rpm install and the libraries they ask for, then the .deb is installed with `apt` on
 Debian 12 and the .rpm with `dnf` on the latest Fedora, and both programs must start
 (`--version`). A dependency with the wrong name, or a library missing from the list, fails there.
+On Fedora, the installed desktop entry and metainfo also go through `desktop-file-validate` and
+`appstreamcli validate`.
+
+The AppStream metainfo, `packaging/linux/io.github.nexoryx.pasteget.metainfo.xml`, is what KDE
+Discover and GNOME Software show about paste-get: summary, description, links, and one
+`<release>` per version. Every Linux package installs it in `/usr/share/metainfo/`. Check it
+after editing with `appstreamcli validate --no-net` (package `appstream`). It has no
+screenshots yet: add a `<screenshots>` section with image links once there are real ones.
 
 The Windows installer installs WebView2 if the PC doesn't have it (Windows 11 always does): the
 *Pair a phone* and *Settings* windows need it. It then downloads Microsoft's bootstrapper, silently;
@@ -116,7 +124,10 @@ notification in view.
 
 1. Everything for the version is merged on `main`, and CI is green.
 2. The Android release key is set up (see above). Bump the version in `Cargo.toml` (`[workspace.package] version`) and in
-   `android/app/build.gradle.kts` (`versionName`, and `versionCode` + 1). Commit.
+   `android/app/build.gradle.kts` (`versionName`, and `versionCode` + 1). Add a
+   `<release version="…" date="YYYY-MM-DD">` at the top of `<releases>` in
+   `packaging/linux/io.github.nexoryx.pasteget.metainfo.xml` (a tag without one fails; for 0.1.0,
+   one is there already: set its date). Commit.
 3. Tag and push: `git tag v0.1.0 && git push origin v0.1.0`.
 4. Wait for the *Release* workflow, then open the draft release on GitHub. Install each package
    on a real machine (Windows 11, Arch) and run `docs/TESTING.md`, sections 9–11.

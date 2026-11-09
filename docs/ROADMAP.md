@@ -104,6 +104,8 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
   - [x] `.deb` and `.rpm`, built with the AppImage. The Release workflow checks their files and
     dependencies, then installs them on Debian 12 and the latest Fedora (checked locally; its
     first CI run is still to see)
+  - [x] AppStream metainfo (`packaging/linux/io.github.nexoryx.pasteget.metainfo.xml`) in every
+    Linux package, for KDE Discover and GNOME Software; validated by CI
   - [x] Release APK, signed in CI with a key kept in repository secrets (creating the key and
     the secrets is a one-time step for the maintainer, `RELEASING.md`)
 - [x] `SECURITY.md` draft: threat model, known gaps, private reporting
