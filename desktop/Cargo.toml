@@ -50,6 +50,8 @@ windows-sys = { version = "0.61", features = [
 windows-registry = "0.6"
 # Toasts that call back when clicked (a link to open). notify-rust uses it underneath.
 tauri-winrt-notification = "0.8"
+# Reading the formats password managers mark copies with. arboard uses it underneath.
+clipboard-win = { version = "5.4", features = ["std"] }
 
 # Notifications: Windows toasts and macOS through notify-rust, the freedesktop D-Bus service
 # elsewhere (KDE Plasma, mako, dunst, swaync…).

@@ -3042,6 +3042,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "clap",
+ "clipboard-win",
  "data-encoding",
  "dirs",
  "futures-util",

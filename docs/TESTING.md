@@ -207,6 +207,7 @@ on the phone. Update both sides first, as in section 6.
 | C4 | PC: take a screenshot to the clipboard (as in section 3). Phone: in Telegram, WhatsApp or Google Messages, long-press the message field → **Paste** | The screenshot is attached, ready to send |
 | C5 | PC: in a browser, right-click an image → **Copy image**. Phone: paste it as in C4 | The image is attached |
 | C6 | If you use Gboard: after C4, open its clipboard (the clipboard icon above the keys) | The screenshot is there; tapping it inserts it in apps that take images (Discord, for example) |
+| C7 | PC: copy a password from a password manager (KeePassXC on KDE Plasma or Hyprland; KeePass, KeePassXC, Bitwarden or 1Password on Windows). Phone: paste it | Pasted. The tray's *Recent* menu doesn't list it, and Android's clipboard preview hides it. `pasteget daemon` in a terminal logs `local copy` with `sensitive=true` |
 
 `adb logcat -s paste-get` shows "clip received: …, … bytes" for each clip. Images, and texts over
 256 KB (C2), go on the clipboard as a link to a file, since Android can't pass that much in one
@@ -476,6 +477,7 @@ never wait: a code would be stale by then.
 | Q4 | Phone's Wi-Fi off, copy something on the PC, turn Wi-Fi back on | The copy is in the phone's clipboard once it reconnects |
 | Q5 | PC off, copy a password from a password manager on the phone (or get a 2FA code), start the PC | Nothing arrives |
 | Q6 | PC off, copy on the phone, force-stop paste-get on the phone, start both | Nothing arrives: the copy was only in memory |
+| Q7 | Phone's Wi-Fi off, copy a password on the PC as in C7, turn Wi-Fi back on | Nothing arrives |
 
 ## Known limitations
 
@@ -493,6 +495,9 @@ never wait: a code would be stale by then.
   Each poll is cheap on Windows (a sequence number) and on KDE Plasma and Hyprland (Wayland change
   events): the clipboard is only read after a change. On X11 and GNOME every poll reads it, images
   included (row 6 measures the cost).
+- A password copied on the PC goes out as sensitive only if the password manager marks it, and
+  the PC sees the mark only on Windows and on KDE Plasma and Hyprland (Wayland change events,
+  section 2). On X11 and GNOME it goes out as an ordinary clip.
 - IPv4 only.
 - The identity key is a file readable only by your user, not yet in the OS keystore.
 - The tray's *Recent* list is in memory only, holds the last 10 clips, and forgets them when the

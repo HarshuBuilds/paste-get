@@ -751,7 +751,7 @@ async fn local_changes_loop(shared: Arc<Shared>, mut changes: mpsc::Receiver<Con
         };
         shared.remember_clip(&clip, None);
         let sent_to = shared.peers.broadcast(&clip, None);
-        tracing::info!(mime_type = %clip.mime_type, len = clip.data.len(), sent_to, "local copy");
+        tracing::info!(mime_type = %clip.mime_type, len = clip.data.len(), sensitive = clip.sensitive, sent_to, "local copy");
     }
 }
 

@@ -53,9 +53,10 @@ On the PC, the tray menu has **Settings…** for the computer's name, notificati
 ## Privacy
 
 There is no server and no account. Devices talk directly over the local network with TLS 1.3,
-each one pinned to the other's key at pairing. Clipboard contents are never logged. Clips marked
-sensitive (passwords, codes) stay out of clipboard history. Details and known limits are in
-[`SECURITY.md`](SECURITY.md).
+each one pinned to the other's key at pairing. Clipboard contents are never logged. Passwords
+that a password manager marks as secret, and 2FA codes, are sent as sensitive: they stay out of
+clipboard history and the tray's *Recent* list, and never wait for a device that is away.
+Details and known limits are in [`SECURITY.md`](SECURITY.md).
 
 ## Building from source
 

@@ -134,6 +134,10 @@ History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart ac
 - [x] Wayland clipboard change events: on KDE Plasma 6 and Hyprland the PC reads the clipboard
   only after the compositor reports a change (ext-data-control or wlr-data-control), not at
   every 0.5 s poll. X11 and GNOME still read at every poll (`TESTING.md`, section 2)
+- [x] Passwords copied on the PC go out sensitive when the password manager marks them:
+  `x-kde-passwordManagerHint` on Wayland (KeePassXC, KDE), the formats KeePass, KeePassXC,
+  Bitwarden and 1Password set on Windows. Out of the phone's clipboard preview, the tray's
+  *Recent* list, and never kept for a device that is away (`TESTING.md`, C7 and Q7)
 Desktop identity key in the OS keystore when one is available (M2 stores it in a user-only file,
 like SSH keys, because Hyprland setups often run no Secret Service).
 

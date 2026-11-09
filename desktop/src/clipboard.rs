@@ -12,7 +12,7 @@ use std::fmt;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Cursor;
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -185,6 +185,33 @@ pub trait ClipboardBackend: Send + 'static {
     fn may_have_changed(&mut self) -> bool {
         true
     }
+
+    /// Whether the app that made the copy marked it as a secret, as password managers do. Asked
+    /// right after a read, so it is about the same copy.
+    fn marked_sensitive(&mut self) -> bool {
+        false
+    }
+}
+
+/// On Linux, KeePassXC and KDE apps add this type to a secret, with "secret" as its data.
+/// Klipper, KDE's clipboard history, leaves such copies out.
+const KDE_PASSWORD_HINT: &str = "x-kde-passwordManagerHint";
+/// Windows formats that keep a copy out of clipboard history, viewers and the cloud clipboard,
+/// set by KeePass, KeePassXC, Bitwarden and 1Password. The first two count whatever their data.
+const WINDOWS_EXCLUDE: &str = "ExcludeClipboardContentFromMonitorProcessing";
+const WINDOWS_VIEWER_IGNORE: &str = "Clipboard Viewer Ignore";
+/// These two hold a DWORD: 0 means "not in the history", "not in the cloud".
+const WINDOWS_HISTORY: &str = "CanIncludeInClipboardHistory";
+const WINDOWS_CLOUD: &str = "CanUploadToCloudClipboard";
+
+/// Whether a copy's formats, each with its data, mark it as a secret.
+fn marks_sensitive(formats: &[(&str, Vec<u8>)]) -> bool {
+    formats.iter().any(|(name, data)| match *name {
+        KDE_PASSWORD_HINT => data.trim_ascii() == b"secret",
+        WINDOWS_EXCLUDE | WINDOWS_VIEWER_IGNORE => true,
+        WINDOWS_HISTORY | WINDOWS_CLOUD => data.starts_with(&[0; 4]),
+        _ => false,
+    })
 }
 
 /// The OS clipboard.
@@ -213,6 +240,93 @@ impl SystemClipboard {
             events: wayland_change_events(),
         })
     }
+
+    /// Which of the formats password managers mark secrets with the current copy has, each with
+    /// its data.
+    fn markers(&self) -> Vec<(&'static str, Vec<u8>)> {
+        #[cfg(windows)]
+        {
+            windows_markers()
+        }
+        #[cfg(all(
+            unix,
+            not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+        ))]
+        {
+            // Only data-control can read it, and the change events show the compositor has it.
+            if self.events.is_some() {
+                wayland_markers()
+            } else {
+                Vec::new()
+            }
+        }
+        #[cfg(not(any(
+            windows,
+            all(
+                unix,
+                not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+            )
+        )))]
+        {
+            Vec::new()
+        }
+    }
+}
+
+/// The KDE password hint of the current Wayland copy, if it has one.
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+))]
+fn wayland_markers() -> Vec<(&'static str, Vec<u8>)> {
+    use std::io::Read;
+    use wl_clipboard_rs::paste::{self, ClipboardType, MimeType, Seat};
+
+    let pipe = match paste::get_contents(
+        ClipboardType::Regular,
+        Seat::Unspecified,
+        MimeType::Specific(KDE_PASSWORD_HINT),
+    ) {
+        Ok((pipe, _)) => pipe,
+        Err(paste::Error::NoMimeType | paste::Error::ClipboardEmpty) => return Vec::new(),
+        Err(e) => {
+            tracing::debug!(error = %e, "could not check the copy for a password manager's mark");
+            return Vec::new();
+        }
+    };
+    let mut data = Vec::new();
+    // One short word is expected.
+    if let Err(e) = pipe.take(64).read_to_end(&mut data) {
+        tracing::debug!(error = %e, "could not read a password manager's mark");
+    }
+    vec![(KDE_PASSWORD_HINT, data)]
+}
+
+/// The formats password managers use that the current Windows copy has, with their data.
+#[cfg(windows)]
+fn windows_markers() -> Vec<(&'static str, Vec<u8>)> {
+    let Ok(_open) = clipboard_win::Clipboard::new_attempts(10) else {
+        tracing::debug!("could not open the clipboard to check for a password manager's mark");
+        return Vec::new();
+    };
+    [
+        WINDOWS_EXCLUDE,
+        WINDOWS_VIEWER_IGNORE,
+        WINDOWS_HISTORY,
+        WINDOWS_CLOUD,
+    ]
+    .into_iter()
+    .filter_map(|name| {
+        let format = clipboard_win::register_format(name)?.get();
+        if !clipboard_win::is_format_avail(format) {
+            return None;
+        }
+        let mut data = Vec::new();
+        // Some apps put no data in the first two: being there is what counts.
+        let _ = clipboard_win::raw::get_vec(format, &mut data);
+        Some((name, data))
+    })
+    .collect()
 }
 
 /// Starts watching Wayland's clipboard change events. `None` on X11, or when the compositor
@@ -306,6 +420,10 @@ impl ClipboardBackend for SystemClipboard {
             .as_ref()
             .is_none_or(events::ChangeEvents::take_change)
     }
+
+    fn marked_sensitive(&mut self) -> bool {
+        marks_sensitive(&self.markers())
+    }
 }
 
 /// Keeps a sensitive clip out of the OS clipboard history (and Windows cloud clipboard) and out
@@ -355,21 +473,28 @@ fn windows_clipboard_sequence() -> u32 {
     unsafe { windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber() }
 }
 
-/// An in-memory clipboard, shared between clones. For tests and for running two daemons on one
-/// machine without them fighting over the real clipboard.
+/// An in-memory clipboard, shared between clones, that remembers whether its content is marked
+/// sensitive. For tests and for running two daemons on one machine without them fighting over
+/// the real clipboard.
 #[derive(Clone, Default)]
-pub struct MemoryClipboard(Arc<Mutex<Option<Raw>>>);
+pub struct MemoryClipboard(Arc<Mutex<Option<(Raw, bool)>>>);
 
 impl MemoryClipboard {
     pub fn get(&self) -> Option<Raw> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.lock().as_ref().map(|(raw, _)| raw.clone())
     }
 
     pub fn set(&self, raw: Raw) {
-        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(raw);
+        *self.lock() = Some((raw, false));
+    }
+
+    /// Copies `raw` the way a password manager does: marked sensitive.
+    pub fn set_sensitive(&self, raw: Raw) {
+        *self.lock() = Some((raw, true));
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Option<(Raw, bool)>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -378,16 +503,23 @@ impl ClipboardBackend for MemoryClipboard {
         Ok(self.get())
     }
 
-    fn write(&mut self, raw: &Raw, _sensitive: bool) -> Result<()> {
-        self.set(raw.clone());
+    fn write(&mut self, raw: &Raw, sensitive: bool) -> Result<()> {
+        *self.lock() = Some((raw.clone(), sensitive));
         Ok(())
+    }
+
+    fn marked_sensitive(&mut self) -> bool {
+        self.lock()
+            .as_ref()
+            .is_some_and(|(_, sensitive)| *sensitive)
     }
 }
 
 /// Owns the clipboard on its own thread: reports local changes, applies remote clips.
 ///
 /// Content it wrote itself is never reported as a change. What was on the clipboard when the
-/// daemon started isn't reported either: only new copies are sent.
+/// daemon started isn't reported either: only new copies are sent. Copies a password manager
+/// marked as secret are reported as sensitive.
 #[derive(Debug)]
 pub struct ClipboardWatcher {
     requests: mpsc::Sender<Request>,
@@ -456,15 +588,29 @@ fn watch(
     changes: &async_mpsc::Sender<Content>,
 ) {
     let mut last_seen = backend.read().ok().flatten().map(|raw| raw.fingerprint());
+    // What this thread put on the clipboard last, and whether it was sensitive, until something
+    // else is copied. On Windows even a non-sensitive received clip carries
+    // CanUploadToCloudClipboard = 0, which would read back as a password manager's mark.
+    let mut ours: Option<(u64, bool)> = None;
 
     loop {
         match requests.recv_timeout(poll_interval) {
             Ok(Request::Read(reply)) => {
                 let content = match backend.read() {
                     Ok(Some(raw)) => {
+                        let fingerprint = raw.fingerprint();
                         // Sent by whoever asked: the next poll needn't report it too.
-                        last_seen = Some(raw.fingerprint());
-                        Content::from_raw(raw).map(Some)
+                        last_seen = Some(fingerprint);
+                        let sensitive = match ours {
+                            Some((written, sensitive)) if written == fingerprint => sensitive,
+                            _ => backend.marked_sensitive(),
+                        };
+                        Content::from_raw(raw).map(|content| {
+                            Some(Content {
+                                sensitive,
+                                ..content
+                            })
+                        })
                     }
                     Ok(None) => Ok(None),
                     Err(e) => Err(e),
@@ -482,7 +628,9 @@ fn watch(
                 };
                 match backend.write(&raw, content.sensitive) {
                     Ok(()) => {
-                        last_seen = Some(raw.fingerprint());
+                        let fingerprint = raw.fingerprint();
+                        last_seen = Some(fingerprint);
+                        ours = Some((fingerprint, content.sensitive));
                         applied(started.elapsed());
                     }
                     Err(e) => tracing::warn!(error = %e, "could not write to the clipboard"),
@@ -505,9 +653,17 @@ fn watch(
                     continue;
                 }
                 last_seen = Some(fingerprint);
+                ours = None;
+                let sensitive = backend.marked_sensitive();
                 match Content::from_raw(raw) {
                     Ok(content) => {
-                        if changes.blocking_send(content).is_err() {
+                        if changes
+                            .blocking_send(Content {
+                                sensitive,
+                                ..content
+                            })
+                            .is_err()
+                        {
                             return;
                         }
                     }
@@ -626,6 +782,100 @@ mod tests {
         );
 
         assert!(!shown.contains("hunter2"));
+    }
+
+    fn dword(value: u32) -> Vec<u8> {
+        value.to_le_bytes().to_vec()
+    }
+
+    #[test]
+    fn password_manager_marks_make_a_copy_sensitive() {
+        // KeePassXC on Wayland.
+        assert!(marks_sensitive(&[
+            ("text/plain;charset=utf-8", b"hunter2".to_vec()),
+            (KDE_PASSWORD_HINT, b"secret".to_vec()),
+        ]));
+        assert!(marks_sensitive(&[(
+            KDE_PASSWORD_HINT,
+            b"secret\n".to_vec()
+        )]));
+        // KeePass on Windows.
+        assert!(marks_sensitive(&[
+            ("CF_UNICODETEXT", b"h\0u\0".to_vec()),
+            (WINDOWS_VIEWER_IGNORE, Vec::new()),
+            (WINDOWS_EXCLUDE, Vec::new()),
+        ]));
+        // KeePassXC, Bitwarden, 1Password on Windows: any one of them is enough.
+        assert!(marks_sensitive(&[(WINDOWS_EXCLUDE, dword(0))]));
+        assert!(marks_sensitive(&[(WINDOWS_HISTORY, dword(0))]));
+        assert!(marks_sensitive(&[(WINDOWS_CLOUD, dword(0))]));
+    }
+
+    #[test]
+    fn ordinary_copies_are_not_sensitive() {
+        assert!(!marks_sensitive(&[]));
+        assert!(!marks_sensitive(&[
+            ("text/plain;charset=utf-8", b"secret".to_vec()),
+            ("UTF8_STRING", b"secret".to_vec()),
+        ]));
+        assert!(!marks_sensitive(&[(KDE_PASSWORD_HINT, b"public".to_vec())]));
+        assert!(!marks_sensitive(&[(KDE_PASSWORD_HINT, Vec::new())]));
+        // 1 allows the history and the cloud explicitly.
+        assert!(!marks_sensitive(&[
+            (WINDOWS_HISTORY, dword(1)),
+            (WINDOWS_CLOUD, dword(1)),
+        ]));
+        assert!(!marks_sensitive(&[(WINDOWS_HISTORY, Vec::new())]));
+    }
+
+    #[tokio::test]
+    async fn copies_a_password_manager_marked_are_sensitive() {
+        let clipboard = MemoryClipboard::default();
+        let (tx, mut changes) = async_mpsc::channel(8);
+        let watcher = ClipboardWatcher::spawn(clipboard.clone(), POLL, tx).unwrap();
+        assert!(watcher.read().await.unwrap().is_none());
+
+        clipboard.set_sensitive(Raw::Text("hunter2".into()));
+        assert!(next_change(&mut changes).await.unwrap().sensitive);
+
+        clipboard.set(Raw::Text("hello".into()));
+        assert!(!next_change(&mut changes).await.unwrap().sensitive);
+
+        clipboard.set_sensitive(Raw::Text("hunter3".into()));
+        assert!(watcher.read().await.unwrap().unwrap().sensitive);
+    }
+
+    /// Marks every copy, as Windows' cloud-clipboard format reads on what paste-get wrote.
+    struct MarksEverything(MemoryClipboard);
+
+    impl ClipboardBackend for MarksEverything {
+        fn read(&mut self) -> Result<Option<Raw>> {
+            self.0.read()
+        }
+
+        fn write(&mut self, raw: &Raw, sensitive: bool) -> Result<()> {
+            self.0.write(raw, sensitive)
+        }
+
+        fn marked_sensitive(&mut self) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn what_it_wrote_reads_back_as_written() {
+        let clipboard = MemoryClipboard::default();
+        let (tx, mut changes) = async_mpsc::channel(8);
+        let backend = MarksEverything(clipboard.clone());
+        let watcher = ClipboardWatcher::spawn(backend, POLL, tx).unwrap();
+
+        let received = Content::from_raw(Raw::Text("from the phone".into())).unwrap();
+        watcher.write(received, |_| {}).unwrap();
+        assert!(!watcher.read().await.unwrap().unwrap().sensitive);
+
+        // Copied in another app since: its marks count again.
+        clipboard.set(Raw::Text("copied here".into()));
+        assert!(next_change(&mut changes).await.unwrap().sensitive);
     }
 
     #[tokio::test]
