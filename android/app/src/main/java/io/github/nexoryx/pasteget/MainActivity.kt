@@ -103,7 +103,7 @@ class MainActivity : ComponentActivity() {
             connected,
             model.unpaired,
             listOf(
-                copiesHealth(model.copiesOn, builtIn, shizuku, logs, model.fallback),
+                copiesHealth(model.copiesOn, builtIn, shizuku, logs, model.fallback, model.canNotify),
                 screenshotsHealth(model.screenshots.wanted, model.screenshots.access),
                 codesHealth(model.codesOn, model.codeAccess, shellReady),
             ),
@@ -120,7 +120,16 @@ class MainActivity : ComponentActivity() {
                 lastReceived = lastReceived,
                 screenshots = model.screenshots,
                 photoRequestDenied = model.photoRequestDenied,
-                autoCopy = AutoCopyCardState(model.copiesOn, builtIn, shizuku, logs, model.fallback, model.notices, lastCopy),
+                autoCopy = AutoCopyCardState(
+                    model.copiesOn,
+                    builtIn,
+                    shizuku,
+                    logs,
+                    model.fallback,
+                    model.notices,
+                    lastCopy,
+                    model.canNotify,
+                ),
                 codes = CodesCardState(model.codesOn, model.codeAccess, shellReady, lastCode),
             ),
             actions = actions,
@@ -149,6 +158,7 @@ class MainActivity : ComponentActivity() {
             onRetryLogs = pasteGet.autoCopy.logs::retry,
             onHideNotices = model::hideNotices,
             onOpenPrivacySettings = ::openPrivacySettings,
+            onOpenNotificationSettings = ::openNotificationSettings,
         ),
         codes = CodesActions(
             onChange = model::setSendCodes,
@@ -214,8 +224,20 @@ class MainActivity : ComponentActivity() {
 
     /** Shows the code notification, then Settings, where the user asks for a pairing code. */
     private fun setUpBuiltIn() {
+        // The code is typed into the notification: without it, set-up could only fail.
+        if (!BuiltInShell.canNotify(this)) return openNotificationSettings()
         pasteGet.autoCopy.builtIn.beginPairing()
         openWirelessDebugging()
+    }
+
+    /** paste-get's notification settings: the app's switch and each channel's. */
+    private fun openNotificationSettings() {
+        val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+        try {
+            startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            openAppSettings()
+        }
     }
 
     private fun openWirelessDebugging() {

@@ -397,6 +397,8 @@ report what happens.
    number* seven times.
 2. In paste-get, turn on **Send what you copy**, then tap **Set up without Shizuku**. A
    notification "Pair paste-get with wireless debugging" appears, and Developer options open.
+   The code is typed into that notification, so paste-get's notifications must be allowed: if
+   they aren't, the card says so and **Allow notifications** opens their settings instead.
 3. Turn on **Wireless debugging** (allow it on this network), tap it, then **Pair device with
    pairing code**. A 6-digit code shows.
 4. Without leaving that screen, pull down the notifications and type the code in paste-get's
@@ -417,6 +419,7 @@ If Shizuku was set up, the built-in mode replaces it; you can uninstall Shizuku.
 | W6 | In Wireless debugging → Paired devices, forget paste-get, then restart the phone | The card says "wireless debugging no longer knows paste-get: pair again" |
 | W7 | **Pair again** in the card | Back to step 2 |
 | W8 | With the built-in mode running, turn on **Hide "pasted from your clipboard"** in the card, then repeat W2 | Pasted, with no notice. Settings → Privacy → *Show clipboard access* is now off. Turning the switch off brings the notice back |
+| W9 | Before setting up: Settings → Apps → paste-get → Notifications off. In paste-get, turn on **Send what you copy** | The card says the set-up needs notifications, and offers **Allow notifications** (paste-get's notification settings) instead of **Set up without Shizuku**. Turn them on, come back: **Set up without Shizuku** is back |
 
 If a step fails, the card shows why. **Please report that text**, and, if you can, the log:
 `adb logcat -s paste-get` (lines start with "built-in mode" or "shell helper").

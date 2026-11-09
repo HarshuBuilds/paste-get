@@ -22,6 +22,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.RemoteInput
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -431,24 +432,35 @@ class BuiltInShell(
         }
     }
 
-    private companion object {
-        const val TAG = "paste-get"
-        const val CHANNEL_ID = "builtin_setup"
-        const val NOTIFICATION_ID = 3
-        const val CODE_KEY = "code"
+    companion object {
+        private const val TAG = "paste-get"
+        private const val CHANNEL_ID = "builtin_setup"
+        private const val NOTIFICATION_ID = 3
+        private const val CODE_KEY = "code"
 
         /** `Settings.Global.ADB_WIFI_ENABLED`, hidden from the SDK. */
-        const val ADB_WIFI_ENABLED = "adb_wifi_enabled"
-        const val FIND_TIMEOUT_MS = 15_000L
+        private const val ADB_WIFI_ENABLED = "adb_wifi_enabled"
+        private const val FIND_TIMEOUT_MS = 15_000L
 
         /** How long "Set up" looks for wireless debugging before asking for a code. */
-        const val PROBE_TIMEOUT_MS = 4_000L
-        const val HELPER_START_MS = 10_000L
-        const val POLL_MS = 200L
-        const val MAX_RESTARTS = 5
-        const val RESTART_WINDOW_MS = 60 * 60 * 1000L
+        private const val PROBE_TIMEOUT_MS = 4_000L
+        private const val HELPER_START_MS = 10_000L
+        private const val POLL_MS = 200L
+        private const val MAX_RESTARTS = 5
+        private const val RESTART_WINDOW_MS = 60 * 60 * 1000L
 
         /** UIDs per Android user: an app's user is its UID divided by this. */
-        const val PER_USER_RANGE = 100_000
+        private const val PER_USER_RANGE = 100_000
+
+        /**
+         * Whether the pairing notification can show. The code is typed into it, so set-up can't
+         * work while paste-get's notifications are off (refused on Android 13+, or turned off in
+         * Settings) or its set-up channel is blocked.
+         */
+        fun canNotify(context: Context): Boolean {
+            if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return false
+            val channel = context.getSystemService(NotificationManager::class.java).getNotificationChannel(CHANNEL_ID)
+            return channel == null || channel.importance != NotificationManager.IMPORTANCE_NONE
+        }
     }
 }

@@ -83,6 +83,8 @@ data class AutoCopyCardState(
     val fallback: FallbackAccess,
     val notices: AccessNotices,
     val lastCopy: LastCopy?,
+    /** The built-in mode's set-up asks for its code in a notification. */
+    val canNotify: Boolean,
 )
 
 /** The automatic copy card's buttons. Each does nothing unless given, for tests and previews. */
@@ -100,6 +102,8 @@ class AutoCopyActions(
     val onRetryLogs: () -> Unit = {},
     val onHideNotices: (Boolean) -> Unit = {},
     val onOpenPrivacySettings: () -> Unit = {},
+    /** paste-get's notification settings. */
+    val onOpenNotificationSettings: () -> Unit = {},
 )
 
 /** The automatic copy: on or off, how it works right now, and what to do if it doesn't. */
@@ -118,7 +122,7 @@ fun AutoCopyCard(state: AutoCopyCardState, actions: AutoCopyActions) {
                 val builtInSetUp = state.builtIn.status != BuiltInStatus.NOT_SET_UP &&
                     state.builtIn.status != BuiltInStatus.PAIRING && state.builtIn.status != BuiltInStatus.OFF
                 if (state.builtIn.status != BuiltInStatus.WATCHING) {
-                    BuiltInLine(state.builtIn, actions)
+                    BuiltInLine(state.builtIn, state.canNotify, actions)
                     if (!builtInSetUp && state.shizuku.status != ShizukuStatus.WATCHING) ShizukuLine(state.shizuku, actions)
                     if (state.shizuku.status != ShizukuStatus.WATCHING) LogLine(state.logs, actions)
                 }
@@ -133,7 +137,7 @@ fun AutoCopyCard(state: AutoCopyCardState, actions: AutoCopyActions) {
 /** The health of the automatic copy in one line: how copies are read right now. */
 @Composable
 private fun modeText(state: AutoCopyCardState): String =
-    when (copiesHealth(state.on, state.builtIn, state.shizuku, state.logs, state.fallback).mode) {
+    when (copiesHealth(state.on, state.builtIn, state.shizuku, state.logs, state.fallback, state.canNotify).mode) {
         CopyMode.BUILT_IN -> stringResource(R.string.mode_builtin)
         CopyMode.SHIZUKU -> stringResource(R.string.mode_shizuku, state.shizuku.detail.orEmpty())
         CopyMode.LOGS -> stringResource(R.string.mode_logs)
@@ -142,19 +146,29 @@ private fun modeText(state: AutoCopyCardState): String =
 
 /** The built-in mode: set it up, or what keeps it from running. */
 @Composable
-private fun BuiltInLine(builtIn: BuiltInState, actions: AutoCopyActions) {
+private fun BuiltInLine(builtIn: BuiltInState, canNotify: Boolean, actions: AutoCopyActions) {
     val detail = builtIn.detail.orEmpty()
     when (builtIn.status) {
         BuiltInStatus.OFF, BuiltInStatus.WATCHING -> {}
         BuiltInStatus.NOT_SET_UP -> {
             Text(stringResource(R.string.builtin_offer), style = MaterialTheme.typography.bodySmall)
-            TextButton(onClick = actions.onSetUpBuiltIn) { Text(stringResource(R.string.builtin_set_up)) }
+            if (canNotify) {
+                TextButton(onClick = actions.onSetUpBuiltIn) { Text(stringResource(R.string.builtin_set_up)) }
+            } else {
+                NeedsNotificationsLine(actions)
+            }
         }
         BuiltInStatus.PAIRING -> {
-            Text(stringResource(R.string.builtin_pairing_steps), style = MaterialTheme.typography.bodySmall)
-            if (detail.isNotEmpty()) Text(detail, style = MaterialTheme.typography.bodySmall)
+            if (canNotify) {
+                Text(stringResource(R.string.builtin_pairing_steps), style = MaterialTheme.typography.bodySmall)
+                if (detail.isNotEmpty()) Text(detail, style = MaterialTheme.typography.bodySmall)
+            } else {
+                NeedsNotificationsLine(actions)
+            }
             Row {
-                TextButton(onClick = actions.onOpenWirelessDebugging) { Text(stringResource(R.string.builtin_open_settings)) }
+                if (canNotify) {
+                    TextButton(onClick = actions.onOpenWirelessDebugging) { Text(stringResource(R.string.builtin_open_settings)) }
+                }
                 TextButton(onClick = actions.onResetBuiltIn) { Text(stringResource(R.string.builtin_cancel)) }
             }
         }
@@ -168,6 +182,13 @@ private fun BuiltInLine(builtIn: BuiltInState, actions: AutoCopyActions) {
             }
         }
     }
+}
+
+/** The code is typed into a notification: without notifications, set-up can't be done. */
+@Composable
+private fun NeedsNotificationsLine(actions: AutoCopyActions) {
+    Text(stringResource(R.string.builtin_needs_notifications), style = MaterialTheme.typography.bodySmall)
+    TextButton(onClick = actions.onOpenNotificationSettings) { Text(stringResource(R.string.builtin_allow_notifications)) }
 }
 
 @Composable

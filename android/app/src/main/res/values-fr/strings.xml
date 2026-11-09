@@ -77,6 +77,8 @@
     <string name="mode_builtin">Mode : intégré, en tant que shell, sans Shizuku. Chaque copie part vers tes ordinateurs.</string>
     <string name="builtin_offer">Pas de Shizuku ? paste-get peut utiliser lui-même le débogage sans fil d\'Android (expérimental). Il faut les Options pour les développeurs et le Wi-Fi, et ça tient après un redémarrage.</string>
     <string name="builtin_set_up">Configurer sans Shizuku</string>
+    <string name="builtin_needs_notifications">La configuration demande un code dans une notification, et les notifications de paste-get sont désactivées. Autorise-les d\'abord.</string>
+    <string name="builtin_allow_notifications">Autoriser les notifications</string>
     <string name="builtin_pairing_steps">Dans les Options pour les développeurs : active le Débogage sans fil, appuie dessus, puis sur Associer l\'appareil avec un code. Tape ce code dans la notification de paste-get, sans quitter l\'écran du code.</string>
     <string name="builtin_open_settings">Ouvrir les Options pour les développeurs</string>
     <string name="builtin_cancel">Annuler</string>

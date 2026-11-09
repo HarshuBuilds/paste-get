@@ -25,8 +25,10 @@ object HomeFixtures {
         copiesOn: Boolean = false,
         screenshots: ScreenshotSetting = ScreenshotSetting(wanted = false, access = PhotoAccess.NONE),
         codesOn: Boolean = false,
+        builtInStatus: BuiltInStatus = if (copiesOn) BuiltInStatus.NOT_SET_UP else BuiltInStatus.OFF,
+        canNotify: Boolean = true,
     ): HomeState {
-        val builtIn = BuiltInState(if (copiesOn) BuiltInStatus.NOT_SET_UP else BuiltInStatus.OFF)
+        val builtIn = BuiltInState(builtInStatus)
         val shizuku = ShizukuState(if (copiesOn) ShizukuStatus.NOT_INSTALLED else ShizukuStatus.OFF)
         val logs = if (copiesOn) LogStatus.NEEDS_PERMISSIONS else LogStatus.OFF
         val fallback = FallbackAccess(readLogs = false, overlay = false)
@@ -36,7 +38,7 @@ object HomeFixtures {
             connected,
             null,
             listOf(
-                copiesHealth(copiesOn, builtIn, shizuku, logs, fallback),
+                copiesHealth(copiesOn, builtIn, shizuku, logs, fallback, canNotify),
                 screenshotsHealth(screenshots.wanted, screenshots.access),
                 codesHealth(codesOn, codeAccess, shellReady = false),
             ),
@@ -59,6 +61,7 @@ object HomeFixtures {
                 fallback,
                 AccessNotices(supported = false, hidden = null, canChange = false),
                 lastCopy = null,
+                canNotify,
             ),
             codes = CodesCardState(codesOn, codeAccess, shellReady = false, last = null),
         )

@@ -1,0 +1,70 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+package io.github.nexoryx.pasteget.ui
+
+import android.app.Application
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
+import io.github.nexoryx.pasteget.BuiltInStatus
+import io.github.nexoryx.pasteget.R
+import org.junit.Assert.assertEquals
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
+
+/** Without notifications, the card says why set-up can't start and leads to the setting. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
+class BuiltInSetUpCardTest {
+    @get:Rule
+    val compose = createComposeRule()
+
+    private val app: Application = RuntimeEnvironment.getApplication()
+
+    private fun show(state: HomeState, actions: HomeActions) {
+        compose.setContent { MaterialTheme { HomeScreen(state, actions) } }
+    }
+
+    @Test
+    fun withNotificationsTheSetUpIsOffered() {
+        var setUps = 0
+        show(HomeFixtures.state(copiesOn = true), HomeActions(autoCopy = AutoCopyActions(onSetUpBuiltIn = { setUps++ })))
+
+        compose.onNodeWithText(app.getString(R.string.builtin_set_up)).performScrollTo().performClick()
+        assertEquals(1, setUps)
+        compose.onNodeWithText(app.getString(R.string.builtin_needs_notifications)).assertDoesNotExist()
+    }
+
+    @Test
+    fun withoutThemItSaysWhyAndOpensTheirSettings() {
+        var setUps = 0
+        var opened = 0
+        show(
+            HomeFixtures.state(copiesOn = true, canNotify = false),
+            HomeActions(autoCopy = AutoCopyActions(onSetUpBuiltIn = { setUps++ }, onOpenNotificationSettings = { opened++ })),
+        )
+
+        compose.onNodeWithText(app.getString(R.string.builtin_needs_notifications)).performScrollTo()
+        compose.onNodeWithText(app.getString(R.string.builtin_set_up)).assertDoesNotExist()
+        compose.onNodeWithText(app.getString(R.string.builtin_allow_notifications)).performScrollTo().performClick()
+        assertEquals(0 to 1, setUps to opened)
+    }
+
+    @Test
+    fun alsoWhileWaitingForTheCode() {
+        show(
+            HomeFixtures.state(copiesOn = true, builtInStatus = BuiltInStatus.PAIRING, canNotify = false),
+            HomeActions(),
+        )
+
+        compose.onNodeWithText(app.getString(R.string.builtin_needs_notifications)).performScrollTo()
+        compose.onNodeWithText(app.getString(R.string.builtin_pairing_steps)).assertDoesNotExist()
+        compose.onNodeWithText(app.getString(R.string.builtin_cancel)).performScrollTo()
+    }
+}

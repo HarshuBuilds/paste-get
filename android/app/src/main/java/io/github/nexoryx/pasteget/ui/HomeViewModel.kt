@@ -10,6 +10,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.nexoryx.pasteget.AccessNotices
+import io.github.nexoryx.pasteget.BuiltInShell
 import io.github.nexoryx.pasteget.CodeAccess
 import io.github.nexoryx.pasteget.FallbackAccess
 import io.github.nexoryx.pasteget.OneTimeCodes
@@ -65,6 +66,10 @@ class HomeViewModel(
     var codeAccess by mutableStateOf(CodeAccess(listening = false, seesCodes = null))
         private set
 
+    /** The built-in mode's pairing notification can show. */
+    var canNotify by mutableStateOf(true)
+        private set
+
     init {
         // Taken from the app as it arrives, so the next screen doesn't say it again.
         viewModelScope.launch {
@@ -85,6 +90,7 @@ class HomeViewModel(
         notices = AccessNotices.of(app)
         codesOn = Preferences.sendCodes(app)
         codeAccess = OneTimeCodes.access(app)
+        canNotify = BuiltInShell.canNotify(app)
     }
 
     private fun refreshComputers() {

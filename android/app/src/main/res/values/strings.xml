@@ -72,6 +72,8 @@
     <string name="mode_builtin">Mode: built-in, as shell, without Shizuku. Each copy goes to your computers.</string>
     <string name="builtin_offer">No Shizuku? paste-get can use Android\'s wireless debugging itself (experimental). It needs Developer options and Wi-Fi, and survives restarts.</string>
     <string name="builtin_set_up">Set up without Shizuku</string>
+    <string name="builtin_needs_notifications">The set-up asks for a code in a notification, and paste-get\'s notifications are off. Allow them first.</string>
+    <string name="builtin_allow_notifications">Allow notifications</string>
     <string name="builtin_pairing_steps">In Developer options: turn on Wireless debugging, tap it, then Pair device with pairing code. Type that code in paste-get\'s notification, without leaving the code screen.</string>
     <string name="builtin_open_settings">Open Developer options</string>
     <string name="builtin_cancel">Cancel</string>
