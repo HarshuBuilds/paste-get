@@ -14,15 +14,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import io.github.nexoryx.pasteget.AccessNotices
@@ -60,16 +60,12 @@ fun ScreenshotsCard(
     }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.screenshots_title), style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        stringResource(if (setting.on) R.string.screenshots_on else R.string.screenshots_off),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                Switch(checked = setting.on, onCheckedChange = onChange)
-            }
+            SwitchRow(
+                title = stringResource(R.string.screenshots_title),
+                text = stringResource(if (setting.on) R.string.screenshots_on else R.string.screenshots_off),
+                checked = setting.on,
+                onCheckedChange = onChange,
+            )
             if (problem != null) {
                 Text(stringResource(problem), style = MaterialTheme.typography.bodySmall)
                 TextButton(onClick = onOpenSettings) { Text(stringResource(R.string.open_settings)) }
@@ -111,16 +107,12 @@ class AutoCopyActions(
 fun AutoCopyCard(state: AutoCopyCardState, actions: AutoCopyActions) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.copies_title), style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        if (state.on) modeText(state) else stringResource(R.string.copies_off),
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                Switch(checked = state.on, onCheckedChange = actions.onChange)
-            }
+            SwitchRow(
+                title = stringResource(R.string.copies_title),
+                text = if (state.on) modeText(state) else stringResource(R.string.copies_off),
+                checked = state.on,
+                onCheckedChange = actions.onChange,
+            )
             if (state.on) {
                 // What isn't working yet, and the step that fixes it.
                 val builtInSetUp = state.builtIn.status != BuiltInStatus.NOT_SET_UP &&
@@ -225,13 +217,13 @@ private fun FallbackLine(shizuku: ShizukuState, fallback: FallbackAccess, action
 @Composable
 private fun NoticesLine(notices: AccessNotices, actions: AutoCopyActions) {
     if (notices.switchable) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.notices_title), style = MaterialTheme.typography.bodyMedium)
-                Text(stringResource(R.string.notices_text), style = MaterialTheme.typography.bodySmall)
-            }
-            Switch(checked = notices.hidden == true, onCheckedChange = actions.onHideNotices)
-        }
+        SwitchRow(
+            title = stringResource(R.string.notices_title),
+            text = stringResource(R.string.notices_text),
+            checked = notices.hidden == true,
+            onCheckedChange = actions.onHideNotices,
+            titleStyle = MaterialTheme.typography.bodyMedium,
+        )
     } else if (notices.hidden != true) {
         Text(stringResource(R.string.notices_by_hand), style = MaterialTheme.typography.bodySmall)
         TextButton(onClick = actions.onOpenPrivacySettings) { Text(stringResource(R.string.notices_open_settings)) }
@@ -272,7 +264,11 @@ fun SupportCard() {
     val context = LocalContext.current
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(stringResource(R.string.support_title), style = MaterialTheme.typography.bodyLarge)
+            Text(
+                stringResource(R.string.support_title),
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.semantics { heading() },
+            )
             Text(stringResource(R.string.support_text), style = MaterialTheme.typography.bodySmall)
             OutlinedButton(onClick = {
                 try {
@@ -306,21 +302,17 @@ class CodesActions(
 fun CodesCard(state: CodesCardState, actions: CodesActions) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.codes_title), style = MaterialTheme.typography.bodyLarge)
-                    val last = state.last
-                    Text(
-                        when {
-                            !state.on -> stringResource(R.string.codes_off)
-                            last != null -> lastCodeText(last)
-                            else -> stringResource(R.string.codes_waiting)
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                Switch(checked = state.on, onCheckedChange = actions.onChange)
-            }
+            val last = state.last
+            SwitchRow(
+                title = stringResource(R.string.codes_title),
+                text = when {
+                    !state.on -> stringResource(R.string.codes_off)
+                    last != null -> lastCodeText(last)
+                    else -> stringResource(R.string.codes_waiting)
+                },
+                checked = state.on,
+                onCheckedChange = actions.onChange,
+            )
             if (state.on) CodesAccessLine(state, actions)
         }
     }

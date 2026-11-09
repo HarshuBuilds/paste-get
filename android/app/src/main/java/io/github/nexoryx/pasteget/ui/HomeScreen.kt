@@ -24,6 +24,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import io.github.nexoryx.pasteget.LastDelivery
 import io.github.nexoryx.pasteget.LastReceived
@@ -67,8 +72,17 @@ fun HomeScreen(state: HomeState, actions: HomeActions) {
             .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineLarge)
-        Text(statusTitle(state.status), style = MaterialTheme.typography.titleMedium)
+        Text(
+            stringResource(R.string.app_name),
+            style = MaterialTheme.typography.headlineLarge,
+            modifier = Modifier.semantics { heading() },
+        )
+        // Read out when it changes ("Connected to 1 computer"), without moving the focus.
+        Text(
+            statusTitle(state.status),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        )
 
         Button(onClick = actions.onPair, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.pair_button))
@@ -80,7 +94,13 @@ fun HomeScreen(state: HomeState, actions: HomeActions) {
         ) {
             Text(stringResource(R.string.send_clipboard_button))
         }
-        state.message?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+        state.message?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
+        }
 
         ScreenshotsCard(state.screenshots, state.photoRequestDenied, actions.onScreenshotsChange, actions.onOpenAppSettings)
         state.lastDelivery?.let { LastDeliveryText(it) }
@@ -109,7 +129,11 @@ private fun connectedText(count: Int): String = pluralStringResource(R.plurals.n
 @Composable
 private fun ComputerList(computers: List<PairedComputer>, connected: Set<String>, onForget: (PairedComputer) -> Unit) {
     if (computers.isEmpty()) return
-    Text(stringResource(R.string.paired_computers), style = MaterialTheme.typography.titleSmall)
+    Text(
+        stringResource(R.string.paired_computers),
+        style = MaterialTheme.typography.titleSmall,
+        modifier = Modifier.semantics { heading() },
+    )
     computers.forEach { computer ->
         Card(modifier = Modifier.fillMaxWidth()) {
             Row(
@@ -117,14 +141,17 @@ private fun ComputerList(computers: List<PairedComputer>, connected: Set<String>
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 val isConnected = computer.deviceId in connected
-                Column(modifier = Modifier.weight(1f)) {
+                // Name and state read as one: "HP-AIO, Connected".
+                Column(modifier = Modifier.weight(1f).semantics(mergeDescendants = true) {}) {
                     Text(computer.name, style = MaterialTheme.typography.bodyLarge)
                     Text(
                         stringResource(if (isConnected) R.string.connected else R.string.offline),
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                TextButton(onClick = { onForget(computer) }) {
+                // "Forget HP-AIO" rather than the same "Forget" for every computer.
+                val label = stringResource(R.string.forget_named, computer.name)
+                TextButton(onClick = { onForget(computer) }, modifier = Modifier.semantics { contentDescription = label }) {
                     Text(stringResource(R.string.forget))
                 }
             }
