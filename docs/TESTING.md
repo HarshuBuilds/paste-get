@@ -210,6 +210,7 @@ on the phone. Update both sides first, as in section 6.
 | C6 | If you use Gboard: after C4, open its clipboard (the clipboard icon above the keys) | The screenshot is there; tapping it inserts it in apps that take images (Discord, for example) |
 | C7 | PC: copy a password from a password manager (KeePassXC on KDE Plasma or Hyprland; KeePass, KeePassXC, Bitwarden or 1Password on Windows). Phone: paste it | Pasted. The tray's *Recent* menu doesn't list it, and Android's clipboard preview hides it. `pasteget daemon` in a terminal logs `local copy` with `sensitive=true` |
 | C8 | Windows: send text from the phone to the PC (section 8). In the tray's *Settings…*, rename this computer and **Save** (paste-get restarts). Then press `Ctrl+Alt+Shift+V` (section 11) | It goes out as an ordinary clip: the tray's *Recent*, emptied by the restart, lists it as from this computer, and the tray's log (T21) says `clipboard sent` with `sensitive=false` |
+| C9 | Windows, with a clipboard manager running (Ditto, for example): repeat C7 five times | Each time `sensitive=true` |
 
 `adb logcat -s paste-get` shows "clip received: …, … bytes" for each clip. Images, and texts over
 256 KB (C2), go on the clipboard as a link to a file, since Android can't pass that much in one
@@ -526,8 +527,10 @@ relies on elsewhere on Linux.
   events): the clipboard is only read after a change. On X11 and GNOME every poll reads it, images
   included (row 6 measures the cost).
 - A password copied on the PC goes out as sensitive only if the password manager marks it, and
-  the PC sees the mark only on Windows and on KDE Plasma and Hyprland (Wayland change events,
-  section 2). On X11 and GNOME it goes out as an ordinary clip.
+  the PC sees the mark only on Windows and on KDE Plasma and Hyprland (through Wayland's
+  data-control protocol, which the change events of section 2 also use). On X11 and GNOME it goes
+  out as an ordinary clip. A copy the PC can't check (another app holds the clipboard) goes out
+  as sensitive.
 - IPv4 only.
 - The identity key is a file readable only by your user, not yet in the OS keystore.
 - The tray's *Recent* list is in memory only, holds the last 10 clips, and forgets them when the
