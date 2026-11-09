@@ -2,10 +2,14 @@
 Type=Application
 Name=paste-get
 GenericName=Clipboard sync
+GenericName[fr]=Synchronisation du presse-papiers
 Comment=Copy on your phone, paste on your PC
+Comment[fr]=Copie sur le téléphone, colle sur le PC
 Exec=pasteget-tray
-Icon=io.github.nexoryx.pasteget
+Icon=pasteget-tray
 Terminal=false
 Categories=Utility;
 Keywords=clipboard;phone;android;sync;screenshot;
+Keywords[fr]=presse-papiers;téléphone;android;synchronisation;capture;
 StartupNotify=false
+StartupWMClass=pasteget-tray

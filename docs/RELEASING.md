@@ -8,13 +8,20 @@ How the packages are built, and the steps of a release. CI does the building
 | Package | Built by | Where it ends up |
 |---|---|---|
 | Windows installer, `paste-get_<version>_x64-setup.exe` | `packaging/build-desktop.sh nsis` on `windows-latest` | Installs for the current user (no admin prompt) in `%LOCALAPPDATA%\paste-get`, with a Start menu entry and an uninstaller. `pasteget.exe` is installed next to `pasteget-tray.exe` |
-| Linux AppImage, `paste-get_<version>_amd64.AppImage` | `packaging/build-desktop.sh appimage` on Ubuntu 22.04 | One file; runs on distributions at least as new as Ubuntu 22.04. Contains `pasteget` too, but only the tray is started from outside |
+| Linux AppImage, `paste-get_<version>_amd64.AppImage` | `packaging/build-desktop.sh appimage,deb,rpm` on Ubuntu 22.04 | One file; runs on distributions at least as new as Ubuntu 22.04. Contains `pasteget` too, but only the tray is started from outside |
+| Debian/Ubuntu package, `paste-get_<version>_amd64.deb` | the same run | `/usr/bin/pasteget` and `pasteget-tray`, a desktop entry and an icon. Depends on the system's WebKitGTK 4.1, GTK 3 and libayatana-appindicator3 (the tray icon). Ubuntu 22.04, Debian 12 or newer |
+| Fedora/openSUSE package, `paste-get_<version>_x86_64.rpm` | the same run (Tauri names it `paste-get-<version>-1.x86_64.rpm`; the workflow renames it) | The same files. Requires the same libraries by their file names (`libwebkit2gtk-4.1.so.0()(64bit)` and so on), which works across RPM distributions |
 | Android APK, `paste-get_<version>_foss.apk` | `./gradlew assembleFossRelease` on `ubuntu-latest` | Signed with the release key, for both phone ABIs (`arm64-v8a`, `x86_64`). Without the key (forks, before it's set up) it comes out as `…_foss-unsigned.apk`, which Android won't install; a tag refuses to release without it |
 | Arch package `paste-get-git` | `packaging/aur/paste-get-git/PKGBUILD`, tested with `makepkg` in an Arch container | `/usr/bin/pasteget` and `pasteget-tray`, a desktop entry and an icon. Built from source on the user's machine |
 
-Every push that changes the packaging builds all four, without releasing: they're in the run's
+Every push that changes the packaging builds them all, without releasing: they're in the run's
 artifacts. A `v*` tag builds them and puts them, with a `SHA256SUMS` file, in a **draft**
 GitHub release.
+
+Before that, CI checks the Linux packages: `packaging/linux/check-packages.sh` lists what the
+.deb and .rpm install and the libraries they ask for, then the .deb is installed with `apt` on
+Debian 12 and the .rpm with `dnf` on the latest Fedora, and both programs must start
+(`--version`). A dependency with the wrong name, or a library missing from the list, fails there.
 
 The Windows installer installs WebView2 if the PC doesn't have it (Windows 11 always does): the
 *Pair a phone* and *Settings* windows need it. It then downloads Microsoft's bootstrapper, silently;
@@ -24,7 +31,8 @@ nothing is downloaded when WebView2 is there.
 
 ```sh
 cargo install tauri-cli --version =2.12.4 --locked
-packaging/build-desktop.sh appimage    # Linux; nsis on Windows, from Git Bash
+packaging/build-desktop.sh appimage,deb,rpm    # Linux; nsis on Windows, from Git Bash
+packaging/linux/check-packages.sh target/release/bundle    # needs dpkg-deb and rpm
 ```
 
 The script builds `pasteget`, copies it to `desktop/tray/binaries/` under the target triple (as
@@ -86,7 +94,7 @@ or IzzyOnDroid can check it.
   PC" (*More info* → *Run anyway*), and Smart App Control refuses to run them at all. The plan is
   [SignPath](https://signpath.org/)'s free signing for open-source projects, which needs an
   application from the maintainer once the repository is public.
-- **Linux:** the AppImage isn't signed; check it against `SHA256SUMS`.
+- **Linux:** the AppImage, .deb and .rpm aren't signed; check them against `SHA256SUMS`.
 
 ## The README demo GIF
 

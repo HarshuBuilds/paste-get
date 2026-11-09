@@ -17,6 +17,15 @@
         "startMenuFolder": "paste-get",
         "installerHooks": "./installer-hooks.nsh"
       }
+    },
+    "linux": {
+      "deb": {
+        "section": "utils",
+        "desktopTemplate": "../../packaging/linux/paste-get.desktop"
+      },
+      "rpm": {
+        "desktopTemplate": "../../packaging/linux/paste-get.desktop"
+      }
     }
   }
 }

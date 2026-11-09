@@ -31,7 +31,10 @@ the app is unknown, since it isn't code-signed yet: *More info → Run anyway*. 
 lives in the notification area (under `^` in the taskbar).
 
 **Linux:**
-- AppImage: `chmod +x paste-get_<version>_amd64.AppImage` and run it.
+- Ubuntu 22.04+, Debian 12+, Mint: `sudo apt install ./paste-get_<version>_amd64.deb`.
+- Fedora, openSUSE: `sudo dnf install ./paste-get_<version>_x86_64.rpm` (openSUSE: `sudo zypper
+  install --allow-unsigned-rpm ./paste-get_<version>_x86_64.rpm`).
+- Any other distribution: `chmod +x paste-get_<version>_amd64.AppImage` and run it.
 - Arch: the [`paste-get-git`](packaging/aur/paste-get-git/PKGBUILD) PKGBUILD builds it from source.
 - The tray icon needs a tray: KDE Plasma has one; on Hyprland, use a bar with a tray (Waybar's
   `tray` module).

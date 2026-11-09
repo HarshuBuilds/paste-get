@@ -49,9 +49,9 @@ check() {
 package() {
   cd "$_repo"
   install -Dm755 target/release/pasteget target/release/pasteget-tray -t "$pkgdir/usr/bin/"
-  install -Dm644 packaging/linux/io.github.nexoryx.pasteget.desktop \
-    -t "$pkgdir/usr/share/applications/"
+  # The same desktop entry and icon names as the .deb and .rpm, which Tauri names.
+  install -Dm644 packaging/linux/paste-get.desktop -t "$pkgdir/usr/share/applications/"
   install -Dm644 desktop/tray/icons/icon.png \
-    "$pkgdir/usr/share/icons/hicolor/512x512/apps/io.github.nexoryx.pasteget.png"
+    "$pkgdir/usr/share/icons/hicolor/512x512/apps/pasteget-tray.png"
   install -Dm644 README.md docs/TESTING.md -t "$pkgdir/usr/share/doc/$pkgname/"
 }

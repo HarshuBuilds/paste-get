@@ -101,6 +101,9 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
     a draft release for each `v*` tag (`RELEASING.md`)
   - [x] AUR `paste-get-git` PKGBUILD, built with `makepkg` in an Arch container by CI (publishing
     it on the AUR needs a maintainer account)
+  - [x] `.deb` and `.rpm`, built with the AppImage. The Release workflow checks their files and
+    dependencies, then installs them on Debian 12 and the latest Fedora (checked locally; its
+    first CI run is still to see)
   - [x] Release APK, signed in CI with a key kept in repository secrets (creating the key and
     the secrets is a one-time step for the maintainer, `RELEASING.md`)
 - [x] `SECURITY.md` draft: threat model, known gaps, private reporting

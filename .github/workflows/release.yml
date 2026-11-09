@@ -45,9 +45,9 @@ jobs:
           if-no-files-found: error
 
   linux:
-    name: AppImage
+    name: AppImage, .deb and .rpm
     # The oldest supported Ubuntu: an AppImage runs on systems at least as new as the one it
-    # was built on.
+    # was built on. The .deb and .rpm then need glibc 2.35 or newer too.
     runs-on: ubuntu-22.04
     env:
       # linuxdeploy is itself an AppImage; runners have no FUSE.
@@ -55,19 +55,58 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Install the libraries the tray links to
+      - name: Install the libraries the tray links to, and rpm to look inside the .rpm
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev rpm
       - name: Install tauri-cli
         run: cargo install tauri-cli --version "=$TAURI_CLI_VERSION" --locked
-      - name: Build the AppImage
-        run: packaging/build-desktop.sh appimage
+      - name: Build the packages
+        run: packaging/build-desktop.sh appimage,deb,rpm
+      - name: Check what the .deb and .rpm install
+        run: packaging/linux/check-packages.sh target/release/bundle
+      - name: Name the packages
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          mkdir dist
+          # paste-get_<version>_amd64.AppImage and .deb already; the .rpm the same way.
+          cp target/release/bundle/appimage/*.AppImage target/release/bundle/deb/*.deb dist/
+          cp target/release/bundle/rpm/*.rpm "dist/paste-get_${version}_x86_64.rpm"
+          ls -l dist
       - uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: target/release/bundle/appimage/*.AppImage
+          path: dist/*
           if-no-files-found: error
+
+  linux-install:
+    name: Install the ${{ matrix.package }} on ${{ matrix.image }}
+    needs: linux
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest Debian with WebKitGTK 4.1, and the newest Fedora.
+          - image: debian:12
+            package: .deb
+            install: apt-get update && apt-get install -y ./paste-get_*.deb
+          - image: fedora:latest
+            package: .rpm
+            install: dnf install -y ./paste-get_*.rpm
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux
+      # Fails if a dependency has no package of that name on the distribution.
+      - name: Install it with its dependencies
+        run: ${{ matrix.install }}
+      # Fails if a library it links to is missing.
+      - name: Both programs start
+        run: |
+          pasteget --version
+          pasteget-tray --version
 
   android:
     name: Android APK
@@ -159,7 +198,7 @@ jobs:
   release:
     name: Draft the GitHub release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows, linux, android, aur]
+    needs: [windows, linux, linux-install, android, aur]
     runs-on: ubuntu-latest
     permissions:
       contents: write
