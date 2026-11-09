@@ -237,8 +237,17 @@ class AppViewModel(
             message = app.getString(R.string.not_a_pairing_code)
             return
         }
-        val invite = PairingCode.describe(code)
-        pairing = if (invite == null) PairingState.Failed(unreadableCode()) else PairingState.Confirm(code, invite)
+        viewModelScope.launch {
+            // Read by the core, as pairing reads it.
+            val summary = withContext(io) { computers.describe(code) }
+            // Another code may have come first meanwhile.
+            if (pairing == PairingState.Busy || pairing is PairingState.Confirm) return@launch
+            pairing = if (summary == null) {
+                PairingState.Failed(unreadableCode())
+            } else {
+                PairingState.Confirm(code, PairingCode.invite(summary))
+            }
+        }
     }
 
     /** The user said yes to [shown]: it pairs only if that is still the code waiting. */

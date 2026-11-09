@@ -155,6 +155,7 @@ class PairingFlowTest {
         io.runAll()
 
         model.offerPairing(LINK)
+        io.runAll()
         model.confirmShown()
         assertEquals(PairingState.Busy, model.pairing)
         // Another link meanwhile is ignored, and cancelling doesn't stop what runs.

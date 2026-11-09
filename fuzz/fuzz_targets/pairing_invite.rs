@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Parses arbitrary text as a scanned pairing QR code.
+//! Parses arbitrary text as a scanned pairing QR code, and as the phone describes it before
+//! pairing.
 //! Run with `cargo +nightly fuzz run pairing_invite`.
 
 #![no_main]
@@ -12,6 +13,12 @@ fuzz_target!(|data: &[u8]| {
     let Ok(text) = std::str::from_utf8(data) else {
         return;
     };
+    // What the phone shows must be what it would pair with.
+    let summary = pasteget_ffi::describe_invite(text.to_owned());
+    assert_eq!(
+        summary.is_some(),
+        text.trim().parse::<PairingInvite>().is_ok()
+    );
     if let Ok(invite) = text.parse::<PairingInvite>() {
         // Whatever parses must survive a round trip.
         let reparsed: PairingInvite = invite.to_uri().parse().expect("round trip");
