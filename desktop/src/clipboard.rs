@@ -869,10 +869,19 @@ mod tests {
         }
     }
 
+    /// Writes `content` through `watcher` and waits until it is on the clipboard.
+    fn write_now(watcher: &ClipboardWatcher, content: Content) {
+        let (applied_tx, applied) = mpsc::channel();
+        watcher
+            .write(content, move |_| applied_tx.send(()).unwrap())
+            .unwrap();
+        applied.recv_timeout(Duration::from_secs(2)).unwrap();
+    }
+
     #[tokio::test]
     async fn what_it_wrote_reads_back_as_written() {
         let clipboard = MemoryClipboard::default();
-        let (tx, mut changes) = async_mpsc::channel(8);
+        let (tx, _changes) = async_mpsc::channel(8);
         let backend = MarksUnseen(clipboard.clone());
         let watcher = ClipboardWatcher::spawn(backend, POLL, tx).unwrap();
 
@@ -882,10 +891,34 @@ mod tests {
         let received = Content::from_raw(Raw::Text("from the phone".into())).unwrap();
         watcher.write(received, |_| {}).unwrap();
         assert!(!watcher.read().await.unwrap().unwrap().sensitive);
+    }
 
-        // Copied in another app since: what the backend sees counts.
+    #[tokio::test]
+    async fn what_it_wrote_is_forgotten_once_something_else_is_copied() {
+        let clipboard = MemoryClipboard::default();
+        let (tx, mut changes) = async_mpsc::channel(8);
+        let backend = MarksUnseen(clipboard.clone());
+        let watcher = ClipboardWatcher::spawn(backend, POLL, tx).unwrap();
+        write_now(&watcher, sensitive_text("2FA code"));
+
         clipboard.set(Raw::Text("copied here".into()));
-        assert!(!next_change(&mut changes).await.unwrap().sensitive);
+        assert!(next_change(&mut changes).await.is_some());
+        // The same text again, copied in another app this time.
+        clipboard.set(Raw::Text("2FA code".into()));
+        assert!(next_change(&mut changes).await.is_some());
+
+        assert!(!watcher.read().await.unwrap().unwrap().sensitive);
+    }
+
+    #[tokio::test]
+    async fn a_sensitive_clip_it_wrote_reads_back_sensitive() {
+        let clipboard = MemoryClipboard::default();
+        let (tx, _changes) = async_mpsc::channel(8);
+        let watcher = ClipboardWatcher::spawn(clipboard, POLL, tx).unwrap();
+
+        watcher.write(sensitive_text("2FA code"), |_| {}).unwrap();
+
+        assert!(watcher.read().await.unwrap().unwrap().sensitive);
     }
 
     #[tokio::test]
