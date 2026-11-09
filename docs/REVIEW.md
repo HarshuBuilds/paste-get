@@ -27,6 +27,8 @@ make trust decisions. In order of risk:
 | `desktop/src/admission.rs` | Limits on connections not known yet to come from a paired device | ~110 |
 | `desktop/src/control.rs` | Local control channel: Unix socket in a 0700 directory, Windows named pipe | ~550 |
 | `desktop/src/config.rs` | Key file permissions (0600), profile names (path traversal) | part |
+| `desktop/src/firewall.rs` | Reads PowerShell's output about the networks (their names are chosen by whoever runs the Wi-Fi) and paste-get's firewall rules | ~200, plus tests |
+| `desktop/tray/src/pairing.rs`, `desktop/tray/dist/*.js` | The tray's windows: what reaches the page from paired devices and the daemon | ~400 |
 | `ffi/src/lib.rs` | The same decisions on the phone side, through the core | part |
 | `desktop/src/history.rs` | The PC's history: the same, plus thumbnails of images from other devices, and the `pasteget history` line format | ~340 |
 | `ffi/src/history.rs` | The phone's history: what the phone copies, sends and receives goes to `HistoryStore::record` on a thread of its own | ~870, half of it type mappings |
@@ -184,6 +186,15 @@ Each line is a claim to check. "→" points at where it's enforced.
     tests `a_deleted_clip_leaves_nothing_behind` and
     `an_expired_code_is_hidden_then_leaves_nothing_behind`
 
+### Desktop windows
+32. The tray's windows show text from paired devices (their names) and from the daemon only as
+    text: inside JSON in the script that drives the pairing page, then with `textContent`. The
+    only HTML put in a page is the QR code's SVG, drawn by the tray from its own invite. The
+    pages' CSP allows their own scripts and nothing else (`default-src 'none'`), and the
+    addresses they show (the Releases page, the source, a firewall rule) are text to copy, never
+    links: nothing in them goes online. → `pairing.rs` (`script`), `dist/pair.js`,
+    `dist/copy.js`, `tauri.conf.json`
+
 ## Known gaps (not bugs to report, but worth an opinion)
 
 - The identity key is a file, not in the OS keystore (v0.2).
@@ -194,7 +205,7 @@ Each line is a claim to check. "→" points at where it's enforced.
 
 ```sh
 cargo test --workspace                       # includes two-daemon and phone-API end-to-end tests
-cd fuzz && cargo +nightly fuzz run <target>  # frame_decoder, pairing_invite, clip_receiver, hotkey, adb_wire, detect, history_query
+cd fuzz && cargo +nightly fuzz run <target>  # frame_decoder, pairing_invite, clip_receiver, hotkey, adb_wire, detect, history_query, firewall
 cargo deny check                             # dependency advisories and licenses
 ```
 

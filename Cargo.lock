@@ -3037,7 +3037,7 @@ dependencies = [
 
 [[package]]
 name = "pasteget-core"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "bytes",
  "data-encoding",
@@ -3066,7 +3066,7 @@ dependencies = [
 
 [[package]]
 name = "pasteget-desktop"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anstream",
  "anyhow",
@@ -3099,7 +3099,7 @@ dependencies = [
 
 [[package]]
 name = "pasteget-ffi"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "boring-sys",
  "if-addrs",
@@ -3120,12 +3120,13 @@ dependencies = [
 
 [[package]]
 name = "pasteget-tray"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
  "dirs",
  "futures-util",
+ "pasteget-core",
  "pasteget-desktop",
  "qrcode",
  "semver",
@@ -5182,7 +5183,7 @@ dependencies = [
 
 [[package]]
 name = "uniffi-bindgen"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "uniffi",
 ]

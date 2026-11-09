@@ -13,8 +13,12 @@
 // No console window on Windows. Debug builds keep it, for the logs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod about;
+#[cfg(test)]
+mod i18n_check;
 mod linux_tray;
 mod menu;
+mod network;
 mod pairing;
 mod settings;
 mod startup;
@@ -31,6 +35,7 @@ use pasteget_desktop::clipboard::SystemClipboard;
 use pasteget_desktop::config::{DEFAULT_PROFILE, Profile};
 use pasteget_desktop::control::{self, Endpoint, Request, Response};
 use pasteget_desktop::daemon::{Daemon, DaemonOptions};
+use pasteget_desktop::hotkeys::{self, Action, Runner};
 use pasteget_desktop::notify::{DesktopNotifier, Notifier};
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
@@ -64,6 +69,11 @@ struct Cli {
     /// Started at login rather than by the user: no notice saying it runs.
     #[arg(long, hide = true)]
     at_login: bool,
+    /// Do what a hotkey does in the running paste-get, with its notification, then exit:
+    /// `toggle-pause` or `send-clipboard`. For desktops that bind keys to commands (Hyprland),
+    /// with the AppImage, which has no `pasteget` command.
+    #[arg(long, value_name = "ACTION")]
+    action: Option<String>,
 }
 
 /// Shared by the menu handler and the refresh loop.
@@ -96,6 +106,15 @@ struct Hosted {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Some(action) = &cli.action {
+        return match run_action(&cli.profile, action) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e:#}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let log = startup::init_logs(&cli.profile);
     tracing::info!(version = env!("CARGO_PKG_VERSION"), profile = %cli.profile, "tray starting");
     match run(&cli) {
@@ -106,6 +125,18 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `--action`: what `pasteget hotkey <action>` does, notification included.
+fn run_action(profile: &str, action: &str) -> Result<()> {
+    let action = Action::from_id(action)
+        .ok_or_else(|| anyhow!("unknown action {action:?}: toggle-pause or send-clipboard"))?;
+    let request = Request::Perform {
+        action: action.id().into(),
+    };
+    let endpoint = Endpoint::for_profile(&Profile::open(profile)?);
+    tauri::async_runtime::block_on(ask(&endpoint, &request))?;
+    Ok(())
 }
 
 fn run(cli: &Cli) -> Result<()> {
@@ -150,7 +181,10 @@ fn run(cli: &Cli) -> Result<()> {
         .invoke_handler(tauri::generate_handler![
             load_settings,
             save_settings,
-            close_window
+            close_window,
+            app_info,
+            hyprland_lines,
+            network_advice
         ])
         .setup(move |app| {
             // A tray app: no Dock icon on macOS.
@@ -191,6 +225,13 @@ fn setup<R: Runtime>(app: &AppHandle<R>, tray: Arc<Tray>) -> Result<()> {
         })
         .build(app)?;
     linux_tray::warn_if_no_tray();
+    // Windows: a Public network, or a firewall rule, may keep the phone out. Said once per
+    // network.
+    #[cfg(windows)]
+    tauri::async_runtime::spawn(async {
+        let notifier = DesktopNotifier::start();
+        network::watch(move |(title, body)| notifier.notice_with(title, body)).await;
+    });
     tauri::async_runtime::spawn(refresh_loop(app.clone(), tray));
     Ok(())
 }
@@ -208,6 +249,12 @@ fn on_command<R: Runtime>(app: &AppHandle<R>, tray: &Arc<Tray>, command: Command
         Command::Settings => {
             if let Err(e) = settings::open(app) {
                 tracing::warn!(error = %format!("{e:#}"), "could not open the settings");
+            }
+            return;
+        }
+        Command::About => {
+            if let Err(e) = about::open(app) {
+                tracing::warn!(error = %format!("{e:#}"), "could not open the About window");
             }
             return;
         }
@@ -268,6 +315,11 @@ async fn refresh_loop<R: Runtime>(app: AppHandle<R>, tray: Arc<Tray>) {
     let mut next_start = Instant::now();
     // The first time paste-get runs, nothing is paired yet: show the code right away.
     let mut offered_pairing = false;
+    // Said once, until the daemon runs: the menu says it too, but not every desktop shows the
+    // icon (a bar without a tray).
+    let mut told_down = false;
+    // Why the last start failed, shown until the next try rather than "not running".
+    let mut start_error: Option<String> = None;
     loop {
         let mut state = fetch(&tray.endpoint).await;
         if matches!(state, State::Down(_)) && !tray.is_hosting() && Instant::now() >= next_start {
@@ -279,13 +331,32 @@ async fn refresh_loop<R: Runtime>(app: AppHandle<R>, tray: Arc<Tray>) {
                 tray.start_hosted().await
             };
             match started {
-                Ok(()) => state = fetch(&tray.endpoint).await,
+                Ok(()) => {
+                    start_error = None;
+                    state = fetch(&tray.endpoint).await;
+                }
                 Err(e) => {
                     tracing::warn!(error = %format!("{e:#}"), "could not start the daemon");
-                    state = State::Down(format!("{e:#}"));
+                    let reason = menu::start_error(&e);
                     next_start = Instant::now() + RESTART_EVERY;
+                    if !told_down {
+                        told_down = true;
+                        DesktopNotifier::start().notice(menu::start_failed(&reason));
+                    }
+                    start_error = Some(reason.clone());
+                    state = State::Down(reason);
                 }
             }
+        }
+        if matches!(state, State::Down(_))
+            && !tray.is_hosting()
+            && let Some(reason) = &start_error
+        {
+            state = State::Down(reason.clone());
+        }
+        if matches!(state, State::Running { .. }) {
+            told_down = false;
+            start_error = None;
         }
 
         if !offered_pairing && let State::Running { status, .. } = &state {
@@ -352,7 +423,7 @@ async fn fetch(endpoint: &Endpoint) -> State {
     let status = match ask(endpoint, &Request::Status).await {
         Ok(Response::Status(status)) => status,
         Ok(_) => return State::Down("unexpected answer from the daemon".into()),
-        Err(e) => return State::Down(format!("{e:#}")),
+        Err(e) => return State::Down(menu::down_reason(&format!("{e:#}"))),
     };
     let recent = match ask(endpoint, &Request::Recent).await {
         Ok(Response::Recent { clips }) => clips,
@@ -459,6 +530,16 @@ impl Tray {
     }
 }
 
+/// Run in each window before its page: the language the tray speaks (`PASTEGET_LANG` or the
+/// system's), so the page's texts and the ones it gets from here match (`dist/i18n.js`).
+fn language_script() -> &'static str {
+    if pasteget_desktop::i18n::french() {
+        "window.pastegetLang = \"fr\";"
+    } else {
+        "window.pastegetLang = \"en\";"
+    }
+}
+
 /// How the tray starts at login: this program, marked so it doesn't announce itself.
 fn login_launch(profile: &str) -> Result<Launch> {
     let mut launch = Launch::this_program(profile)?;
@@ -470,6 +551,44 @@ fn login_launch(profile: &str) -> Result<Launch> {
 #[tauri::command]
 fn close_window(window: tauri::WebviewWindow) {
     let _ = window.close();
+}
+
+/// paste-get's version, licence and addresses, for the windows that show them.
+#[tauri::command]
+fn app_info() -> about::Info {
+    about::Info::of_this_build()
+}
+
+/// On Hyprland, which reads neither login entries nor hotkeys from apps, the lines to add to
+/// `hyprland.conf`, for the settings window; `None` elsewhere.
+#[tauri::command]
+fn hyprland_lines(tray: tauri::State<'_, Arc<Tray>>) -> Result<Option<String>, String> {
+    if !hotkeys::is_hyprland() {
+        return Ok(None);
+    }
+    let text = |e: anyhow::Error| format!("{e:#}");
+    let settings = tray.profile.settings().map_err(text)?;
+    let launch = login_launch(tray.profile.name()).map_err(text)?;
+    let lines = hotkeys::hyprland_lines(
+        Some(&launch),
+        tray.profile.name(),
+        &settings.hotkeys.bindings(),
+        &Runner::of_this_program(),
+    );
+    Ok(Some(lines.join("\n")))
+}
+
+/// Windows: what may keep the phone out, and what to do when it can't connect, for the settings
+/// window; `None` elsewhere.
+#[tauri::command]
+async fn network_advice() -> Result<Option<network::Advice>, String> {
+    if !cfg!(windows) {
+        return Ok(None);
+    }
+    // The tray runs the daemon: the firewall rules are for this program.
+    let program = std::env::current_exe().map_err(|e| e.to_string())?;
+    let findings = network::findings_now(program.clone()).await;
+    Ok(Some(network::advice(&findings, &program)))
 }
 
 /// The settings window asks for the current values.

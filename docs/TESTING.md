@@ -3,9 +3,17 @@
 Automated tests use in-memory clipboards. Only real machines can show whether the **system
 clipboard** works. Sections 1–4 test the desktop daemon on its own; section 5 adds the phone,
 section 6 automatic screenshots, section 7 the way back, from the PC to the phone, section 8
-the automatic copy on the phone, section 9 the tray app, section 10 starting at login and
-section 11 the hotkeys, and section 12 the copy on the phone without Shizuku. Section 16 is
-GNOME, which is tier 2.
+the automatic copy on the phone with Shizuku, and section 12 without it (the built-in mode).
+Section 9 is the tray app (with a Waybar module), section 10 starting at login, section 11 the
+hotkeys. Sections 13–15 are links, 2FA codes, and copies made while a device is away. Section 16
+is GNOME, which is tier 2.
+
+To test a release instead of a build, install its packages (see the README) and skip section 1.
+On Linux, `pasteget` is then on the `PATH` (with the AppImage, use the .deb, .rpm or AUR package
+for the terminal rows). The Windows installer puts `pasteget.exe` in `%LOCALAPPDATA%\paste-get`
+without changing the `PATH`: in each PowerShell window, first run
+`Set-Alias pasteget "$env:LOCALAPPDATA\paste-get\pasteget.exe"`, and below, `pasteget` means
+that file.
 
 The trick: on one computer, run the real daemon (system clipboard) **and** a second "fake phone"
 daemon with a private in-memory clipboard. Whatever reaches the fake phone came out of your real
@@ -22,7 +30,6 @@ Logs never contain clipboard contents (only types and sizes), so they're safe to
    ```powershell
    git clone https://github.com/Nexoryx-business/paste-get
    cd paste-get
-   git checkout ccr-8ee1704b-80slpz   # until this branch is merged
    cargo build --release
    ```
 3. The program is `target\release\pasteget.exe`. Below, `pasteget` means that file.
@@ -40,7 +47,6 @@ sudo pacman -S --needed rustup git base-devel webkit2gtk-4.1 libayatana-appindic
 rustup default stable
 git clone https://github.com/Nexoryx-business/paste-get
 cd paste-get
-git checkout ccr-8ee1704b-80slpz   # until this branch is merged
 cargo build --release
 alias pasteget="$PWD/target/release/pasteget"
 ```
@@ -48,7 +54,8 @@ Or install it as a package, which also puts the tray in the application menu:
 ```sh
 cd packaging/aur/paste-get-git && makepkg -si
 ```
-(it builds the default branch, so until this branch is merged, use the `cargo build` above).
+(it builds the repository's default branch; to test another branch, use the `cargo build`
+above).
 The daemon needs no other library: Wayland and X11 are spoken directly. The two extra packages
 are for the tray app (section 9). Without them, build only the daemon and the command:
 `cargo build --release -p pasteget-desktop`.
@@ -127,9 +134,11 @@ clipboard. Sections 6 to 8 add screenshots, the way back from the PC, and the au
 
 ### Install the app
 
-The CI builds a debug APK on every push. On GitHub: **Actions** → latest **CI** run →
-**Artifacts** → `paste-get-android-debug`. Unzip it, copy the `.apk` to the phone and open it
-(allow installing from that source when asked).
+A release's `paste-get_<version>_foss.apk` (README, *Install*), or the debug APK the CI builds
+on every push: on GitHub, **Actions** → latest **CI** run → **Artifacts** →
+`paste-get-android-debug`. Unzip it, copy the `.apk` to the phone and open it (allow installing
+from that source when asked). The two are signed with different keys: uninstall one before
+installing the other.
 
 With `adb` and USB debugging instead: `adb install -r app-foss-debug.apk`.
 
@@ -323,7 +332,7 @@ see its log). Keep the fake phone of section 2 running.
 
 | # | Do this | Expected |
 |---|---|---|
-| T1 | Click (or right-click) the icon | A menu: "paste-get · <this PC>", "Syncing with 1 device", the paired devices with ● (connected) or ○, *Recent*, *Pause syncing*, *Quit* |
+| T1 | Click (or right-click) the icon | A menu: "paste-get · <this PC>", "Syncing with 1 device", the paired devices with ● (connected) or ○, *Recent*, *Pause syncing*, *Settings…*, *About paste-get …*, *Quit* |
 | T2 | Copy text on the PC, then open *Recent* | The text is first, "· this computer, just now" |
 | T3 | `pasteget --profile phone send "from the phone"`, open *Recent* | It's first, with the fake phone's name |
 | T4 | Copy something else, then click the T2 entry in *Recent*; `Ctrl+V` | The T2 text is pasted. The fake phone logs nothing (it had it already) |
@@ -332,11 +341,15 @@ see its log). Keep the fake phone of section 2 running.
 | T7 | Stop the fake phone (Ctrl+C) | Within a few seconds its line turns ○ and the menu says "No device connected" |
 | T8 | *Quit* | The icon disappears; `pasteget status` says the daemon is not running |
 | T9 | Start `pasteget daemon` in a terminal, then `pasteget-tray` | The tray shows that daemon. *Quit* closes the tray only: the daemon keeps running |
-| T10 | With a new profile (`pasteget-tray --profile fresh`), start the tray | The *Pair a phone* window opens by itself with a QR code |
+| T10 | With a new profile (`pasteget-tray --profile fresh`), start the tray | The *Pair a phone* window opens by itself with a QR code and "A new code comes in 4:59", counting down. Under it, the Android app's download page as text; **Copy** copies it |
 | T11 | Phone: **Pair a computer**, scan that code | The window shows ✓ "Paired with <phone>" and closes after a few seconds; the tray keeps running and lists the phone as ● |
-| T12 | Menu → *Pair a phone…*, then close the window with its × | The tray keeps running (closing the window doesn't quit) |
+| T12 | Menu → *Pair a phone…*, then close the window with its × | The tray keeps running (closing the window doesn't quit). The code shown still works until its time is up; no new one is made |
+| T30 | Menu → *Pair a phone…*, and leave the window open for more than 5 minutes | When the count reaches 0:00, a new code replaces the old one by itself, without an error. The phone pairs with the new one; a photo of the old one no longer pairs |
+| T37 | Menu → *Pair a phone…*, take a photo of the code, let it renew (T30), then scan the photo with the phone until the new code has had three wrong tries (the phone tries every address in the code: with two, twice is enough) | Until then, "A device tried an old or wrong code…". Then a fresh code replaces it at once, saying a device tried wrong codes too many times; the phone pairs with that one. `pasteget pair` in a terminal ends with "too many wrong attempts" instead |
+| T31 | Turn Wi-Fi off and unplug Ethernet, then menu → *Pair a phone…*; connect again | "This computer isn't on a network…" and "Trying again in a few seconds…"; once connected, a code shows by itself |
+| T32 | With the system (or `PASTEGET_LANG=fr`) in French, start the tray, open the menu and every window | Everything is in French, also "paste-get démarre…" while it starts and the pairing window's messages. `PASTEGET_LANG=en` turns all of it to English, windows included |
 | T15 | Menu → *Settings…*, change the notifications to "Images and text", **Save** | "Saved."; text from the phone now shows a notification, without a restart |
-| T16 | In *Settings…*, rename this computer, **Save** | "Saved. paste-get restarted…"; within seconds the phone reconnects, and its app shows the new name (bring the app back to the front if it was open). It still shows it after the phone restarts |
+| T16 | Menu → *Pair a phone…*, close the window. In *Settings…*, rename this computer, **Save**. Then the same with the pairing window left open | "Saved. paste-get restarted…", never "paste-get could not restart"; within seconds the phone reconnects, and its app shows the new name (bring the app back to the front if it was open). It still shows it after the phone restarts. The pairing window left open shows a new code, from the restarted paste-get |
 | T17 | In *Settings…*, click a hotkey field, press Ctrl+Alt+K, **Save**, then press Ctrl+Alt+K | It does that action (KDE may ask to allow the shortcut again). Backspace in the field turns the hotkey off |
 | T18 | In *Settings…*, give both hotkeys the same keys, **Save** | An error says so; nothing is saved |
 | T19 | With the tray running, open paste-get again from the Start menu | A notification: "paste-get is already running: its icon is in the notification area…"; no second icon |
@@ -350,9 +363,47 @@ see its log). Keep the fake phone of section 2 running.
 | T26 | Developers: build paste-get with another `PROTOCOL_VERSION` (`core/src/proto.rs`) for the phone or the PC, and let the phone connect | One notification on the PC: "<phone> runs another version of paste-get: update both", not repeated while the phone retries |
 | T27 | With other profiles running (`pasteget-tray --profile work`, this version, and `pasteget --profile test daemon --memory-clipboard --port 47299` in a terminal), run an older paste-get for the default profile, then start this one | The older default one makes way as in T23. The `work` icon stays, and the `test` daemon keeps running |
 | T28 | Developers: with two builds that both know `pasteget quit` (the older one with a lower `version` in `Cargo.toml`), run the older `pasteget daemon` in a terminal, then the older tray (it only shows that daemon), then start the newer tray | The terminal's daemon quits; the older tray starts a daemon of its own, which is asked to quit too, and the older icon disappears. One icon is left, the newer one's; the log says "the older paste-get quit", nothing was ended |
+| T29 | Menu → *About paste-get 0.1.0* (the version of this build) | A small window with the version, the licence (GPL-3.0-or-later) and the source address. **Copy** puts the address on the clipboard; nothing opens a browser or goes online. In French: *À propos de paste-get* |
 | T13 | Last: menu → the phone → *Forget this device* | The phone disappears from the menu within 2 s and can't reconnect. Right away (or, if it was not connected, when it next connects) the real phone shows "<PC> unpaired this phone" and drops the computer from its list. Pair again to go on |
 
-If paste-get doesn't start at all, Windows shows a box saying why, and the log has the details.
+| T35 | Windows: mark the Wi-Fi *Public* (Settings → Network & internet → Wi-Fi → the network → *Public network*), then start the tray | Once, a notification: "Network marked Public", and under it, in full, "Windows' firewall may keep your phone from reaching paste-get. paste-get's Settings say what to do." (French: "Réseau marqué public"). *Settings…* has a *Network* part, in red, saying how to make it Private, and two `netsh advfirewall …` lines with **Copy**. Mark it *Private* again and reopen *Settings…*: the part is still there, with the same lines, without the red warning |
+| T38 | Windows, Wi-Fi *Private*, with WSL, Hyper-V, VirtualBox or VMware installed (their adapters are often a Public "Unidentified network": `Get-NetConnectionProfile` in PowerShell lists them), start the tray | No notification about a Public network, and no red warning in *Settings…* |
+| T39 | Windows, Wi-Fi *Public*: in Windows Security → Firewall → *Allow an app through firewall*, tick *Public* for paste-get, then start the tray | No notification about a Public network, and the phone connects |
+| T36 | Windows, Wi-Fi *Private*: in Windows Security → Firewall → *Allow an app through firewall*, untick paste-get, then open *Settings…*. Copy the *Network* lines and paste them in Terminal (Admin); paste them a second time | *Settings…* says in red that the firewall keeps paste-get out on that network. After the lines, the phone connects again; the list shows one "paste-get" rule, for *Private* only, also after the second time |
+| T40 | Windows: remove paste-get's rules (the first of the *Network* lines, in Terminal (Admin)), quit paste-get and start it again; when Windows asks about the network, click *Cancel* | Within 10 minutes, a notification: "The firewall blocks paste-get"; *Settings…* says in red "Windows' firewall keeps paste-get out on the network “<name>”…", and the phone can't connect. The *Network* lines fix it |
+| T33 | Take paste-get's port first (`python3 -m http.server 47290`, or `pasteget --profile other daemon --memory-clipboard --port 47290` with another profile), then start the tray | A notification: "paste-get could not start: Port 47290 is taken: is another paste-get running?", once (not every 15 s while it retries); the menu says the same the whole time, never "start it with `pasteget daemon`". Free the port: within 15 s the tray runs |
+| T34 | Linux: start the tray with a profile folder it can't create, from a terminal: `PASTEGET_HOME=/proc/nowhere pasteget-tray` | A notification that stays until closed: "paste-get could not start." with the error and the log's path (also printed in the terminal) |
+
+If paste-get doesn't start at all, Windows shows a box saying why, Linux a notification that
+stays until closed, and the log has the details.
+
+### A Waybar module (Hyprland)
+
+`pasteget status --json` prints one line of JSON, also when paste-get isn't running
+(`"running": false`), so a status bar can poll it. Besides the facts (`name`, `paused`,
+`devices`…), it has the four fields of a Waybar `custom` module: `text` (how many devices are
+connected), `alt` and `class` (`stopped`, `paused`, `connected`, `away` or `unpaired`) and
+`tooltip` (in French when the system is, like the tray). In `~/.config/waybar/config.jsonc`, add `"custom/paste-get"` to a `modules-…` list,
+and:
+```jsonc
+"custom/paste-get": {
+  "exec": "pasteget status --json",
+  "return-type": "json",
+  "interval": 5,
+  "format": "{icon} {}",
+  "format-icons": {
+    "connected": "●", "away": "○", "paused": "⏸", "unpaired": "+", "stopped": "✕"
+  },
+  "on-click": "pasteget pause --toggle"
+}
+```
+Style it in `style.css` with `#custom-paste-get.paused { opacity: 0.5; }` and the like. The
+AppImage has no `pasteget` command: use the .deb, .rpm or AUR package for this.
+
+| # | Do this | Expected |
+|---|---|---|
+| B1 | `pasteget status --json`, with paste-get running, then after `pasteget quit` | One line each: `"running":true` with the devices, then `{"alt":"stopped",…,"running":false,…}`, exit code 0 both times |
+| B2 | Add the module above, restart Waybar (`killall -SIGUSR2 waybar`), pair or stop the phone, pause | The module shows ● 1, then ○ 0 when the phone is away, ⏸ when paused, ✕ when paste-get quits; the tooltip names the phone; a click pauses or resumes |
 
 Report which rows passed on Windows 11, KDE Plasma and Hyprland, and anything that looks wrong
 in the menu (cut-off text, missing ticks, a menu that closes by itself).
@@ -364,10 +415,11 @@ The tray's *Start at login* checkbox adds paste-get to the programs started when
   "paste-get". Disabling it there wins over the checkbox, which then still shows ticked.
 - **KDE Plasma:** `~/.config/autostart/io.github.nexoryx.pasteget.desktop`, listed in System
   Settings → *Autostart*.
-- **Hyprland** doesn't read `~/.config/autostart`. Add this line to `~/.config/hypr/hyprland.conf`
-  instead (with the full path if `pasteget-tray` isn't on your `PATH`), and leave the checkbox off:
+- **Hyprland** doesn't read `~/.config/autostart`. Add an `exec-once` line to
+  `~/.config/hypr/hyprland.conf` instead, and leave the checkbox off. The tray's *Settings…*
+  shows it, with the real path (the AppImage's, when it runs from one), ready to copy:
   ```
-  exec-once = pasteget-tray
+  exec-once = /usr/bin/pasteget-tray --profile default --at-login
   ```
 
 It starts the program the checkbox was ticked from, so tick it again after moving the program.
@@ -377,7 +429,7 @@ It starts the program the checkbox was ticked from, so tick it again after movin
 | L1 | Tick *Start at login* | Windows: "paste-get" appears in Task Manager → *Startup apps*. KDE: the file above exists and System Settings → *Autostart* lists paste-get |
 | L2 | Log out and back in (or restart) | The tray icon comes back by itself; `pasteget status` answers |
 | L3 | Untick it, log out and in | No paste-get icon; the entry is gone |
-| L4 | Hyprland: add the `exec-once` line, log out and in | The icon is in Waybar's tray |
+| L4 | Hyprland: copy the lines from *Settings…* (section 11, H6) into `hyprland.conf`, log out and in | The icon is in Waybar's tray, with no "paste-get is running" notice |
 
 ## 11. Hotkeys (M7)
 
@@ -385,10 +437,12 @@ Two global hotkeys work in every app, with `pasteget daemon` or the tray running
 
 | Hotkey | Does | Same as |
 |---|---|---|
-| `Ctrl+Alt+Shift+P` | Pause or resume syncing | `pasteget pause --toggle` |
-| `Ctrl+Alt+Shift+V` | Send the clipboard now, even while paused | `pasteget send --clipboard` |
+| `Ctrl+Alt+Shift+P` | Pause or resume syncing | `pasteget hotkey toggle-pause` |
+| `Ctrl+Alt+Shift+V` | Send the clipboard now, even while paused | `pasteget hotkey send-clipboard` |
 
-Each press shows a short notification ("Syncing paused", "Clipboard sent to 1 device"…). Pause
+Each press shows a short notification ("Syncing paused", "Clipboard sent to 1 device"…), and so
+does each of these commands. `pasteget pause --toggle` and `pasteget send --clipboard` do the
+same without one. Pause
 plus *send the clipboard* gives a private mode: nothing leaves the PC unless you press the key.
 
 Change them in `settings.toml`, then restart paste-get. A letter, a digit or `F1`–`F24`, after
@@ -410,13 +464,17 @@ How each desktop gets them:
   installed with a desktop file to list it by name.)* If the log says `hotkeys not available`
   instead, add them as custom shortcuts in System Settings → *Shortcuts* → *Add New* → *Command*,
   with the commands above.
-- **Hyprland:** paste-get doesn't register anything; the log prints the lines to add to
-  `~/.config/hypr/hyprland.conf`:
+- **Hyprland:** paste-get doesn't register anything. The tray's *Settings…* has a *Hyprland*
+  part with the lines to add to `~/.config/hypr/hyprland.conf`, and **Copy**; the log prints
+  them too. They use the real path of `pasteget`, and the hotkeys saved in *Settings…*:
   ```
-  bind = CTRL ALT SHIFT, P, exec, pasteget pause --toggle
-  bind = CTRL ALT SHIFT, V, exec, pasteget send --clipboard
+  exec-once = /usr/bin/pasteget-tray --profile default --at-login
+  bind = CTRL ALT SHIFT, P, exec, /usr/bin/pasteget hotkey toggle-pause
+  bind = CTRL ALT SHIFT, V, exec, /usr/bin/pasteget hotkey send-clipboard
   ```
-  (with the full path of `pasteget` if it isn't on your `PATH`).
+  The AppImage has no `pasteget` command: there the lines run the AppImage itself, which does
+  the action, with its notification, and exits (`paste-get_0.1.0_amd64.AppImage --action toggle-pause`, or
+  `--action send-clipboard`). Run `hyprctl reload` after editing the file.
 
 | # | Do this | Expected |
 |---|---|---|
@@ -425,6 +483,8 @@ How each desktop gets them:
 | H3 | Copy some text, then press `Ctrl+Alt+Shift+V` | "Clipboard sent to 1 device"; the fake phone logs `clip received` |
 | H4 | Press `Ctrl+Alt+Shift+P` again | "Syncing resumed" |
 | H5 | On a layout with `AltGr` (Albanian, German, Polish…), type `@` in a text editor | It types normally |
+| H6 | Hyprland: tray → *Settings…* | A *Hyprland* part with an `exec-once` line and two `bind` lines, with full paths (the AppImage's path when started from it). **Copy**, paste them into `hyprland.conf`, `hyprctl reload`: H2–H4 work. Change a hotkey, **Save**: the lines follow. Not shown on KDE Plasma or Windows |
+| H7 | Hyprland, AppImage: in a terminal, `./paste-get_*.AppImage --action toggle-pause` twice | "Syncing paused", then "Syncing resumed", and the tray's icon turns grey, then back; the command exits at once each time. `--action nonsense` says which actions exist |
 
 ## 12. Copy on the phone without Shizuku (built-in mode, prototype)
 

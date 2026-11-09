@@ -3,19 +3,26 @@
 //! The "Pair a phone" window: shows the pairing QR code, then says which phone paired.
 //!
 //! It asks the daemon for a code through the control channel, like `pasteget pair`, and shows
-//! what comes back in a small page (`dist/pair.html`). The page calls nothing itself: this side
-//! drives it with [`script`], one call to `window.pasteget.show` per change.
+//! what comes back in a small page (`dist/pair.html`). This side drives the page with
+//! [`script`], one call to `window.pasteget.show` per change; the page itself only asks for the
+//! address of the Android app (`app_info`).
+//!
+//! A code works for a few minutes. When it expires and the window is still open, the window asks
+//! for a new one by itself; when it can't get one (no network, paste-get restarting), it says why
+//! and tries again.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use pasteget_core::pairing::PairingError;
 use pasteget_desktop::control::{self, Endpoint, Request, Response};
+use pasteget_desktop::i18n::{french, tr};
 use qrcode::QrCode;
 use qrcode::render::svg;
 use serde_json::json;
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindowBuilder};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
 pub const WINDOW: &str = "pair";
 
@@ -23,41 +30,44 @@ pub const WINDOW: &str = "pair";
 const CLOSE_AFTER: Duration = Duration::from_secs(4);
 /// How long the page may take to load.
 const LOAD_TIMEOUT: Duration = Duration::from_secs(15);
+/// A request that ends this close to its code's expiry ended because the code expired.
+const EXPIRY_SLACK: Duration = Duration::from_secs(2);
+/// Before asking again for a code that couldn't be had.
+const RETRY_AFTER: Duration = Duration::from_secs(5);
+/// Before asking again when the daemon went away without a word: it is restarting.
+const RESTART_PAUSE: Duration = Duration::from_secs(1);
 
 /// What the window shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum View {
-    /// A code to scan, valid for `minutes`.
+    /// Asking the daemon for a code.
+    Preparing,
+    /// A code to scan, replaced by a new one after `secs`. `note` says why the last one was
+    /// replaced early, in the user's language.
     Code {
         svg: String,
-        minutes: u64,
+        secs: u64,
+        note: Option<String>,
     },
-    /// A device tried and failed; the code still works.
+    /// A device tried and failed; the code still works. In the user's language.
     AttemptFailed(String),
     Paired(String),
-    /// The code can't be shown or stopped working (expired, no network…).
+    /// No code could be had, in the user's language. Another is asked for in a few seconds.
     Error(String),
 }
 
-impl View {
-    pub fn from_response(response: Response) -> Option<Self> {
-        Some(match response {
-            Response::Invite {
-                uri,
-                expires_in_secs,
-            } => match qr_svg(&uri) {
-                Ok(svg) => Self::Code {
-                    svg,
-                    minutes: expires_in_secs.div_ceil(60),
-                },
-                Err(e) => Self::Error(format!("could not draw the code: {e:#}")),
-            },
-            Response::PairingAttemptFailed { reason } => Self::AttemptFailed(reason),
-            Response::Paired(device) => Self::Paired(device.name),
-            Response::Error { message } => Self::Error(message),
-            _ => return None,
-        })
-    }
+/// How one request for a code ended.
+#[derive(Debug, PartialEq, Eq)]
+enum Ended {
+    Paired,
+    /// Its time ran out: ask for a new one.
+    Expired,
+    /// Wrong attempts closed it: ask for a new one now, and say why.
+    Closed,
+    /// The daemon went away before the code expired, saying nothing: it restarted.
+    Interrupted,
+    /// No code, or the code stopped working, for this reason (already in the user's language).
+    Failed(String),
 }
 
 /// The QR code as an SVG element: black on white with a quiet zone, so it scans on any theme.
@@ -81,12 +91,152 @@ pub fn qr_svg(text: &str) -> Result<String> {
 /// messages can't inject code; the page puts text in with `textContent`.
 pub fn script(view: &View) -> String {
     let data = match view {
-        View::Code { svg, minutes } => json!({ "kind": "code", "svg": svg, "minutes": minutes }),
-        View::AttemptFailed(reason) => json!({ "kind": "attempt-failed", "text": reason }),
+        View::Preparing => json!({ "kind": "preparing" }),
+        View::Code { svg, secs, note } => {
+            json!({ "kind": "code", "svg": svg, "secs": secs, "note": note })
+        }
+        View::AttemptFailed(text) => json!({ "kind": "attempt-failed", "text": text }),
         View::Paired(name) => json!({ "kind": "paired", "text": name }),
-        View::Error(message) => json!({ "kind": "error", "text": message }),
+        View::Error(text) => json!({ "kind": "error", "text": text }),
     };
     format!("window.pasteget && window.pasteget.show({data});")
+}
+
+/// Why no code could be shown, from the daemon's or the control channel's message (English, as
+/// in the logs), in the user's language. Messages it doesn't know are shown as they are.
+fn trouble(message: &str) -> String {
+    if message.contains("is not running") {
+        tr(
+            "paste-get isn't running: its menu says why.",
+            "paste-get ne tourne pas : son menu dit pourquoi.",
+        )
+        .into()
+    } else if message.contains("no network address") {
+        tr(
+            "This computer isn't on a network. Connect it to the same Wi-Fi as your phone.",
+            "Cet ordinateur n'est sur aucun réseau. Connecte-le au même Wi-Fi que ton téléphone.",
+        )
+        .into()
+    } else if french() {
+        format!("Le code ne peut pas s'afficher ({message}).")
+    } else {
+        format!("The code can't be shown ({message}).")
+    }
+}
+
+/// What a device's failed attempt (a [`PairingError`] from the daemon) means, in the user's
+/// language. The code still works.
+fn attempt_failed(reason: &str) -> String {
+    if reason == PairingError::WrongSecret.to_string()
+        || reason == PairingError::Expired.to_string()
+    {
+        tr(
+            "A device tried an old or wrong code. If it was your phone, scan this one.",
+            "Un appareil a essayé un code ancien ou faux. Si c'était ton téléphone, scanne celui-ci.",
+        )
+        .into()
+    } else if french() {
+        format!("Un appareil a essayé de s'appairer, sans succès ({reason}).")
+    } else {
+        format!("A device tried to pair but it didn't work ({reason}).")
+    }
+}
+
+/// Why the code shown replaced the last one before its time.
+fn closed_note() -> String {
+    tr(
+        "A device tried wrong codes too many times, so the last one stopped working. If it was your phone, scan this new one.",
+        "Un appareil a essayé trop de codes faux : le précédent ne marche plus. Si c'était ton téléphone, scanne ce nouveau code.",
+    )
+    .into()
+}
+
+/// Asks the daemon for one code and shows what comes of it, until it is used, expires or fails.
+/// `note` goes with the code.
+async fn one_code(endpoint: &Endpoint, show: &mut impl FnMut(View), note: Option<String>) -> Ended {
+    let mut note = note;
+    let mut expires = None;
+    let mut ended = None;
+    let result = control::call(endpoint, &Request::Pair, |response| match response {
+        Response::Invite {
+            uri,
+            expires_in_secs,
+        } => {
+            expires = Some(Instant::now() + Duration::from_secs(expires_in_secs));
+            match qr_svg(&uri) {
+                Ok(svg) => show(View::Code {
+                    svg,
+                    secs: expires_in_secs,
+                    note: note.take(),
+                }),
+                Err(e) => ended = Some(Ended::Failed(trouble(&format!("{e:#}")))),
+            }
+        }
+        Response::PairingAttemptFailed { reason } => {
+            show(View::AttemptFailed(attempt_failed(&reason)));
+        }
+        Response::Paired(device) => {
+            show(View::Paired(device.name));
+            ended = Some(Ended::Paired);
+        }
+        Response::Error { message } if message == control::TOO_MANY_ATTEMPTS => {
+            ended = Some(Ended::Closed);
+        }
+        Response::Error { message } => ended = Some(Ended::Failed(trouble(&message))),
+        _ => {}
+    })
+    .await;
+    if let Some(done @ (Ended::Paired | Ended::Closed)) = ended {
+        return done;
+    }
+    // Whatever the daemon said then ("the pairing code expired"), the code's time is up.
+    if expires.is_some_and(|expires| Instant::now() + EXPIRY_SLACK >= expires) {
+        return Ended::Expired;
+    }
+    if let Err(e) = result {
+        return Ended::Failed(trouble(&format!("{e:#}")));
+    }
+    ended.unwrap_or(if expires.is_some() {
+        Ended::Interrupted
+    } else {
+        Ended::Failed(trouble("the daemon did not answer"))
+    })
+}
+
+/// Shows codes one after the other, each as the last one expires, until a device pairs (`true`)
+/// or `open` says the window was closed (`false`). A code shown when the window closes still
+/// works until it expires; no other is asked for.
+async fn keep_pairing(
+    endpoint: &Endpoint,
+    show: &mut impl FnMut(View),
+    open: &impl Fn() -> bool,
+) -> bool {
+    let mut note = None;
+    loop {
+        match one_code(endpoint, show, note.take()).await {
+            Ended::Paired => return true,
+            Ended::Expired => {
+                tracing::info!("the pairing code expired: showing a new one");
+            }
+            Ended::Closed => {
+                tracing::info!("wrong attempts closed the pairing code: showing a new one");
+                note = Some(closed_note());
+            }
+            Ended::Interrupted => {
+                show(View::Preparing);
+                tokio::time::sleep(RESTART_PAUSE).await;
+            }
+            Ended::Failed(text) => {
+                show(View::Error(text));
+                if open() {
+                    tokio::time::sleep(RETRY_AFTER).await;
+                }
+            }
+        }
+        if !open() {
+            return false;
+        }
+    }
 }
 
 /// Opens the window, or brings it to the front if it's already open. Runs until the pairing
@@ -102,11 +252,12 @@ pub async fn run<R: Runtime>(app: AppHandle<R>, endpoint: Endpoint) -> Result<()
     // `on_page_load` takes a `Fn`: the sender sits in a mutex to be taken once.
     let loaded_tx = std::sync::Mutex::new(Some(loaded_tx));
     let window = WebviewWindowBuilder::new(&app, WINDOW, WebviewUrl::App("pair.html".into()))
-        .title(pasteget_desktop::i18n::tr(
+        .title(tr(
             "Pair a phone · paste-get",
             "Appairer un téléphone · paste-get",
         ))
-        .inner_size(400.0, 540.0)
+        .initialization_script(crate::language_script())
+        .inner_size(420.0, 680.0)
         .resizable(false)
         .center()
         .focused(true)
@@ -127,71 +278,25 @@ pub async fn run<R: Runtime>(app: AppHandle<R>, endpoint: Endpoint) -> Result<()
         .context("the pairing window did not load")?
         .context("the pairing window closed")?;
 
-    // The control client calls back synchronously: hand each answer over to this task.
-    let (views_tx, mut views) = mpsc::unbounded_channel();
-    let request = tokio::spawn(async move {
-        let result = control::call(&endpoint, &Request::Pair, |response| {
-            if let Some(view) = View::from_response(response) {
-                let _ = views_tx.send(view);
-            }
-        })
-        .await;
-        if let Err(e) = result {
-            let _ = views_tx.send(View::Error(format!("{e:#}")));
-        }
-    });
-
-    while let Some(view) = views.recv().await {
-        // The user may have closed the window: the pairing goes on without it.
+    // The user may close the window: the code shown goes on working without it.
+    let mut show = |view: View| {
         let _ = window.eval(script(&view));
-        if matches!(view, View::Paired(_)) {
-            tracing::info!("paired from the tray");
-            tokio::time::sleep(CLOSE_AFTER).await;
-            let _ = window.close();
-            break;
-        }
+    };
+    let open = || app.get_webview_window(WINDOW).is_some();
+    if keep_pairing(&endpoint, &mut show, &open).await {
+        tracing::info!("paired from the tray");
+        tokio::time::sleep(CLOSE_AFTER).await;
+        let _ = window.close();
     }
-    request.abort();
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pasteget_desktop::control::DeviceReply;
 
-    #[test]
-    fn invites_become_a_scannable_svg() {
-        let view = View::from_response(Response::Invite {
-            uri: "pasteget://pair?v=0&id=X".into(),
-            expires_in_secs: 300,
-        });
-
-        let Some(View::Code { svg, minutes }) = view else {
-            panic!("expected a code");
-        };
-        assert_eq!(minutes, 5);
-        assert!(svg.starts_with("<svg"));
-        assert!(svg.contains("#000000") && svg.contains("#ffffff"));
-    }
-
-    #[test]
-    fn answers_map_to_what_the_window_says() {
-        let paired = Response::Paired(DeviceReply {
-            id: "ID".into(),
-            name: "POCO M8 5G".into(),
-        });
-        assert_eq!(
-            View::from_response(paired),
-            Some(View::Paired("POCO M8 5G".into()))
-        );
-        assert_eq!(
-            View::from_response(Response::Error {
-                message: "the pairing code expired".into()
-            }),
-            Some(View::Error("the pairing code expired".into()))
-        );
-        assert_eq!(View::from_response(Response::Copied), None);
+    fn english() {
+        pasteget_desktop::i18n::force(pasteget_desktop::i18n::Lang::En);
     }
 
     #[test]
@@ -202,5 +307,264 @@ mod tests {
         assert!(script.starts_with("window.pasteget && window.pasteget.show({"));
         assert!(script.contains(r#""text":"</script>\"); alert(1); (""#));
         assert!(script.ends_with("});"));
+    }
+
+    #[test]
+    fn codes_are_scannable_svgs() {
+        let svg = qr_svg("pasteget://pair?v=0&id=X").unwrap();
+
+        assert!(svg.starts_with("<svg"));
+        assert!(svg.contains("#000000") && svg.contains("#ffffff"));
+        let script = script(&View::Code {
+            svg,
+            secs: 300,
+            note: None,
+        });
+        assert!(script.contains(r#""kind":"code""#) && script.contains(r#""secs":300"#));
+    }
+
+    #[test]
+    fn failed_attempts_are_explained() {
+        english();
+        let wrong = attempt_failed(&PairingError::WrongSecret.to_string());
+        assert!(wrong.contains("old or wrong code"), "{wrong}");
+        // Others keep the technical reason, for a report.
+        let other = attempt_failed(&PairingError::Protocol.to_string());
+        assert!(other.contains("didn't work") && other.contains("pairing protocol"));
+    }
+
+    #[tokio::test]
+    async fn a_stopped_daemon_is_explained() {
+        english();
+        let home = tempfile::tempdir().unwrap();
+        let profile = pasteget_desktop::config::Profile::open_in(home.path(), "pc").unwrap();
+        let mut shown = Vec::new();
+
+        let ended = one_code(
+            &Endpoint::for_profile(&profile),
+            &mut |view| shown.push(view),
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            ended,
+            Ended::Failed("paste-get isn't running: its menu says why.".into())
+        );
+        assert!(shown.is_empty());
+    }
+
+    /// The daemon's own message, from a daemon that has no address to put in a code.
+    #[tokio::test]
+    async fn no_network_is_explained() {
+        use pasteget_desktop::clipboard::MemoryClipboard;
+        use pasteget_desktop::daemon::{Daemon, DaemonOptions};
+        use std::net::{Ipv4Addr, SocketAddr};
+        use std::sync::Arc;
+
+        english();
+        let home = tempfile::tempdir().unwrap();
+        let profile = pasteget_desktop::config::Profile::open_in(home.path(), "pc").unwrap();
+        let mut options = DaemonOptions::listen_on(0);
+        options.listen = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+        options.announce = false;
+        options.advertised_ips = Some(Vec::new());
+        let daemon = Arc::new(
+            Daemon::start(profile.clone(), MemoryClipboard::default(), options)
+                .await
+                .unwrap(),
+        );
+        let endpoint = Endpoint::for_profile(&profile);
+        let server = control::serve(daemon, &endpoint).await.unwrap();
+        let mut shown = Vec::new();
+
+        let ended = one_code(&endpoint, &mut |view| shown.push(view), None).await;
+
+        assert_eq!(
+            ended,
+            Ended::Failed(
+                "This computer isn't on a network. Connect it to the same Wi-Fi as your phone."
+                    .into()
+            )
+        );
+        server.abort();
+    }
+
+    /// A stand-in for the daemon's control channel: it answers each request for a code with the
+    /// lines of `answers`, in turn, then hangs up.
+    #[cfg(unix)]
+    fn fake_daemon(
+        profile: &pasteget_desktop::config::Profile,
+        answers: Vec<Vec<String>>,
+    ) -> tokio::task::JoinHandle<usize> {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let listener = tokio::net::UnixListener::bind(profile.dir().join("control.sock")).unwrap();
+        tokio::spawn(async move {
+            let mut asked = 0;
+            for lines in answers {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let (read, mut write) = stream.into_split();
+                let mut request = String::new();
+                let _ = BufReader::new(read).read_line(&mut request).await;
+                assert!(request.contains(r#""cmd":"pair""#), "{request}");
+                asked += 1;
+                for line in lines {
+                    let _ = write.write_all(format!("{line}\n").as_bytes()).await;
+                }
+            }
+            asked
+        })
+    }
+
+    #[cfg(unix)]
+    fn invite(expires_in_secs: u64) -> String {
+        serde_json::to_string(&Response::Invite {
+            uri: "pasteget://pair?v=0&id=X".into(),
+            expires_in_secs,
+        })
+        .unwrap()
+    }
+
+    /// An expired code is replaced by a new one, without the user doing anything, and the
+    /// window doesn't show the daemon's "expired".
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_expired_code_is_replaced_by_a_new_one() {
+        english();
+        let home = tempfile::tempdir().unwrap();
+        let profile = pasteget_desktop::config::Profile::open_in(home.path(), "pc").unwrap();
+        let expired = serde_json::to_string(&Response::Error {
+            message: "the pairing code expired".into(),
+        })
+        .unwrap();
+        let paired = r#"{"paired":{"id":"PHONE","name":"POCO M8 5G"}}"#.to_owned();
+        let daemon = fake_daemon(
+            &profile,
+            vec![
+                // The code expires at once (the daemon says so after its time).
+                vec![invite(0), expired],
+                vec![invite(300), paired],
+            ],
+        );
+        let mut shown = Vec::new();
+
+        let paired = keep_pairing(
+            &Endpoint::for_profile(&profile),
+            &mut |view| shown.push(view),
+            &|| true,
+        )
+        .await;
+
+        assert!(paired);
+        assert_eq!(daemon.await.unwrap(), 2);
+        let kinds: Vec<_> = shown
+            .iter()
+            .map(|view| match view {
+                View::Code { secs, .. } => format!("code {secs}"),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(kinds, ["code 0", "code 300", r#"Paired("POCO M8 5G")"#]);
+    }
+
+    /// The daemon restarted (new settings) while the code was shown: a new code comes from the
+    /// new daemon.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_daemon_that_went_away_gives_a_new_code() {
+        english();
+        let home = tempfile::tempdir().unwrap();
+        let profile = pasteget_desktop::config::Profile::open_in(home.path(), "pc").unwrap();
+        let paired = r#"{"paired":{"id":"PHONE","name":"POCO"}}"#.to_owned();
+        let daemon = fake_daemon(&profile, vec![vec![invite(300)], vec![invite(300), paired]]);
+        let mut shown = Vec::new();
+
+        let paired = keep_pairing(
+            &Endpoint::for_profile(&profile),
+            &mut |view| shown.push(view),
+            &|| true,
+        )
+        .await;
+
+        assert!(paired);
+        assert_eq!(daemon.await.unwrap(), 2);
+        assert_eq!(shown[1], View::Preparing);
+    }
+
+    /// A phone that scanned the code before it was renewed tried the old one at each address,
+    /// which closed it: a new code comes at once, saying why.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_code_closed_by_wrong_attempts_is_replaced_at_once() {
+        english();
+        let home = tempfile::tempdir().unwrap();
+        let profile = pasteget_desktop::config::Profile::open_in(home.path(), "pc").unwrap();
+        let failed = serde_json::to_string(&Response::PairingAttemptFailed {
+            reason: PairingError::WrongSecret.to_string(),
+        })
+        .unwrap();
+        let closed = serde_json::to_string(&Response::Error {
+            message: control::TOO_MANY_ATTEMPTS.into(),
+        })
+        .unwrap();
+        let paired = r#"{"paired":{"id":"PHONE","name":"POCO"}}"#.to_owned();
+        let daemon = fake_daemon(
+            &profile,
+            vec![
+                vec![invite(300), failed.clone(), failed, closed],
+                vec![invite(300), paired],
+            ],
+        );
+        let mut shown = Vec::new();
+
+        let started = Instant::now();
+        let paired = keep_pairing(
+            &Endpoint::for_profile(&profile),
+            &mut |view| shown.push(view),
+            &|| true,
+        )
+        .await;
+
+        assert!(paired);
+        assert_eq!(daemon.await.unwrap(), 2);
+        // No pause before the new code.
+        assert!(started.elapsed() < RESTART_PAUSE);
+        let View::Code { note: None, .. } = &shown[0] else {
+            panic!("{:?}", shown[0]);
+        };
+        assert!(matches!(&shown[1], View::AttemptFailed(text) if text.contains("scan this one")));
+        let View::Code {
+            note: Some(note), ..
+        } = &shown[3]
+        else {
+            panic!("{:?}", shown[3]);
+        };
+        assert!(note.contains("too many times"), "{note}");
+        assert_eq!(shown.len(), 5);
+    }
+
+    /// Closed: the code shown expires, and no other is asked for.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_closed_window_gets_no_new_code() {
+        english();
+        let home = tempfile::tempdir().unwrap();
+        let profile = pasteget_desktop::config::Profile::open_in(home.path(), "pc").unwrap();
+        let daemon = fake_daemon(&profile, vec![vec![invite(0)], vec![invite(300)]]);
+        let mut shown = Vec::new();
+
+        let paired = keep_pairing(
+            &Endpoint::for_profile(&profile),
+            &mut |view| shown.push(view),
+            &|| false,
+        )
+        .await;
+
+        assert!(!paired);
+        assert_eq!(shown.len(), 1);
+        daemon.abort();
     }
 }

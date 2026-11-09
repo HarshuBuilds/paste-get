@@ -126,6 +126,7 @@ pub fn open<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
     }
     WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("settings.html".into()))
         .title(tr("Settings · paste-get", "Réglages · paste-get"))
+        .initialization_script(crate::language_script())
         .inner_size(460.0, 780.0)
         .min_inner_size(380.0, 480.0)
         .center()

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>About paste-get</title>
+  <link rel="stylesheet" href="about.css">
+  <script src="i18n.js"></script>
+  <script src="copy.js"></script>
+  <script src="about.js" defer></script>
+</head>
+<body>
+  <main>
+    <h1>paste-get <span id="version"></span></h1>
+    <p data-i18n="aboutTagline">Copy on your phone, paste on your PC.</p>
+    <p data-i18n="aboutLicence">Free software under the GNU General Public License, version 3 or later (GPL-3.0-or-later). It comes with no warranty.</p>
+    <label for="source" data-i18n="aboutSource">Source code</label>
+    <div class="copy">
+      <input id="source" readonly spellcheck="false">
+      <button type="button" id="copy_source" data-i18n="copy">Copy</button>
+    </div>
+    <p class="hint" data-i18n="aboutOffline">paste-get never goes online by itself: paste the address in your browser.</p>
+    <div class="buttons">
+      <button type="button" id="close" data-i18n="close">Close</button>
+    </div>
+  </main>
+</body>
+</html>

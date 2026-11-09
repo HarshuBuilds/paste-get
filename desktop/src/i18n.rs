@@ -2,7 +2,9 @@
 
 //! The language of what the desktop shows people: menus, notifications, windows. French when the
 //! system is in French, English otherwise. Logs and the `pasteget` command stay in English: it
-//! forces English for every command but `pasteget daemon`.
+//! forces English for every command but two, whose words the desktop shows. `pasteget daemon`
+//! shows notifications, and a status bar shows the `tooltip` of `pasteget status --json`; the
+//! rest of that line (`text`, `alt`, `class` and the facts) is fixed words, for scripts.
 //!
 //! `PASTEGET_LANG=fr` or `=en` overrides the system language.
 

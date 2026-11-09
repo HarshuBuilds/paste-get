@@ -92,10 +92,17 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
 - [x] Autostart on Windows and Linux: the tray's *Start at login* (`Run` key, XDG autostart;
   `exec-once` on Hyprland, which ignores XDG autostart)
 - [x] Hotkeys: `RegisterHotKey` (Windows), GlobalShortcuts portal (KDE), `bind … exec pasteget …` (Hyprland).
-  Pause/resume and "send the clipboard now" (`pasteget send --clipboard`), set in `settings.toml`
+  Pause/resume and "send the clipboard now" (`pasteget send --clipboard`), set in `settings.toml`;
+  `pasteget hotkey <action>` (and the AppImage's `--action`) does the same with its notification
 - [x] Linux: when no tray can show the icon (GNOME without the AppIndicator extension, a bar
   without a tray), the tray says so once per start in a notification and in its log
   (`desktop/tray/src/linux_tray.rs`). GNOME stays tier 2 (`TESTING.md`, section 16)
+- [x] Linux: an error that stops the tray from starting is shown in a notification that stays
+  (Windows: a message box), not only in a terminal; a daemon that can't start (its port taken)
+  says so once in a notification too (`TESTING.md`, T33, T34)
+- [x] Hyprland: the tray's *Settings…* shows the `exec-once` and `bind` lines with the real
+  paths, ready to copy (the AppImage's own `--action` when there is no `pasteget` command);
+  `pasteget status --json` and a Waybar module in `TESTING.md` (section 9, B1–B2; H6–H7)
 - [ ] Verified on Windows 11, KDE Plasma 6 Wayland and Hyprland (`TESTING.md`, sections 9–11)
 
 ### M8 — Release 0.1
@@ -116,14 +123,22 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
     README section for when the phone doesn't find the PC (Wi-Fi, Windows and Linux firewalls)
   - [x] Release APK, signed in CI with a key kept in repository secrets (creating the key and
     the secrets is a one-time step for the maintainer, `RELEASING.md`)
+- [x] Version 0.1.0 everywhere: `Cargo.toml` for the PC and the phone's core, the APK's
+  `versionName` (and `versionCode` 100, major × 10000 + minor × 100 + patch), the metainfo and
+  `CHANGELOG.md`, checked by `packaging/check-version.sh` on every push; a release tag that
+  doesn't match fails first. The tray's *About paste-get 0.1.0* shows the version, the licence
+  and the source address, as text (`TESTING.md`, T29)
 - [x] `SECURITY.md` draft: threat model, known gaps, private reporting
 - [ ] README demo GIF: needs the real devices; how to record it is in `RELEASING.md`
 - [ ] Human review of crypto and protocol code: `docs/REVIEW.md` lists the files and the
-  31 properties to check
+  32 properties to check
 - [x] Pairing from the tray: a *Pair a phone* window with the QR code, opened by itself on the
-  first start, so no terminal is needed. Wrong secrets never close the code, so a device on the
-  network can't close it with junk requests (`TESTING.md`, P28). The window isn't protected
-  from screenshots yet
+  first start, so no terminal is needed. While the window is open, an expired code is replaced
+  by a new one by itself, with a countdown; the window says where to get the Android app (the
+  Releases page, as text to copy) and explains what went wrong in the user's language
+  (`TESTING.md`, T30–T32). Wrong secrets never close the code, so a device on the network
+  can't close it with junk requests (`TESTING.md`, P28). The window isn't protected from
+  screenshots yet
 - [x] PC side can revoke a paired phone: `pasteget forget <name>`, or the tray menu → the phone
   → *Forget this device*; its session ends at once. The phone is told (`Unpaired` in the
   session, or `Refusal`, `NOT_PAIRED`, when it next dials), forgets the PC too and shows "<PC>
@@ -161,7 +176,17 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
 - [x] *Settings…* window in the tray: this computer's name, notifications, links, hotkeys and
   starting at login, checked before saving. Notifications and links apply at once
   (`pasteget` control request `reload_settings`); a new name or hotkeys restart the daemon the
-  tray runs (`TESTING.md`, T15–T18)
+  tray runs (`TESTING.md`, T15–T18). The restart also works while a pairing code is shown or
+  was shown: stopping the control channel ends its requests, which no longer keep the old
+  daemon and its port
+- [x] Windows: a network marked *Public* (the firewall may then keep the phone out), or a
+  firewall rule that blocks paste-get (made when Windows' first question was cancelled), is
+  said once in a notification. *Settings…* always says how to make the network Private, with
+  two `netsh` lines that replace paste-get's rules by one that lets it in on private networks
+  only, to run as administrator; the per-user installer can't add it. Only adapters the phone
+  may use count (not those of VMs, WSL or VPNs), and not when the firewall is off there or a
+  rule already lets paste-get in (`desktop/src/firewall.rs`, fuzz target `firewall`;
+  `TESTING.md`, T35–T40)
 - [x] Windows notifications come from "paste-get" with its icon, not "Windows PowerShell": its
   AppUserModelID is registered for the user, and removed by the uninstaller
 - [x] Received clips never go to the Windows cloud clipboard (Microsoft account sync); they stay

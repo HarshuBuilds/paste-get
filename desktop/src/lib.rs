@@ -10,6 +10,7 @@ pub mod config;
 pub mod control;
 pub mod daemon;
 pub mod discovery;
+pub mod firewall;
 pub mod history;
 pub mod hotkeys;
 pub mod i18n;

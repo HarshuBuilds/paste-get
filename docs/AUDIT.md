@@ -2,6 +2,8 @@
 
 How every planned feature can be built, what's hard, and what isn't possible.
 Written before any code, October 2026. Claims marked *(verify)* still need testing on a real device.
+**Not built yet** marks what paste-get 0.1.0 doesn't do (checked against the code, November
+2026); [`ROADMAP.md`](ROADMAP.md) has what is done and what comes next.
 
 Legend: ✅ straightforward · 🟡 doable, with traps · 🔴 limited by Android or the OS
 
@@ -38,11 +40,12 @@ pairing. Only one is online at a time; the phone just sends to whichever answers
 
 ```
 ┌─────────── Android ────────────┐          ┌──────────── PC ─────────────┐
-│ Kotlin + Jetpack Compose UI    │          │ Tauri tray UI (later)       │
+│ Kotlin + Jetpack Compose UI    │          │ Tauri tray UI               │
 │ Foreground service             │          │ Rust daemon + CLI           │
 │  ├ Watchers: clipboard,        │   LAN    │  ├ Clipboard per OS         │
-│  │  screenshots, notifications │◄────────►│  ├ Hotkeys, native OCR      │
-│  ├ Shizuku service (as shell)  │ mTLS     │  ├ Local API                │
+│  │  screenshots, notifications │◄────────►│  ├ Hotkeys (OCR: not built) │
+│  ├ Shell helper (built-in      │ mTLS     │  ├ Control channel (local   │
+│  │  mode, or Shizuku)          │          │  │  API: not built)         │
 │  └ Rust core (UniFFI)          │          │  └ Rust core (same crate)   │
 └────────────────────────────────┘          └─────────────────────────────┘
       core = protocol + crypto + pairing + history + tests
@@ -52,7 +55,7 @@ pairing. Only one is online at a time; the phone just sends to whichever answers
 |---|---|---|---|
 | Shared core | **Rust**, used from Android through UniFFI | One implementation of protocol and crypto, testable and fuzzable. Delta Chat ships a Rust core on F-Droid | Two implementations (Kotlin + Rust): twice the protocol bugs |
 | Android | Kotlin + Compose + a Shizuku user service | System and hidden APIs are Java/Kotlin only | Flutter: everything important would still be native |
-| Desktop | **Headless Rust daemon + CLI first**, Tauri 2 tray UI on top | The daemon is testable without a UI; Tauri gives tray, global shortcuts, autostart, updater in ~10 MB | Electron: 150 MB for a tray app |
+| Desktop | **Headless Rust daemon + CLI first**, Tauri 2 tray UI on top | The daemon is testable without a UI; Tauri gives tray, global shortcuts, autostart, updater in ~10 MB. (paste-get has its own autostart and hotkeys, and no updater: it makes no network calls but to its devices) | Electron: 150 MB for a tray app |
 | Wire format | Protobuf (`prost`) | Clear, versioned spec; binary-friendly for images | JSON: bad for binary data |
 
 ## 2. Reading the Android clipboard in the background
@@ -92,7 +95,8 @@ a reboot, so when Shizuku is down the app drops to mode B instead of stopping, a
 - **Xiaomi/HyperOS:** Autostart permission, "No restrictions" battery mode, lock in recents.
   The app should detect and guide the user (see `devices/xiaomi-hyperos.md`).
 - **Network:**
-  - hold a `MulticastLock` for mDNS;
+  - mDNS: the app uses Android's `NsdManager` (`ComputerFinder.kt`), which needs no
+    `MulticastLock` of its own;
   - reconnect on network changes;
   - newer Android versions are adding a local network permission *(verify)*.
 
@@ -103,17 +107,18 @@ a reboot, so when Shizuku is down the app drops to mode B instead of stopping, a
 - **Android 14+ trap:** with "selected photos only" access, detection sees nothing. Request full
   access and explain why.
 - **Shizuku alternative:** watch the folder directly as shell, no photo permission needed.
+  **Not built yet.**
 - Android 14's screenshot callback only works for one's own activity, so it's useless here.
 
 ## 5. Desktop clipboard per OS
 
-| | Watch changes | Images | Mark as sensitive | Global hotkeys | Type text | Verdict |
+| | Watch changes | Images | Mark as sensitive | Global hotkeys | Type text (**not built yet**) | Verdict |
 |---|---|---|---|---|---|---|
-| **Windows** | `AddClipboardFormatListener` | PNG + DIB | Exclusion formats so Windows history and Cloud Clipboard skip it | ✅ `RegisterHotKey` | ✅ `SendInput` | ✅ |
+| **Windows** | `AddClipboardFormatListener` (built: a poll of `GetClipboardSequenceNumber`, as cheap) | PNG + DIB | Exclusion formats so Windows history and Cloud Clipboard skip it | ✅ `RegisterHotKey` | ✅ `SendInput` | ✅ |
 | **KDE Plasma 6 (Wayland)** | ✅ data-control | ✅ | `x-kde-passwordManagerHint` | GlobalShortcuts portal | 🟡 RemoteDesktop portal | ✅ |
 | **Hyprland** | ✅ wlr-data-control | ✅ | idem | Config `bind` → CLI | 🟡 portal / `wtype` | ✅ |
-| **X11** | ✅ (daemon owns the selection) | ✅ | idem | ✅ | ✅ | ✅ |
-| **macOS** | Poll `changeCount` | ✅ | `org.nspasteboard.ConcealedType` | ✅ | 🟡 Accessibility permission | ✅ |
+| **X11** | ✅ (daemon owns the selection; built: a poll that reads the clipboard) | ✅ | idem (**not built yet**: the mark isn't read on X11) | ✅ | ✅ | ✅ |
+| **macOS** (**not built yet**) | Poll `changeCount` | ✅ | `org.nspasteboard.ConcealedType` | ✅ | 🟡 Accessibility permission | ✅ |
 | **GNOME (Wayland)** | ❌ Mutter has no data-control ([source](https://docs.rs/lamco-data-control)) | ❌ | | 🟡 | 🟡 | 🔴 → extension |
 
 Library: `arboard` (with the `wayland-data-control` feature), wrapped behind our own trait so
@@ -122,13 +127,17 @@ OS-specific extras (sensitive markers, file lists, HTML) can be added per platfo
 ## 6. Network, pairing, security
 
 - **Discovery:** mDNS `_pasteget._tcp`.
-  - Windows 10+ has a native DNS-SD API, so no Bonjour needed.
-  - Manual IP as fallback, which also makes Tailscale work for free.
+  - Windows 10+ has a native DNS-SD API, so no Bonjour needed. (Built with the `mdns-sd` crate
+    instead, the same on every desktop.)
+  - Manual IP as fallback, which also makes Tailscale work for free. **Not built yet**: the
+    addresses come from the pairing code and mDNS.
 - **Transport:** TCP + TLS 1.3, mutual authentication, keys pinned at pairing (rustls).
   - Windows shows a firewall prompt on first run; Arch may need a port opened if a firewall is enabled.
 - **Pairing:** the PC shows a QR code (device id, key fingerprint, IPs, port, one-time secret); the
-  phone scans it. Fallback: 6-digit code with SPAKE2. Devices can be revoked from either side.
-- **Transfers:** the sender offers metadata first (hash, MIME types, size), then streams resumable chunks.
+  phone scans it. Fallback: 6-digit code with SPAKE2 (**not built yet**). Devices can be revoked
+  from either side.
+- **Transfers:** the sender offers metadata first (hash, MIME types, size), then streams chunks.
+  Resuming a cut transfer is **not built yet**: it starts over.
 - **No echo loops:** every clip carries its origin device and a random ID for that copy; a
   device takes each copy once and passes it on at most once, never a secret (`PROTOCOL.md`,
   section 6). Clips we just applied are ignored by the local watcher, by their content hash. On
@@ -136,7 +145,7 @@ OS-specific extras (sensitive markers, file lists, HTML) can be added per platfo
 - **History:** SQLite + FTS5 in the core, kept on each device (section 10). Version 1 relies on
   the OS's disk encryption; encrypting it with a key in the OS keystore (Android Keystore, Windows
   DPAPI, Secret Service on Linux, Keychain on macOS) comes later, with the identity key.
-- **Away from home:**
+- **Away from home** (**not built yet**):
   - user-hosted encrypted relay;
   - evaluate *iroh* for NAT traversal;
   - **USB via `adb reverse`**, since Shizuku users already have USB debugging enabled.
@@ -147,11 +156,16 @@ OS-specific extras (sensitive markers, file lists, HTML) can be added per platfo
 |---|---|
 | Attacker on the same Wi-Fi | Pinned keys, no unauthenticated endpoints |
 | Stolen phone | Revoke from the PC; the history is protected by Android's file-based encryption, not by paste-get (section 10) |
-| Other local app on the PC | Local API on a user-only socket/named pipe + token |
-| Passwords leaking through sync | Sensitive flag, app denylist, pattern detection, auto-expiry |
-| Supply chain | `cargo-deny`, pinned dependencies, signed releases, reproducible builds |
+| Other local app on the PC | Local API on a user-only socket/named pipe + token. Built: the control channel is user-only, with no token (another process of the same user can use it, as it can read the clipboard anyway) |
+| Passwords leaking through sync | Sensitive flag (built, with password managers' marks), app denylist (**not built yet**), pattern detection (built for the history: `detect::looks_secret`), auto-expiry (**not built yet**) |
+| Supply chain | `cargo-deny`, pinned dependencies (`Cargo.lock`), signed releases (the APK; Windows and Linux packages **not signed yet**), reproducible builds (**not built yet**) |
 
 ## 7. Feature by feature
+
+Built in 0.1.0: screenshots to the PC, text both ways, images to the phone, sensitive copies
+(the flag, and password managers' marks on the PC), 2FA codes, links (the share sheet, and the
+PC's notification that opens a link copied on the phone), the history store in the core (no app
+records into it yet), and the CLI. Every other row is **not built yet**.
 
 | Feature | How | Difficulty | Trap |
 |---|---|---|---|
@@ -186,10 +200,14 @@ OS-specific extras (sensitive markers, file lists, HTML) can be added per platfo
 ## 8. Distribution
 
 - **Android:** GitHub Releases + IzzyOnDroid + Obtainium first, then F-Droid (`foss` / `full` flavors).
-  Play Store is risky (`READ_LOGS`, Shizuku, foreground service justification): later.
-- **Windows:** unsigned builds trigger SmartScreen. SignPath offers free signing for open source.
-- **Linux:** AppImage, AUR package, .deb/.rpm. Avoid Flatpak at first (sandbox vs clipboard access).
+  Play Store is risky (`READ_LOGS`, Shizuku, foreground service justification): later. Built: the
+  signed APK on GitHub Releases; IzzyOnDroid and F-Droid are **not done yet**.
+- **Windows:** unsigned builds trigger SmartScreen. SignPath offers free signing for open source
+  (**not done yet**: the installer is unsigned).
+- **Linux:** AppImage, AUR package, .deb/.rpm (all built; the AUR packages aren't published
+  yet). Avoid Flatpak at first (sandbox vs clipboard access; `RELEASING.md` says why).
 - **macOS:** notarization needs a paid Apple developer account. Homebrew cask in the meantime.
+  **Not built yet.**
 
 ## 9. Main risks
 

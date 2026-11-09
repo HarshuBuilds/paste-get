@@ -1,7 +1,7 @@
 # Security policy
 
-> **Draft.** paste-get is pre-alpha and its crypto and protocol code has not been reviewed by
-> anyone but its authors yet (see [`docs/REVIEW.md`](docs/REVIEW.md)). Don't rely on it to
+> **Draft.** paste-get is in beta (0.1.0) and its crypto and protocol code has not been reviewed
+> by anyone but its authors yet (see [`docs/REVIEW.md`](docs/REVIEW.md)). Don't rely on it to
 > protect anything you couldn't afford to leak.
 
 paste-get sees everything you copy. This page says what it protects against, what it doesn't,
@@ -26,9 +26,11 @@ Supported versions: only the latest release, while paste-get is below 1.0.
 - **Pairing**: the PC shows a QR code with its device ID, its addresses and a one-time 128-bit
   secret. The phone connects pinning that device ID and sends the secret inside TLS. The secret
   works once, for 5 minutes. Wrong tries don't close the window, so someone on the network can't
-  keep closing it; guessing a 128-bit secret in 5 minutes is hopeless.
-- **No server, no account, no telemetry.** Clips go straight from one device to another on the
-  local network.
+  keep closing it; guessing a 128-bit secret in 5 minutes is hopeless. While the tray's pairing
+  window stays open, a new code (a new secret) replaces each one that expires.
+- **No server, no account, no telemetry, no update checks.** Clips go straight from one device
+  to another on the local network; paste-get makes no other network call. The tray's *About*
+  window and pairing window show web addresses as text to copy, never as links.
 
 The full protocol is in [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 
@@ -41,7 +43,8 @@ The full protocol is in [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 | Pairing with the wrong PC | The QR code carries the PC's device ID; TLS fails for any other key |
 | A device pairing without seeing your screen | It needs the one-time secret from the QR code |
 | A web page or message opening a pairing link (`pasteget://pair?…`) on the phone | The phone never pairs on its own: it shows the name and addresses the link gives (unchecked, without characters that could disguise them) and pairs only when you tap *Pair* under "Only continue if this code is on your computer's screen right now". Another link arriving while that question is shown is ignored, so it can't take the place of the code you are reading. Even then it connects only to addresses on the local network: never to a server on the Internet, nor to another app on the phone itself (at none of the phone's own addresses: loopback, Wi-Fi, hotspot) |
-| Another user of the same computer | The local control channel is a socket in a directory only you can open (Linux), or a named pipe that rejects remote clients and includes your user name (Windows) |
+| Another user of the same computer | The local control channel is a socket in a directory only you can open (Linux), or a named pipe that rejects remote clients and includes your user name (Windows). `pasteget`, `pasteget status --json` and the tray's `--action` all go through it |
+| Devices on a café or hotel Wi-Fi reaching paste-get (Windows) | Windows' firewall blocks paste-get on networks marked *Public*. paste-get says when one is, and the lines its Settings window suggests replace paste-get's rules by one that allows *private* networks only |
 | Passwords ending up in logs | Logs contain sizes, MIME types and hashes only, never clipboard contents |
 | Passwords lingering | A copy that a password manager marks as secret is sent marked sensitive. On the PC that is `x-kde-passwordManagerHint` on Wayland (KeePassXC, KDE apps) and the formats KeePass, KeePassXC, Bitwarden and 1Password set on Windows; on the phone, Android's `IS_SENSITIVE` flag. When the PC can't check a copy for the mark (another app holds the clipboard, or the copy changed meanwhile), it checks again and, failing that, sends it as sensitive. Sensitive clips, whether the phone sends them by itself or by hand (tile, notification, shortcut), stay out of the tray's *Recent* list and never wait for a device that is away. Where they arrive, they skip Windows' clipboard history and Klipper on the PC, and are flagged sensitive on the phone's clipboard, which hides Android's preview |
 | 2FA codes leaking | Opt-in. The phone reads notifications on the phone only; just the code's digits go to paired computers, as a secret (out of history and *Recent*). The PC's notification names the app, never the code. Neither the code nor the message is logged |
@@ -103,7 +106,8 @@ The history store is in the core (`core/src/history`). The phone API can record 
 ## What it doesn't protect against (yet)
 
 - **A photographed QR code.** Someone who sees the code can pair within the 5 minutes, before
-  you do. Pair where nobody can see the screen.
+  you do. Pair where nobody can see the screen. The pairing window closes by itself once a
+  device paired; otherwise, close it: while it is open, it shows a new code every 5 minutes.
 - **A stolen or lost phone, until you unpair it.** It stays paired and keeps receiving what you
   copy whenever it is on the same network. Unpair it from the PC as soon as you can (above).
 - **A compromised paired device.** Paired devices are trusted with your clipboard: anything you

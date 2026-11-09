@@ -283,7 +283,7 @@ impl Daemon {
         let hotkeys = if options.hotkeys {
             let (pressed, presses) = mpsc::channel(4);
             shared.spawn(hotkey_loop(Arc::clone(&shared), presses));
-            hotkeys::start(&settings.hotkeys.bindings(), pressed)
+            hotkeys::start(&settings.hotkeys.bindings(), shared.profile.name(), pressed)
         } else {
             None
         };
@@ -1064,7 +1064,7 @@ fn likelihood_rank(address: &LocalAddress) -> u8 {
 /// Interfaces of virtual machines, containers and VPNs, by the names they get on Linux
 /// (`docker0`, `virbr0`, `wg0`…) and on Windows (`vEthernet (WSL)`, `VMware Network Adapter
 /// VMnet8`…).
-fn looks_virtual(interface: &str) -> bool {
+pub(crate) fn looks_virtual(interface: &str) -> bool {
     const PREFIXES: &[&str] = &[
         "docker",
         "br-",

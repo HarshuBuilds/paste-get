@@ -1353,7 +1353,7 @@ dependencies = [
 
 [[package]]
 name = "pasteget-core"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "bytes",
  "data-encoding",
@@ -1378,12 +1378,13 @@ dependencies = [
 
 [[package]]
 name = "pasteget-desktop"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anstream",
  "anyhow",
  "arboard",
  "clap",
+ "clipboard-win",
  "data-encoding",
  "dirs",
  "futures-util",
@@ -1403,12 +1404,13 @@ dependencies = [
  "tracing-subscriber",
  "windows-registry",
  "windows-sys 0.61.2",
+ "wl-clipboard-rs",
  "zbus",
 ]
 
 [[package]]
 name = "pasteget-ffi"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "boring-sys",
  "if-addrs",

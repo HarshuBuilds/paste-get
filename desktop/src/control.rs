@@ -22,15 +22,16 @@ use pasteget_core::clip::mime;
 use pasteget_core::detect::Category;
 use pasteget_core::history::{Cursor, Format, Item, ItemId, MAX_PAGE_SIZE, PAGE_SIZE, Query};
 use pasteget_core::identity::DeviceId;
-use pasteget_core::pairing::{PAIRING_TTL, PairingInvite};
+use pasteget_core::pairing::{PAIRING_TTL, PairingError, PairingInvite};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::broadcast;
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 
 use crate::clipboard::Content;
 use crate::config::Profile;
 use crate::daemon::{Daemon, DeviceStatus, Event};
+use crate::hotkeys::Action;
 use crate::recent;
 
 /// Longest request line accepted: a 64 MiB clip, base64-encoded, plus some room.
@@ -40,6 +41,14 @@ const MAX_REQUEST_LEN: u64 = 96 * 1024 * 1024;
 /// needs to know what a daemon understands. 1: the first to say it, and to know
 /// [`Request::Quit`]. 2: the history requests ([`Request::History`] and the ones after it).
 pub const CONTROL_VERSION: u32 = 2;
+
+/// How a [`Request::Pair`] ends when wrong attempts closed its code. The tray then shows a new
+/// one at once.
+pub const TOO_MANY_ATTEMPTS: &str = "too many wrong attempts: the pairing code was closed";
+
+/// After a wrong attempt closed the code, how long to wait in case a device got it right just
+/// before: it is said paired once its answer is out.
+const CLOSED_GRACE: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
@@ -111,6 +120,12 @@ pub enum Request {
         pinned_too: bool,
     },
     HistoryStats,
+    /// Does what a hotkey does, with its notification ("Syncing paused", "Clipboard sent to 1
+    /// device"): `action` is an [`Action::id`]. For desktops that bind keys to commands
+    /// (Hyprland). Older daemons answer it with "bad request".
+    Perform {
+        action: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -157,6 +172,8 @@ pub enum Response {
         items: usize,
     },
     HistoryStats(HistoryStatsReply),
+    /// Answer to [`Request::Perform`], once its notification is on its way.
+    Performed,
     Error {
         message: String,
     },
@@ -388,7 +405,9 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     })
 }
 
-/// Serves control requests for `daemon` until the returned handle is aborted.
+/// Serves control requests for `daemon` until the returned handle is aborted. Aborting it also
+/// ends the requests under way (a pairing waits minutes for a phone), so they let go of the
+/// daemon: a new one can then take its port and control channel (the tray's restart).
 pub async fn serve(daemon: Arc<Daemon>, endpoint: &Endpoint) -> Result<JoinHandle<()>> {
     #[cfg(unix)]
     {
@@ -406,10 +425,13 @@ pub async fn serve(daemon: Arc<Daemon>, endpoint: &Endpoint) -> Result<JoinHandl
         let listener = UnixListener::bind(&endpoint.path)
             .with_context(|| format!("could not listen on {}", endpoint.path.display()))?;
         Ok(tokio::spawn(async move {
+            // Dropped with this task, which aborts them.
+            let mut requests = JoinSet::new();
             loop {
                 match listener.accept().await {
                     Ok((stream, _)) => {
-                        tokio::spawn(handle(Arc::clone(&daemon), stream));
+                        while requests.try_join_next().is_some() {}
+                        requests.spawn(handle(Arc::clone(&daemon), stream));
                     }
                     Err(e) => tracing::warn!(error = %e, "control socket error"),
                 }
@@ -427,6 +449,9 @@ pub async fn serve(daemon: Arc<Daemon>, endpoint: &Endpoint) -> Result<JoinHandl
             .create(&name)
             .context("could not create the control pipe: is a daemon already running?")?;
         Ok(tokio::spawn(async move {
+            // Dropped with this task, which aborts them and closes their pipe instances: the
+            // next daemon's `first_pipe_instance` needs every one closed.
+            let mut requests = JoinSet::new();
             loop {
                 if let Err(e) = server.connect().await {
                     tracing::warn!(error = %e, "control pipe error");
@@ -443,7 +468,8 @@ pub async fn serve(daemon: Arc<Daemon>, endpoint: &Endpoint) -> Result<JoinHandl
                     }
                 };
                 let connected = std::mem::replace(&mut server, next);
-                tokio::spawn(handle(Arc::clone(&daemon), connected));
+                while requests.try_join_next().is_some() {}
+                requests.spawn(handle(Arc::clone(&daemon), connected));
             }
         }))
     }
@@ -530,6 +556,13 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(daemon: Arc<Daemon>, stream: 
                                 });
                             }
                             Ok(Event::PairingFailed(reason)) => {
+                                // The third wrong try closes the code: scanning it again would
+                                // be refused, so this request ends.
+                                if reason == PairingError::WrongSecret.to_string()
+                                    && !daemon.status().await.pairing_open
+                                {
+                                    return closed_after_wrong_attempts(&mut events).await;
+                                }
                                 let response = Response::PairingAttemptFailed { reason };
                                 let _ = write_half.write_all(line_of(response).as_bytes()).await;
                             }
@@ -697,6 +730,15 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(daemon: Arc<Daemon>, stream: 
                 });
                 write_half.write_all(line_of(response).as_bytes()).await?;
             }
+            Request::Perform { action } => {
+                let action = Action::from_id(&action).with_context(|| {
+                    format!("unknown action {action:?}: toggle-pause or send-clipboard")
+                })?;
+                daemon.perform(action).await;
+                write_half
+                    .write_all(line_of(Response::Performed).as_bytes())
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -712,6 +754,30 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(daemon: Arc<Daemon>, stream: 
     // Once the answer is out: the process may end right after.
     if quit {
         daemon.request_quit();
+    }
+}
+
+/// A wrong attempt found the code closed: by too many wrong tries, unless a device got it right
+/// meanwhile and is about to be said paired.
+async fn closed_after_wrong_attempts(events: &mut broadcast::Receiver<Event>) -> Response {
+    let paired = tokio::time::timeout(CLOSED_GRACE, async {
+        loop {
+            match events.recv().await {
+                Ok(Event::Paired(device)) => return Some(device),
+                Ok(Event::PairingFailed(_)) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    })
+    .await;
+    match paired {
+        Ok(Some(device)) => Response::Paired(DeviceReply {
+            id: device.id.to_string(),
+            name: device.name,
+        }),
+        _ => Response::Error {
+            message: TOO_MANY_ATTEMPTS.into(),
+        },
     }
 }
 
@@ -932,6 +998,74 @@ mod tests {
         assert!(matches!(&again[..], [Response::Error { .. }]));
     }
 
+    /// A phone that scanned a code just before it was renewed sends the old secret, once per
+    /// address. Wrong tries never close the code: each one is reported, the request goes on,
+    /// and the phone pairs once it scans the code shown.
+    #[tokio::test]
+    async fn wrong_attempts_with_an_old_code_leave_the_new_one_working() {
+        use pasteget_core::pairing::{self, PairingWindow};
+        use std::time::Instant;
+
+        let pc = run("pc").await;
+        let endpoint = pc.endpoint.clone();
+        let (tx, mut responses) = tokio::sync::mpsc::unbounded_channel();
+        let pairing = tokio::spawn(async move {
+            call(&endpoint, &Request::Pair, |response| {
+                let _ = tx.send(response);
+            })
+            .await
+        });
+        async fn next(
+            responses: &mut tokio::sync::mpsc::UnboundedReceiver<Response>,
+        ) -> Option<Response> {
+            tokio::time::timeout(Duration::from_secs(10), responses.recv())
+                .await
+                .expect("the daemon said nothing")
+        }
+        let Some(Response::Invite { uri, .. }) = next(&mut responses).await else {
+            panic!("expected a pairing code");
+        };
+        let invite: PairingInvite = uri.parse().unwrap();
+        let mut old = PairingWindow::open(Instant::now()).unwrap().invite(
+            &Identity::generate().unwrap(),
+            "pc",
+            invite.addresses.clone(),
+        );
+        old.device_id = invite.device_id;
+        let phone = Identity::generate().unwrap();
+        let dial = || tokio::net::TcpStream::connect(pc.daemon.local_addr());
+
+        for _ in 0..3 {
+            let socket = dial().await.unwrap();
+            assert!(
+                pairing::pair_with(socket, &phone, &old, "phone")
+                    .await
+                    .is_err()
+            );
+            let failed = next(&mut responses).await;
+            assert!(
+                matches!(failed, Some(Response::PairingAttemptFailed { .. })),
+                "{failed:?}"
+            );
+        }
+        assert!(pc.daemon.status().await.pairing_open);
+
+        let socket = dial().await.unwrap();
+        pairing::pair_with(socket, &phone, &invite, "phone")
+            .await
+            .unwrap();
+        let paired = next(&mut responses).await;
+        assert!(
+            matches!(&paired, Some(Response::Paired(device)) if device.name == "phone"),
+            "{paired:?}"
+        );
+        tokio::time::timeout(Duration::from_secs(10), pairing)
+            .await
+            .expect("the request goes on once paired")
+            .unwrap()
+            .unwrap();
+    }
+
     #[test]
     fn devices_are_found_by_id_or_unique_name() {
         let device = |name: &str| DeviceStatus {
@@ -1012,6 +1146,62 @@ mod tests {
         assert!(matches!(&gone[..], [Response::Error { .. }]));
     }
 
+    /// Records the notices a daemon shows.
+    #[derive(Debug, Default)]
+    struct Notices(std::sync::Mutex<Vec<String>>);
+
+    impl crate::notify::Notifier for Notices {
+        fn received(&self, _received: crate::notify::Received) {}
+
+        fn notice(&self, summary: String) {
+            self.0.lock().unwrap().push(summary);
+        }
+    }
+
+    /// Hyprland's key bindings run `pasteget hotkey …`: the same as a hotkey, notification
+    /// included.
+    #[tokio::test]
+    async fn perform_does_what_a_hotkey_does_and_says_so() {
+        let home = tempfile::tempdir().unwrap();
+        let profile = Profile::open_in(home.path(), "pc").unwrap();
+        let notices = Arc::new(Notices::default());
+        let options = DaemonOptions {
+            listen: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            advertised_ips: Some(vec![IpAddr::V4(Ipv4Addr::LOCALHOST)]),
+            poll_interval: Duration::from_millis(10),
+            announce: false,
+            notifier: Some(Arc::clone(&notices) as Arc<dyn crate::notify::Notifier>),
+            hotkeys: false,
+        };
+        let daemon = Arc::new(
+            Daemon::start(profile.clone(), MemoryClipboard::default(), options)
+                .await
+                .unwrap(),
+        );
+        let endpoint = Endpoint::for_profile(&profile);
+        let _server = serve(Arc::clone(&daemon), &endpoint).await.unwrap();
+        let perform = |action: &str| Request::Perform {
+            action: action.into(),
+        };
+
+        let paused = ask(&endpoint, perform("toggle-pause")).await;
+        assert!(matches!(&paused[..], [Response::Performed]));
+        assert!(daemon.is_paused());
+        let sent = ask(&endpoint, perform("send-clipboard")).await;
+        assert!(matches!(&sent[..], [Response::Performed]));
+        let unknown = ask(&endpoint, perform("nonsense")).await;
+        assert!(
+            matches!(&unknown[..], [Response::Error { message }] if message.contains("toggle-pause or send-clipboard"))
+        );
+
+        assert_eq!(
+            *notices.0.lock().unwrap(),
+            ["Syncing paused", "Nothing to send"]
+        );
+        let request = serde_json::to_string(&perform("toggle-pause")).unwrap();
+        assert_eq!(request, r#"{"cmd":"perform","action":"toggle-pause"}"#);
+    }
+
     #[tokio::test]
     async fn status_says_the_version_and_quit_stops_the_daemon() {
         let pc = run("pc").await;
@@ -1035,6 +1225,68 @@ mod tests {
             .await
             .expect("the daemon was not asked to quit")
             .unwrap();
+    }
+
+    /// What the tray does to restart its daemon after a new name or hotkeys: stop serving, let
+    /// the daemon go, and start another on the same port. A pairing request still under way
+    /// (the pairing window, even closed, waits minutes for a phone) must not keep the old daemon,
+    /// its port and its control channel alive.
+    #[tokio::test]
+    async fn a_daemon_stopped_while_a_request_waits_lets_a_new_one_start() {
+        let home = tempfile::tempdir().unwrap();
+        let profile = Profile::open_in(home.path(), "pc").unwrap();
+        let options = |port| DaemonOptions {
+            listen: SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
+            advertised_ips: Some(vec![IpAddr::V4(Ipv4Addr::LOCALHOST)]),
+            poll_interval: Duration::from_millis(10),
+            announce: false,
+            notifier: None,
+            hotkeys: false,
+        };
+        let daemon = Arc::new(
+            Daemon::start(profile.clone(), MemoryClipboard::default(), options(0))
+                .await
+                .unwrap(),
+        );
+        let port = daemon.local_addr().port();
+        let endpoint = Endpoint::for_profile(&profile);
+        let server = serve(Arc::clone(&daemon), &endpoint).await.unwrap();
+        let (shown_tx, shown) = tokio::sync::oneshot::channel();
+        let waiting = endpoint.clone();
+        let pairing = tokio::spawn(async move {
+            let mut shown_tx = Some(shown_tx);
+            let _ = call(&waiting, &Request::Pair, |_| {
+                if let Some(tx) = shown_tx.take() {
+                    let _ = tx.send(());
+                }
+            })
+            .await;
+        });
+        shown.await.unwrap();
+
+        // As the tray's restart does it.
+        server.abort();
+        cleanup(&endpoint);
+        drop(daemon);
+        let mut started = Err(anyhow!("not tried"));
+        for _ in 0..10 {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            started =
+                Daemon::start(profile.clone(), MemoryClipboard::default(), options(port)).await;
+            if started.is_ok() {
+                break;
+            }
+        }
+        let restarted = Arc::new(started.expect("the old daemon still holds its port"));
+        let _server = serve(restarted, &endpoint).await.unwrap();
+
+        // The request ended with the old daemon, rather than wait for a phone it can't take.
+        tokio::time::timeout(Duration::from_secs(5), pairing)
+            .await
+            .expect("the pairing request still waits on the old daemon")
+            .unwrap();
+        let status = ask(&endpoint, Request::Status).await;
+        assert!(matches!(&status[..], [Response::Status(_)]));
     }
 
     #[test]
@@ -1088,6 +1340,100 @@ mod tests {
             serde_json::from_str::<Response>(&answer).unwrap(),
             Response::Quitting
         ));
+    }
+
+    /// The history's requests and answers, and `perform`, as clients send and read them: each
+    /// reads back as it was written.
+    #[test]
+    fn history_and_perform_messages_round_trip() {
+        let requests = [
+            (
+                Request::History {
+                    query: "site:github.com".into(),
+                    after: Some(HistoryCursorReply {
+                        last_at_ms: 5,
+                        id: 7,
+                    }),
+                    limit: Some(20),
+                    utc_offset_minutes: 60,
+                },
+                r#"{"cmd":"history","query":"site:github.com","after":{"last_at_ms":5,"id":7},"limit":20,"utc_offset_minutes":60}"#,
+            ),
+            (
+                Request::HistoryCopy { id: 7 },
+                r#"{"cmd":"history_copy","id":7}"#,
+            ),
+            (
+                Request::HistoryPin {
+                    id: 7,
+                    pinned: true,
+                },
+                r#"{"cmd":"history_pin","id":7,"pinned":true}"#,
+            ),
+            (
+                Request::HistoryDelete { ids: vec![7, 8] },
+                r#"{"cmd":"history_delete","ids":[7,8]}"#,
+            ),
+            (
+                Request::HistoryClear {
+                    since_ms: Some(1000),
+                    pinned_too: true,
+                },
+                r#"{"cmd":"history_clear","since_ms":1000,"pinned_too":true}"#,
+            ),
+            (Request::HistoryStats, r#"{"cmd":"history_stats"}"#),
+            (
+                Request::Perform {
+                    action: "send-clipboard".into(),
+                },
+                r#"{"cmd":"perform","action":"send-clipboard"}"#,
+            ),
+        ];
+        for (request, json) in requests {
+            assert_eq!(serde_json::to_string(&request).unwrap(), json);
+            let read: Request = serde_json::from_str(json).unwrap();
+            assert_eq!(serde_json::to_string(&read).unwrap(), json);
+        }
+
+        let answers = [
+            (
+                Response::HistoryPage {
+                    items: Vec::new(),
+                    next: Some(HistoryCursorReply {
+                        last_at_ms: 5,
+                        id: 7,
+                    }),
+                },
+                r#"{"history_page":{"items":[],"next":{"last_at_ms":5,"id":7}}}"#,
+            ),
+            (
+                Response::HistoryPinned {
+                    id: 7,
+                    pinned: false,
+                },
+                r#"{"history_pinned":{"id":7,"pinned":false}}"#,
+            ),
+            (
+                Response::HistoryDeleted { items: 2 },
+                r#"{"history_deleted":{"items":2}}"#,
+            ),
+            (
+                Response::HistoryStats(HistoryStatsReply {
+                    items: 3,
+                    pinned: 1,
+                    images: 1,
+                    bytes: 4096,
+                    kept_out_this_week: 2,
+                }),
+                r#"{"history_stats":{"items":3,"pinned":1,"images":1,"bytes":4096,"kept_out_this_week":2}}"#,
+            ),
+            (Response::Performed, r#""performed""#),
+        ];
+        for (answer, json) in answers {
+            assert_eq!(serde_json::to_string(&answer).unwrap(), json);
+            let read: Response = serde_json::from_str(json).unwrap();
+            assert_eq!(serde_json::to_string(&read).unwrap(), json);
+        }
     }
 
     /// A device the history knows by its ID only comes with an empty name, whatever the

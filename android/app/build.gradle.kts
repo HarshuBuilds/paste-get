@@ -21,8 +21,11 @@ android {
         applicationId = "io.github.nexoryx.pasteget"
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.0.0"
+        // The same version as Cargo.toml. versionCode is major × 10000 + minor × 100 + patch,
+        // so 0.1.0 is 100 and 1.2.3 is 10203: always higher for a newer version.
+        // packaging/check-version.sh checks both.
+        versionCode = 100
+        versionName = "0.1.0"
 
         // The ABIs the Rust core is built for (see cargoNdkBuild). Other ABIs would install, then
         // crash when loading it.

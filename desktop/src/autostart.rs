@@ -6,7 +6,8 @@
 //!   the same list as Task Manager's "Startup apps".
 //! - Linux: a desktop entry in `$XDG_CONFIG_HOME/autostart` (`~/.config/autostart`), which KDE
 //!   Plasma, GNOME and most desktops start. Hyprland doesn't read it: use `exec-once` in
-//!   `hyprland.conf` instead (see `docs/TESTING.md`, section 10).
+//!   `hyprland.conf` instead, which the tray's Settings window shows
+//!   ([`crate::hotkeys::hyprland_lines`]; `docs/TESTING.md`, section 10).
 //!
 //! Each profile has its own entry, so `--profile phone` test setups don't replace the real one.
 

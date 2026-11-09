@@ -14,6 +14,22 @@ pub fn warn_if_no_tray() {
     tauri::async_runtime::spawn(linux::warn_if_no_tray());
 }
 
+/// Shows an error that stops paste-get in a notification that stays until dismissed, since a
+/// program started from the menu or at login has no terminal to print to. Returns once the
+/// notification is handed over; `false` without a notification service.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub fn show_error(summary: &str, body: &str) -> bool {
+    tauri::async_runtime::block_on(async {
+        let result = match zbus::Connection::session().await {
+            Ok(connection) => linux::notify(&connection, summary, body, true).await,
+            Err(e) => Err(e),
+        };
+        result
+            .inspect_err(|e| tracing::warn!(error = %e, "could not show the error"))
+            .is_ok()
+    })
+}
+
 #[cfg(all(unix, not(target_os = "macos")))]
 mod linux {
     use std::collections::HashMap;
@@ -49,7 +65,7 @@ mod linux {
         if !should_notify(wayland, &desktop) {
             return;
         }
-        if let Err(e) = notify(&connection, body(is_gnome(&desktop))).await {
+        if let Err(e) = notify(&connection, summary(), body(is_gnome(&desktop)), false).await {
             tracing::warn!(error = %e, "could not show the notification about the tray");
         }
     }
@@ -143,8 +159,21 @@ mod linux {
     }
 
     /// Not transient, unlike the other notices: it stays in the notification list to be read.
-    async fn notify(connection: &Connection, body: &str) -> zbus::Result<()> {
-        let hints: HashMap<&str, Variant<'_>> = HashMap::new();
+    /// An `urgent` one (an error) also stays on screen until dismissed. The body is escaped:
+    /// servers may read it as markup.
+    pub(super) async fn notify(
+        connection: &Connection,
+        summary: &str,
+        body: &str,
+        urgent: bool,
+    ) -> zbus::Result<()> {
+        let mut hints: HashMap<&str, Variant<'_>> = HashMap::new();
+        // Never expires: 0. The server's default: -1.
+        let mut timeout = -1i32;
+        if urgent {
+            hints.insert("urgency", Variant::from(2u8));
+            timeout = 0;
+        }
         connection
             .call_method(
                 Some("org.freedesktop.Notifications"),
@@ -155,15 +184,22 @@ mod linux {
                     "paste-get",
                     0u32,
                     "edit-paste",
-                    summary(),
-                    body,
+                    summary,
+                    escape_markup(body),
                     Vec::<&str>::new(),
                     hints,
-                    -1i32,
+                    timeout,
                 ),
             )
             .await?;
         Ok(())
+    }
+
+    /// `text` as plain text in a body that may be read as markup.
+    pub(super) fn escape_markup(text: &str) -> String {
+        text.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
     }
 }
 
@@ -179,7 +215,9 @@ mod tests {
     use zbus::message::Type;
     use zbus::{Connection, MessageStream, Variant};
 
-    use super::linux::{body, host_registered, is_gnome, should_notify, wait_for_host};
+    use super::linux::{
+        body, escape_markup, host_registered, is_gnome, notify, should_notify, wait_for_host,
+    };
 
     /// A session bus of its own, so the tests never see the real tray.
     struct Bus {
@@ -244,6 +282,85 @@ mod tests {
                 };
             }
         });
+    }
+
+    /// A notification server that sends what each `Notify` call shows (summary, body, urgency,
+    /// timeout) on the returned channel.
+    async fn fake_notifications(
+        address: &str,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<(String, String, Option<u8>, i32)> {
+        use std::collections::HashMap;
+        use zbus::OwnedVariant;
+
+        let connection = connect(address).await;
+        connection
+            .request_name("org.freedesktop.Notifications")
+            .await
+            .unwrap();
+        let (shown_tx, shown) = tokio::sync::mpsc::unbounded_channel();
+        let mut calls = MessageStream::from(&connection);
+        tauri::async_runtime::spawn(async move {
+            while let Some(Ok(call)) = calls.next().await {
+                let header = call.header();
+                if call.message_type() != Type::MethodCall
+                    || header.member().map(|m| m.as_str()) != Some("Notify")
+                {
+                    continue;
+                }
+                type Notify = (
+                    String,
+                    u32,
+                    String,
+                    String,
+                    String,
+                    Vec<String>,
+                    HashMap<String, OwnedVariant>,
+                    i32,
+                );
+                let (_, _, _, summary, body, _, hints, timeout): Notify =
+                    call.body().deserialize().unwrap();
+                let urgency = hints
+                    .get("urgency")
+                    .and_then(|v| u8::try_from(v.clone()).ok());
+                let _ = shown_tx.send((summary, body, urgency, timeout));
+                let _ = connection.reply(&header, &1u32).await;
+            }
+        });
+        shown
+    }
+
+    #[test]
+    fn errors_stay_on_screen_as_plain_text() {
+        with_bus(async |address| {
+            let mut shown = fake_notifications(address).await;
+            let app = connect(address).await;
+
+            notify(
+                &app,
+                "paste-get could not start",
+                "no <b>bus</b> & co",
+                true,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                shown.recv().await.unwrap(),
+                (
+                    "paste-get could not start".to_owned(),
+                    "no &lt;b&gt;bus&lt;/b&gt; &amp; co".to_owned(),
+                    Some(2),
+                    0
+                )
+            );
+
+            // The tray notice isn't urgent, and goes away as the server decides.
+            notify(&app, "summary", "body", false).await.unwrap();
+            assert_eq!(
+                shown.recv().await.unwrap(),
+                ("summary".to_owned(), "body".to_owned(), None, -1)
+            );
+        });
+        assert_eq!(escape_markup("a<b>&c"), "a&lt;b&gt;&amp;c");
     }
 
     fn with_bus(test: impl AsyncFnOnce(&str)) {

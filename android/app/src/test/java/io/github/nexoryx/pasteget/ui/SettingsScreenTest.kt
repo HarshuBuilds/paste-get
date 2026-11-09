@@ -79,7 +79,9 @@ class SettingsScreenTest {
         var opened = 0
         show(SettingsState(), onOpenLicences = { opened++ })
 
-        compose.onNodeWithText(app.getString(R.string.about_version, "0.0.0")).performScrollTo().assertIsDisplayed()
+        // The versionName of build.gradle.kts, whatever it is now.
+        val version = app.packageManager.getPackageInfo(app.packageName, 0).versionName.orEmpty()
+        compose.onNodeWithText(app.getString(R.string.about_version, version)).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(app.getString(R.string.licences_title)).performScrollTo().performClick()
         assertEquals(1, opened)
     }

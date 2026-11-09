@@ -65,3 +65,10 @@ path = "fuzz_targets/history_query.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "firewall"
+path = "fuzz_targets/firewall.rs"
+test = false
+doc = false
+bench = false
