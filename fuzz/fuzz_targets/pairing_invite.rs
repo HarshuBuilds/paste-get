@@ -18,8 +18,9 @@ fuzz_target!(|data: &[u8]| {
         assert_eq!(reparsed.device_id, invite.device_id);
         assert_eq!(reparsed.addresses, invite.addresses);
 
-        // A phone dials an address only on the local network, never one of its own; a computer
-        // may also dial its own loopback.
+        // A phone dials an address only on the local network, never loopback (its other own
+        // addresses are caught once connected, in `pair_with_any_address`); a computer may also
+        // dial its own loopback.
         for address in &invite.addresses {
             let ip = address.ip().to_canonical();
             if Dial::OtherDevicesOnly.allows(*address) {
