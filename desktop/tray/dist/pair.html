@@ -6,17 +6,26 @@
   <title>Pair a phone · paste-get</title>
   <link rel="stylesheet" href="pair.css">
   <script src="i18n.js"></script>
+  <script src="copy.js"></script>
   <script src="pair.js" defer></script>
 </head>
 <body>
   <main>
     <h1 data-i18n="pairTitle">Pair a phone</h1>
     <ol>
-      <li data-i18n="pairStep1">On your phone, open paste-get and tap Pair a computer.</li>
+      <li data-i18n="pairStep1">On your phone, open paste-get and tap Scan the code (or Devices → Pair a computer).</li>
       <li data-i18n="pairStep2">Scan this code.</li>
     </ol>
-    <div id="code" class="code waiting" aria-label="Pairing QR code" data-i18n="pairPreparing">Preparing the code…</div>
-    <p id="status" class="status" data-i18n="pairOnce">The code works once, for a few minutes.</p>
+    <div id="code" class="code waiting" aria-label="Pairing QR code" data-i18n-label="pairCodeLabel" data-i18n="pairPreparing">Preparing the code…</div>
+    <p id="status" class="status" role="status" data-i18n="pairOnce">The code works once. Keep it to yourself: whoever scans it first is paired.</p>
+    <p id="renews" class="renews"></p>
+    <section class="app">
+      <p data-i18n="pairGetApp">No paste-get on your phone yet? Download the file ending in _foss.apk from this page, on the phone:</p>
+      <div class="copy">
+        <input id="releases" readonly spellcheck="false" aria-label="Download page" data-i18n-label="pairDownloadLabel">
+        <button type="button" id="copy_releases" data-i18n="copy">Copy</button>
+      </div>
+    </section>
   </main>
 </body>
 </html>

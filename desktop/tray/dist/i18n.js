@@ -1,17 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // French for the tray's windows when the system is in French. Elements with data-i18n="key"
-// get the French text of that key; English stays in the HTML.
+// get the French text of that key (data-i18n-placeholder and data-i18n-label: their placeholder
+// and aria-label); English stays in the HTML and the scripts. desktop/tray/src/i18n_check.rs
+// checks that every key used has its French, and every French text is used.
 "use strict";
 
-window.pastegetFrench = (navigator.language || "").toLowerCase().startsWith("fr");
+// The tray says which language it speaks (main.rs, language_script); a page opened elsewhere
+// follows the browser.
+window.pastegetFrench = window.pastegetLang
+  ? window.pastegetLang === "fr"
+  : (navigator.language || "").toLowerCase().startsWith("fr");
 
 window.pastegetFr = {
-  // pair.html
+  // pair.html, pair.js
   pairTitle: "Appairer un téléphone",
-  pairStep1: "Sur ton téléphone, ouvre paste-get et appuie sur Appairer un ordinateur.",
+  pairStep1: "Sur ton téléphone, ouvre paste-get et touche Scanner le code (ou Appareils → Appairer un ordinateur).",
   pairStep2: "Scanne ce code.",
+  pairCodeLabel: "Code QR d'appairage",
   pairPreparing: "Préparation du code…",
-  pairOnce: "Le code ne sert qu'une fois, pendant quelques minutes.",
+  pairOnce: "Le code ne sert qu'une fois. Garde-le pour toi : le premier qui le scanne est appairé.",
+  pairRenews: "Un nouveau code arrive dans {time}.",
+  pairPaired: "Appairé avec {name}.",
+  pairRetrying: "Nouvel essai dans quelques secondes…",
+  pairGetApp: "Pas encore paste-get sur ton téléphone ? Télécharge le fichier qui finit par _foss.apk depuis cette page, sur le téléphone :",
+  pairDownloadLabel: "Page de téléchargement",
   // settings.html
   settingsTitle: "Réglages",
   nameLabel: "Nom de cet ordinateur",
@@ -48,6 +60,12 @@ window.pastegetFr = {
 window.pastegetText = (key, english) =>
   (window.pastegetFrench && window.pastegetFr[key]) || english;
 
+// The same, with each {name} replaced by values.name. Values are text: never parsed again.
+window.pastegetFormat = (key, english, values) =>
+  window
+    .pastegetText(key, english)
+    .replace(/\{(\w+)\}/g, (match, name) => (name in values ? String(values[name]) : match));
+
 document.addEventListener("DOMContentLoaded", () => {
   if (!window.pastegetFrench) return;
   document.documentElement.lang = "fr";
@@ -58,5 +76,9 @@ document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll("[data-i18n-placeholder]").forEach((element) => {
     const text = window.pastegetFr[element.dataset.i18nPlaceholder];
     if (text) element.placeholder = text;
+  });
+  document.querySelectorAll("[data-i18n-label]").forEach((element) => {
+    const text = window.pastegetFr[element.dataset.i18nLabel];
+    if (text) element.setAttribute("aria-label", text);
   });
 });

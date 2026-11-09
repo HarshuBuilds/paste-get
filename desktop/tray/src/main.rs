@@ -14,6 +14,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod about;
+#[cfg(test)]
+mod i18n_check;
 mod linux_tray;
 mod menu;
 mod pairing;
@@ -464,6 +466,16 @@ impl Tray {
             control::cleanup(&self.endpoint);
             tracing::info!("daemon stopped");
         }
+    }
+}
+
+/// Run in each window before its page: the language the tray speaks (`PASTEGET_LANG` or the
+/// system's), so the page's texts and the ones it gets from here match (`dist/i18n.js`).
+fn language_script() -> &'static str {
+    if pasteget_desktop::i18n::french() {
+        "window.pastegetLang = \"fr\";"
+    } else {
+        "window.pastegetLang = \"en\";"
     }
 }
 

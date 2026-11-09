@@ -326,9 +326,12 @@ see its log). Keep the fake phone of section 2 running.
 | T7 | Stop the fake phone (Ctrl+C) | Within a few seconds its line turns ○ and the menu says "No device connected" |
 | T8 | *Quit* | The icon disappears; `pasteget status` says the daemon is not running |
 | T9 | Start `pasteget daemon` in a terminal, then `pasteget-tray` | The tray shows that daemon. *Quit* closes the tray only: the daemon keeps running |
-| T10 | With a new profile (`pasteget-tray --profile fresh`), start the tray | The *Pair a phone* window opens by itself with a QR code |
+| T10 | With a new profile (`pasteget-tray --profile fresh`), start the tray | The *Pair a phone* window opens by itself with a QR code and "A new code comes in 4:59", counting down. Under it, the Android app's download page as text; **Copy** copies it |
 | T11 | Phone: **Pair a computer**, scan that code | The window shows ✓ "Paired with <phone>" and closes after a few seconds; the tray keeps running and lists the phone as ● |
-| T12 | Menu → *Pair a phone…*, then close the window with its × | The tray keeps running (closing the window doesn't quit) |
+| T12 | Menu → *Pair a phone…*, then close the window with its × | The tray keeps running (closing the window doesn't quit). The code shown still works until its time is up; no new one is made |
+| T30 | Menu → *Pair a phone…*, and leave the window open for more than 5 minutes | When the count reaches 0:00, a new code replaces the old one by itself, without an error. The phone pairs with the new one; a photo of the old one no longer pairs |
+| T31 | Turn Wi-Fi off and unplug Ethernet, then menu → *Pair a phone…*; connect again | "This computer isn't on a network…" and "Trying again in a few seconds…"; once connected, a code shows by itself |
+| T32 | With the system (or `PASTEGET_LANG=fr`) in French, start the tray, open the menu and every window | Everything is in French, also "paste-get démarre…" while it starts and the pairing window's messages. `PASTEGET_LANG=en` turns all of it to English, windows included |
 | T15 | Menu → *Settings…*, change the notifications to "Images and text", **Save** | "Saved."; text from the phone now shows a notification, without a restart |
 | T16 | In *Settings…*, rename this computer, **Save** | "Saved. paste-get restarted…"; within seconds the phone reconnects, and its app shows the new name (bring the app back to the front if it was open). It still shows it after the phone restarts |
 | T17 | In *Settings…*, click a hotkey field, press Ctrl+Alt+K, **Save**, then press Ctrl+Alt+K | It does that action (KDE may ask to allow the shortcut again). Backspace in the field turns the hotkey off |

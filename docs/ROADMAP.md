@@ -126,7 +126,10 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
 - [ ] Human review of crypto and protocol code: `docs/REVIEW.md` lists the files and the
   31 properties to check
 - [x] Pairing from the tray: a *Pair a phone* window with the QR code, opened by itself on the
-  first start, so no terminal is needed
+  first start, so no terminal is needed. While the window is open, an expired code is replaced
+  by a new one by itself, with a countdown; the window says where to get the Android app (the
+  Releases page, as text to copy) and explains what went wrong in the user's language
+  (`TESTING.md`, T30–T32)
 - [x] PC side can revoke a paired phone: `pasteget forget <name>`, or the tray menu → the phone
   → *Forget this device*; its session ends at once. The phone is told (`Unpaired` in the
   session, or `Refusal`, `NOT_PAIRED`, when it next dials), forgets the PC too and shows "<PC>

@@ -142,10 +142,12 @@ pub fn entries(state: &State, start_at_login: Option<bool>) -> Vec<Entry> {
 
 fn daemon_entries(state: &State) -> Vec<Entry> {
     match state {
-        State::Starting => vec![Entry::Info("paste-get is starting…".into())],
+        State::Starting => vec![Entry::Info(
+            tr("paste-get is starting…", "paste-get démarre…").into(),
+        )],
         State::Down(reason) => vec![
-            Entry::Info("paste-get is not running".into()),
-            Entry::Info(text(reason)),
+            Entry::Info(tr("paste-get is not running", "paste-get ne tourne pas").into()),
+            Entry::Info(text(&down_reason(reason))),
         ],
         State::Running { status, recent } => {
             let mut entries = vec![
@@ -181,6 +183,38 @@ fn daemon_entries(state: &State) -> Vec<Entry> {
             });
             entries
         }
+    }
+}
+
+/// Why the daemon couldn't start or be reached, in the user's language for the reasons the tray
+/// knows. Others (the system's words) are shown as they are, for a report; the log has them all.
+fn down_reason(reason: &str) -> String {
+    if let Some(at) = reason.find("could not listen on ") {
+        // "could not listen on 0.0.0.0:47290: Address already in use (os error 98)"
+        let address = reason[at + "could not listen on ".len()..]
+            .split(": ")
+            .next()
+            .unwrap_or_default();
+        let port = address.rsplit(':').next().unwrap_or(address);
+        if french() {
+            format!("Le port {port} est déjà pris : un autre paste-get tourne-t-il ?")
+        } else {
+            format!("Port {port} is taken: is another paste-get running?")
+        }
+    } else if reason.contains("already running") {
+        tr(
+            "Another paste-get already runs for this profile.",
+            "Un autre paste-get tourne déjà pour ce profil.",
+        )
+        .into()
+    } else if reason.contains("did not answer") {
+        tr(
+            "It doesn't answer: quit paste-get and start it again.",
+            "Il ne répond pas : quitte paste-get et relance-le.",
+        )
+        .into()
+    } else {
+        reason.to_owned()
     }
 }
 
@@ -356,8 +390,36 @@ mod tests {
                 label: "Quit".into()
             })
         );
-        assert!(labels(&entries)[1].starts_with("could not listen"));
+        assert_eq!(labels(&entries)[0], "paste-get is not running");
+        assert_eq!(
+            labels(&entries)[1],
+            "Port 47290 is taken: is another paste-get running?"
+        );
         assert!(labels(&entries).contains(&"[ ] Start at login".to_owned()));
+    }
+
+    #[test]
+    fn reasons_the_tray_knows_are_explained_and_others_kept() {
+        pasteget_desktop::i18n::force(pasteget_desktop::i18n::Lang::En);
+        assert_eq!(
+            down_reason(
+                "paste-get could not restart: could not listen on 0.0.0.0:47291: os error 10048"
+            ),
+            "Port 47291 is taken: is another paste-get running?"
+        );
+        assert_eq!(
+            down_reason("a daemon is already running for this profile"),
+            "Another paste-get already runs for this profile."
+        );
+        assert_eq!(
+            down_reason("the daemon did not answer in time"),
+            "It doesn't answer: quit paste-get and start it again."
+        );
+        assert_eq!(down_reason("no D-Bus session"), "no D-Bus session");
+        assert_eq!(
+            labels(&entries(&State::Starting, None))[0],
+            "paste-get is starting…"
+        );
     }
 
     #[test]

@@ -54,6 +54,7 @@ pub fn open<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
     }
     WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("about.html".into()))
         .title(tr("About paste-get", "À propos de paste-get"))
+        .initialization_script(crate::language_script())
         .inner_size(440.0, 400.0)
         .resizable(false)
         .center()
