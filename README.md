@@ -45,8 +45,8 @@ source) asks the older one to quit and takes its place.
   installs the release's .deb, [`paste-get-git`](packaging/aur/paste-get-git/PKGBUILD) builds the
   latest code from source. Until then: `cd packaging/aur/paste-get-git && makepkg -si`.
 - Any other distribution: `chmod +x paste-get_<version>_amd64.AppImage` and run it. The
-  AppImage has the tray only, no `pasteget` command; it does the hotkeys' actions itself
-  (`--action toggle-pause` or `--action send-clipboard`).
+  AppImage has the tray only, no `pasteget` command; it does the hotkeys' actions itself,
+  notification included (`--action toggle-pause` or `--action send-clipboard`).
 - No Flatpak: its sandbox hides the clipboard from apps in the background on KDE Plasma and
   Hyprland ([why](docs/RELEASING.md#why-there-is-no-flatpak-yet)).
 - The tray icon needs a tray: KDE Plasma has one; on Hyprland, use a bar with a tray (Waybar's

@@ -33,7 +33,7 @@ sync over your own Wi-Fi, with no account and no server.
 - Installers: a Windows installer, an AppImage, .deb and .rpm packages, and AUR PKGBUILDs for
   Arch. Installing a new version replaces the running one.
 - The `pasteget` command does everything from a terminal: `status`, `pair`, `send`, `pause`,
-  `recent`, `forget`, `quit`.
+  `recent`, `forget`, `quit`, and `hotkey` for desktops that bind keys to commands (Hyprland).
 
 **On the phone**
 - A guide on the first start ends with a real test copy: "Arrived on <your PC> in … ms".

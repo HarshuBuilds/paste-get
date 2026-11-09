@@ -6,7 +6,7 @@
 //! - KDE Plasma (and other desktops with the `GlobalShortcuts` portal): the portal. Plasma asks
 //!   the user to confirm them once, and lists them in System Settings → Shortcuts.
 //! - Hyprland: nothing here. Hyprland's own `bind` runs the command instead, for instance
-//!   `bind = CTRL ALT SHIFT, V, exec, /usr/bin/pasteget send --clipboard`: [`hyprland_lines`]
+//!   `bind = CTRL ALT SHIFT, V, exec, /usr/bin/pasteget hotkey send-clipboard`: [`hyprland_lines`]
 //!   writes them, with the real path, for the log and the tray's Settings window.
 //!
 //! The keys are set in `settings.toml`, `[hotkeys]` table; an empty string turns one off.
@@ -45,15 +45,16 @@ impl Action {
         }
     }
 
-    /// The command that does the same, for desktops where hotkeys are bound to commands.
+    /// The command that does the same, notification included, for desktops where hotkeys are
+    /// bound to commands.
     pub fn command(self) -> &'static str {
         match self {
-            Self::TogglePause => "pasteget pause --toggle",
-            Self::SendClipboard => "pasteget send --clipboard",
+            Self::TogglePause => "pasteget hotkey toggle-pause",
+            Self::SendClipboard => "pasteget hotkey send-clipboard",
         }
     }
 
-    /// [`Action::command`] without the program: `pause --toggle`.
+    /// [`Action::command`] without the program: `hotkey toggle-pause`.
     fn cli_args(self) -> &'static str {
         let command = self.command();
         command.strip_prefix("pasteget ").unwrap_or(command)
@@ -256,7 +257,7 @@ impl Hotkey {
 /// What runs paste-get's actions from a desktop's own key bindings (Hyprland).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Runner {
-    /// The `pasteget` command, at this path: `pasteget pause --toggle`.
+    /// The `pasteget` command, at this path: `pasteget hotkey toggle-pause`.
     Cli(PathBuf),
     /// An AppImage, which only starts the tray; the tray does an action given with `--action`.
     AppImage(PathBuf),
@@ -863,8 +864,8 @@ mod tests {
             hyprland_lines(Some(&tray), DEFAULT_PROFILE, &bindings, &cli),
             [
                 "exec-once = /usr/bin/pasteget-tray --profile default --at-login",
-                "bind = CTRL ALT SHIFT, P, exec, /usr/bin/pasteget pause --toggle",
-                "bind = CTRL ALT SHIFT, V, exec, /usr/bin/pasteget send --clipboard",
+                "bind = CTRL ALT SHIFT, P, exec, /usr/bin/pasteget hotkey toggle-pause",
+                "bind = CTRL ALT SHIFT, V, exec, /usr/bin/pasteget hotkey send-clipboard",
             ]
         );
         // An AppImage only starts the tray: the tray does the action.
@@ -889,7 +890,7 @@ mod tests {
 
         assert_eq!(
             hyprland_lines(None, DEFAULT_PROFILE, &bindings, &runner),
-            [r"bind = , F9, exec, '/home/me/My ##1 apps/it'\''s/pasteget' pause --toggle"]
+            [r"bind = , F9, exec, '/home/me/My ##1 apps/it'\''s/pasteget' hotkey toggle-pause"]
         );
         assert_eq!(
             shell_word("plain-path/x_1.AppImage"),

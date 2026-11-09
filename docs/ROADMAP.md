@@ -92,7 +92,8 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
 - [x] Autostart on Windows and Linux: the tray's *Start at login* (`Run` key, XDG autostart;
   `exec-once` on Hyprland, which ignores XDG autostart)
 - [x] Hotkeys: `RegisterHotKey` (Windows), GlobalShortcuts portal (KDE), `bind … exec pasteget …` (Hyprland).
-  Pause/resume and "send the clipboard now" (`pasteget send --clipboard`), set in `settings.toml`
+  Pause/resume and "send the clipboard now" (`pasteget send --clipboard`), set in `settings.toml`;
+  `pasteget hotkey <action>` (and the AppImage's `--action`) does the same with its notification
 - [x] Linux: when no tray can show the icon (GNOME without the AppIndicator extension, a bar
   without a tray), the tray says so once per start in a notification and in its log
   (`desktop/tray/src/linux_tray.rs`). GNOME stays tier 2 (`TESTING.md`, section 16)

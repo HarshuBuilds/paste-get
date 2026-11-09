@@ -85,6 +85,12 @@ enum Command {
     },
     /// Resume syncing after `pasteget pause`.
     Resume,
+    /// Do what a hotkey does, with its notification. For desktops that bind keys to commands,
+    /// such as Hyprland.
+    Hotkey {
+        #[arg(value_parser = ["toggle-pause", "send-clipboard"])]
+        action: String,
+    },
     /// List the last clips sent or received, newest first.
     Recent,
     /// Unpair a device: it's disconnected now and can only come back by pairing again.
@@ -126,6 +132,13 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Status { json: true } => status_json(&endpoint).await,
         Command::Pause { toggle } => pause(&endpoint, if toggle { None } else { Some(true) }).await,
         Command::Resume => pause(&endpoint, Some(false)).await,
+        // The notification says what happened.
+        Command::Hotkey { action } => {
+            expect_one(&endpoint, &Request::Perform { action }, |response| {
+                matches!(response, Response::Performed)
+            })
+            .await
+        }
         Command::Recent => recent(&endpoint).await,
         Command::Forget { device } => forget(&endpoint, device).await,
         Command::Quit => {
@@ -516,6 +529,19 @@ mod tests {
             control_version: Some(1),
             pid: Some(42),
         }
+    }
+
+    #[test]
+    fn hotkey_takes_the_actions_hyprland_binds() {
+        for action in ["toggle-pause", "send-clipboard"] {
+            let cli = Cli::try_parse_from(["pasteget", "hotkey", action]).unwrap();
+            assert!(matches!(cli.command, Command::Hotkey { action: a } if a == action));
+            // The lines the tray's Settings window gives (`hotkeys::hyprland_lines`).
+            let action = pasteget_desktop::hotkeys::Action::from_id(action).unwrap();
+            let words: Vec<&str> = action.command().split(' ').collect();
+            assert!(Cli::try_parse_from(words).is_ok(), "{}", action.command());
+        }
+        assert!(Cli::try_parse_from(["pasteget", "hotkey", "nonsense"]).is_err());
     }
 
     #[test]

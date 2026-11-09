@@ -425,10 +425,12 @@ Two global hotkeys work in every app, with `pasteget daemon` or the tray running
 
 | Hotkey | Does | Same as |
 |---|---|---|
-| `Ctrl+Alt+Shift+P` | Pause or resume syncing | `pasteget pause --toggle` |
-| `Ctrl+Alt+Shift+V` | Send the clipboard now, even while paused | `pasteget send --clipboard` |
+| `Ctrl+Alt+Shift+P` | Pause or resume syncing | `pasteget hotkey toggle-pause` |
+| `Ctrl+Alt+Shift+V` | Send the clipboard now, even while paused | `pasteget hotkey send-clipboard` |
 
-Each press shows a short notification ("Syncing paused", "Clipboard sent to 1 device"…). Pause
+Each press shows a short notification ("Syncing paused", "Clipboard sent to 1 device"…), and so
+does each of these commands. `pasteget pause --toggle` and `pasteget send --clipboard` do the
+same without one. Pause
 plus *send the clipboard* gives a private mode: nothing leaves the PC unless you press the key.
 
 Change them in `settings.toml`, then restart paste-get. A letter, a digit or `F1`–`F24`, after
@@ -455,11 +457,11 @@ How each desktop gets them:
   them too. They use the real path of `pasteget`, and the hotkeys saved in *Settings…*:
   ```
   exec-once = /usr/bin/pasteget-tray --profile default --at-login
-  bind = CTRL ALT SHIFT, P, exec, /usr/bin/pasteget pause --toggle
-  bind = CTRL ALT SHIFT, V, exec, /usr/bin/pasteget send --clipboard
+  bind = CTRL ALT SHIFT, P, exec, /usr/bin/pasteget hotkey toggle-pause
+  bind = CTRL ALT SHIFT, V, exec, /usr/bin/pasteget hotkey send-clipboard
   ```
   The AppImage has no `pasteget` command: there the lines run the AppImage itself, which does
-  the action and exits (`paste-get_0.1.0_amd64.AppImage --action toggle-pause`, or
+  the action, with its notification, and exits (`paste-get_0.1.0_amd64.AppImage --action toggle-pause`, or
   `--action send-clipboard`). Run `hyprctl reload` after editing the file.
 
 | # | Do this | Expected |
@@ -470,7 +472,7 @@ How each desktop gets them:
 | H4 | Press `Ctrl+Alt+Shift+P` again | "Syncing resumed" |
 | H5 | On a layout with `AltGr` (Albanian, German, Polish…), type `@` in a text editor | It types normally |
 | H6 | Hyprland: tray → *Settings…* | A *Hyprland* part with an `exec-once` line and two `bind` lines, with full paths (the AppImage's path when started from it). **Copy**, paste them into `hyprland.conf`, `hyprctl reload`: H2–H4 work. Change a hotkey, **Save**: the lines follow. Not shown on KDE Plasma or Windows |
-| H7 | Hyprland, AppImage: in a terminal, `./paste-get_*.AppImage --action toggle-pause` twice | The tray's icon turns grey, then back; the command exits at once each time. `--action nonsense` says which actions exist |
+| H7 | Hyprland, AppImage: in a terminal, `./paste-get_*.AppImage --action toggle-pause` twice | "Syncing paused", then "Syncing resumed", and the tray's icon turns grey, then back; the command exits at once each time. `--action nonsense` says which actions exist |
 
 ## 12. Copy on the phone without Shizuku (built-in mode, prototype)
 

@@ -69,9 +69,9 @@ struct Cli {
     /// Started at login rather than by the user: no notice saying it runs.
     #[arg(long, hide = true)]
     at_login: bool,
-    /// Do what a hotkey does in the running paste-get, then exit: `toggle-pause` or
-    /// `send-clipboard`. For desktops that bind keys to commands (Hyprland), with the AppImage,
-    /// which has no `pasteget` command.
+    /// Do what a hotkey does in the running paste-get, with its notification, then exit:
+    /// `toggle-pause` or `send-clipboard`. For desktops that bind keys to commands (Hyprland),
+    /// with the AppImage, which has no `pasteget` command.
     #[arg(long, value_name = "ACTION")]
     action: Option<String>,
 }
@@ -127,13 +127,12 @@ fn main() -> ExitCode {
     }
 }
 
-/// `--action`: what `pasteget pause --toggle` or `pasteget send --clipboard` would do.
+/// `--action`: what `pasteget hotkey <action>` does, notification included.
 fn run_action(profile: &str, action: &str) -> Result<()> {
     let action = Action::from_id(action)
         .ok_or_else(|| anyhow!("unknown action {action:?}: toggle-pause or send-clipboard"))?;
-    let request = match action {
-        Action::TogglePause => Request::Pause { paused: None },
-        Action::SendClipboard => Request::SendClipboard,
+    let request = Request::Perform {
+        action: action.id().into(),
     };
     let endpoint = Endpoint::for_profile(&Profile::open(profile)?);
     tauri::async_runtime::block_on(ask(&endpoint, &request))?;

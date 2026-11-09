@@ -29,6 +29,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use crate::clipboard::Content;
 use crate::config::Profile;
 use crate::daemon::{Daemon, DeviceStatus, Event};
+use crate::hotkeys::Action;
 use crate::recent;
 
 /// Longest request line accepted: a 64 MiB clip, base64-encoded, plus some room.
@@ -79,6 +80,12 @@ pub enum Request {
     /// Stops the daemon, and the tray or `pasteget daemon` running it: a newer version takes
     /// over. Unknown to daemons without a [`StatusReply::control_version`].
     Quit,
+    /// Does what a hotkey does, with its notification ("Syncing paused", "Clipboard sent to 1
+    /// device"): `action` is an [`Action::id`]. For desktops that bind keys to commands
+    /// (Hyprland). Older daemons answer it with "bad request".
+    Perform {
+        action: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -111,6 +118,8 @@ pub enum Response {
     },
     /// Answer to [`Request::Quit`]: the daemon stops once it has said so.
     Quitting,
+    /// Answer to [`Request::Perform`], once its notification is on its way.
+    Performed,
     Error {
         message: String,
     },
@@ -484,6 +493,15 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(daemon: Arc<Daemon>, stream: 
                     .write_all(line_of(Response::Quitting).as_bytes())
                     .await?;
                 quit = true;
+            }
+            Request::Perform { action } => {
+                let action = Action::from_id(&action).with_context(|| {
+                    format!("unknown action {action:?}: toggle-pause or send-clipboard")
+                })?;
+                daemon.perform(action).await;
+                write_half
+                    .write_all(line_of(Response::Performed).as_bytes())
+                    .await?;
             }
         }
         Ok(())
@@ -862,6 +880,62 @@ mod tests {
 
         let gone = ask(&pc.endpoint, Request::CopyRecent { id: 999 }).await;
         assert!(matches!(&gone[..], [Response::Error { .. }]));
+    }
+
+    /// Records the notices a daemon shows.
+    #[derive(Debug, Default)]
+    struct Notices(std::sync::Mutex<Vec<String>>);
+
+    impl crate::notify::Notifier for Notices {
+        fn received(&self, _received: crate::notify::Received) {}
+
+        fn notice(&self, summary: String) {
+            self.0.lock().unwrap().push(summary);
+        }
+    }
+
+    /// Hyprland's key bindings run `pasteget hotkey …`: the same as a hotkey, notification
+    /// included.
+    #[tokio::test]
+    async fn perform_does_what_a_hotkey_does_and_says_so() {
+        let home = tempfile::tempdir().unwrap();
+        let profile = Profile::open_in(home.path(), "pc").unwrap();
+        let notices = Arc::new(Notices::default());
+        let options = DaemonOptions {
+            listen: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            advertised_ips: Some(vec![IpAddr::V4(Ipv4Addr::LOCALHOST)]),
+            poll_interval: Duration::from_millis(10),
+            announce: false,
+            notifier: Some(Arc::clone(&notices) as Arc<dyn crate::notify::Notifier>),
+            hotkeys: false,
+        };
+        let daemon = Arc::new(
+            Daemon::start(profile.clone(), MemoryClipboard::default(), options)
+                .await
+                .unwrap(),
+        );
+        let endpoint = Endpoint::for_profile(&profile);
+        let _server = serve(Arc::clone(&daemon), &endpoint).await.unwrap();
+        let perform = |action: &str| Request::Perform {
+            action: action.into(),
+        };
+
+        let paused = ask(&endpoint, perform("toggle-pause")).await;
+        assert!(matches!(&paused[..], [Response::Performed]));
+        assert!(daemon.is_paused());
+        let sent = ask(&endpoint, perform("send-clipboard")).await;
+        assert!(matches!(&sent[..], [Response::Performed]));
+        let unknown = ask(&endpoint, perform("nonsense")).await;
+        assert!(
+            matches!(&unknown[..], [Response::Error { message }] if message.contains("toggle-pause or send-clipboard"))
+        );
+
+        assert_eq!(
+            *notices.0.lock().unwrap(),
+            ["Syncing paused", "Nothing to send"]
+        );
+        let request = serde_json::to_string(&perform("toggle-pause")).unwrap();
+        assert_eq!(request, r#"{"cmd":"perform","action":"toggle-pause"}"#);
     }
 
     #[tokio::test]
