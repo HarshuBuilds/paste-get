@@ -4,7 +4,6 @@ package io.github.nexoryx.pasteget.ui
 
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -15,8 +14,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import io.github.nexoryx.pasteget.ActivityKind
 import io.github.nexoryx.pasteget.PhotoAccess
@@ -37,17 +34,13 @@ fun ScreenshotsScreen(state: AppState, actions: AppActions, onBack: () -> Unit) 
     val setting = state.screenshots
     val health = screenshotsHealth(setting.wanted, setting.access)
     ScreenScaffold(title = stringResource(R.string.screenshots_title), onBack = onBack) {
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Box(modifier = Modifier.padding(16.dp)) {
-                SwitchRow(
-                    title = stringResource(R.string.screenshots_title),
-                    text = stringResource(if (setting.wanted) featureStatus(health) else R.string.screenshots_off),
-                    checked = setting.wanted,
-                    onCheckedChange = actions.onScreenshotsChange,
-                    icon = R.drawable.ic_screenshot,
-                )
-            }
-        }
+        SwitchCard(
+            title = stringResource(R.string.screenshots_title),
+            text = stringResource(if (setting.wanted) featureStatus(health) else R.string.screenshots_off),
+            checked = setting.wanted,
+            onCheckedChange = actions.onScreenshotsChange,
+            icon = R.drawable.ic_screenshot,
+        )
         Text(stringResource(R.string.screenshots_explain), style = MaterialTheme.typography.bodyMedium)
 
         // Only once it matters: when they're wanted, or the user just said no.
@@ -56,11 +49,7 @@ fun ScreenshotsScreen(state: AppState, actions: AppActions, onBack: () -> Unit) 
         }
 
         state.activity.firstOrNull { it.kind == ActivityKind.SCREENSHOT }?.let { last ->
-            Text(
-                stringResource(R.string.screenshots_last),
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.semantics { heading() },
-            )
+            SectionTitle(stringResource(R.string.screenshots_last))
             ActivityRow(last, state.computers.associate { it.deviceId to it.name })
         }
     }
@@ -69,11 +58,7 @@ fun ScreenshotsScreen(state: AppState, actions: AppActions, onBack: () -> Unit) 
 /** The three answers Android's photo dialog can give, the current one checked, and the fix. */
 @Composable
 fun PhotoAccessCard(setting: ScreenshotSetting, denied: Boolean, actions: AppActions) {
-    Text(
-        stringResource(R.string.photo_access_title),
-        style = MaterialTheme.typography.titleSmall,
-        modifier = Modifier.semantics { heading() },
-    )
+    SectionTitle(stringResource(R.string.photo_access_title))
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             AccessOption(R.string.photo_access_all, R.string.photo_access_all_text, setting.access == PhotoAccess.FULL)

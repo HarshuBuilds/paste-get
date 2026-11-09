@@ -10,7 +10,6 @@ import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -78,23 +77,19 @@ fun SettingsScreen(
         AppearanceChoice(state.appearance, actions.onAppearanceChange)
         // Material You's colors exist from Android 12.
         if (state.sdk >= Build.VERSION_CODES.S) {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Box(modifier = Modifier.padding(16.dp)) {
-                    SwitchRow(
-                        title = stringResource(R.string.wallpaper_colors),
-                        text = stringResource(R.string.wallpaper_colors_text),
-                        checked = state.wallpaperColors,
-                        onCheckedChange = actions.onWallpaperColorsChange,
-                        icon = R.drawable.ic_palette,
-                    )
-                }
-            }
+            SwitchCard(
+                title = stringResource(R.string.wallpaper_colors),
+                text = stringResource(R.string.wallpaper_colors_text),
+                checked = state.wallpaperColors,
+                onCheckedChange = actions.onWallpaperColorsChange,
+                icon = R.drawable.ic_palette,
+            )
         }
 
         // Per-app languages exist from Android 13; before, paste-get follows the phone's.
         if (state.sdk >= Build.VERSION_CODES.TIRAMISU) {
             Section(R.string.settings_language)
-            LinkRow(R.drawable.ic_language, stringResource(R.string.settings_language), stringResource(R.string.settings_language_text), actions.onOpenLanguage)
+            LinkRow(R.drawable.ic_language, stringResource(R.string.settings_language_choose), stringResource(R.string.settings_language_text), actions.onOpenLanguage)
         }
 
         Section(R.string.settings_tile)
@@ -113,12 +108,7 @@ fun SettingsScreen(
 
 @Composable
 private fun Section(@StringRes title: Int) {
-    Text(
-        stringResource(title),
-        style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.semantics { heading() },
-    )
+    SectionTitle(stringResource(title))
 }
 
 /** System, Light or Dark, as one segmented control. */

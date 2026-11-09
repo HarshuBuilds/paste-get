@@ -10,6 +10,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -77,9 +78,11 @@ class KeepAliveScreenTest {
         text(R.string.keepalive_progress, 2, 4).assertIsDisplayed()
         text(R.string.keepalive_open_autostart).performScrollTo().performClick()
         assertEquals(1, opened)
-        val tick = compose.onAllNodes(hasText(app.getString(R.string.keepalive_ticked)) and isToggleable())
-        tick[0].assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Checkbox)).assertIsOff()
-        tick[0].performScrollTo().performClick()
+        // Named after its item, since both ticks say "It's done".
+        val tick = compose.onNode(hasContentDescription(app.getString(R.string.keepalive_autostart)) and isToggleable())
+        tick.assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Checkbox)).assertIsOff()
+        tick.assert(hasText(app.getString(R.string.keepalive_ticked)))
+        tick.performScrollTo().performClick()
         assertEquals(listOf(true), ticks)
         text(R.string.keepalive_recents_text).performScrollTo().assertIsDisplayed()
     }

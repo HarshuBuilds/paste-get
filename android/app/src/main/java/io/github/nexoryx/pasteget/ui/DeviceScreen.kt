@@ -22,8 +22,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import io.github.nexoryx.pasteget.R
@@ -55,11 +53,7 @@ fun DeviceScreen(state: AppState, deviceId: String, actions: AppActions, onBack:
             }
         }
 
-        Text(
-            stringResource(R.string.device_addresses),
-            style = MaterialTheme.typography.titleSmall,
-            modifier = Modifier.semantics { heading() },
-        )
+        SectionTitle(stringResource(R.string.device_addresses))
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             SelectionContainer {
                 Text(

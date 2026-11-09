@@ -16,6 +16,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.navigation3.runtime.NavKey
 import io.github.nexoryx.pasteget.BuiltInState
 import io.github.nexoryx.pasteget.BuiltInStatus
+import io.github.nexoryx.pasteget.CodeAccess
 import io.github.nexoryx.pasteget.R
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -53,6 +54,21 @@ class CopiesScreenTest {
         // Back from the set-up leads to the copies' screen.
         assertEquals(listOf(Route.Home, Route.Copies, Route.CopiesSetUp), stack)
         compose.onNodeWithText(app.getString(R.string.setup_intro)).assertIsDisplayed()
+    }
+
+    @Test
+    fun theCodesShellStepOpensTheSetUpWithCopiesOn() {
+        val changes = mutableListOf<Boolean>()
+        stack.add(Route.Codes)
+        val state = AppFixtures.state(computers = listOf(AppFixtures.hp), codesOn = true).let {
+            it.copy(codes = it.codes.copy(access = CodeAccess(listening = true, seesCodes = false)))
+        }
+        showApp(state, AppActions(autoCopy = CopiesActions(onChange = { changes += it })))
+
+        compose.onNodeWithText(app.getString(R.string.codes_set_up_shell)).performScrollTo().performClick()
+
+        assertEquals(listOf(true), changes)
+        assertEquals(listOf(Route.Home, Route.Codes, Route.Copies, Route.CopiesSetUp), stack)
     }
 
     @Test

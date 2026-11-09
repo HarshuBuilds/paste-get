@@ -498,16 +498,12 @@ private fun Done(copies: CopiesState, actions: CopiesActions, onDone: (() -> Uni
     }
     // Possible now: the built-in mode granted what changes it.
     if (copies.notices.switchable) {
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Box(modifier = Modifier.padding(16.dp)) {
-                SwitchRow(
-                    title = stringResource(R.string.notices_title),
-                    text = stringResource(R.string.notices_text),
-                    checked = copies.notices.hidden == true,
-                    onCheckedChange = actions.onHideNotices,
-                )
-            }
-        }
+        SwitchCard(
+            title = stringResource(R.string.notices_title),
+            text = stringResource(R.string.notices_text),
+            checked = copies.notices.hidden == true,
+            onCheckedChange = actions.onHideNotices,
+        )
     }
 }
 

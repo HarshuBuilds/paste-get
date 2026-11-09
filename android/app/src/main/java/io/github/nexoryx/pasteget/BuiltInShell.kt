@@ -198,7 +198,7 @@ class BuiltInShell(
             set(BuiltInStatus.STARTING)
             worker.execute { launch() }
         } else {
-            set(BuiltInStatus.FAILED, "the shell helper keeps stopping")
+            set(BuiltInStatus.FAILED, context.getString(R.string.builtin_helper_stopping))
         }
     }
 

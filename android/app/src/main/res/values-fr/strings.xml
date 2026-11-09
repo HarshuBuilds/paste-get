@@ -38,7 +38,6 @@
     <string name="hero_step_codes">Les codes 2FA demandent encore une étape.</string>
     <string name="step_allow_photos">Autoriser l\'accès aux photos</string>
     <string name="step_open_wifi">Ouvrir les paramètres Wi-Fi</string>
-    <string name="step_turn_on_copies">Activer Envoyer ce que tu copies</string>
     <string name="pair_button">Appairer un ordinateur</string>
     <string name="send_clipboard_button">Envoyer le presse-papiers</string>
     <string name="scan_prompt">Scanne le code affiché par paste-get sur ton ordinateur</string>
@@ -101,7 +100,9 @@
     <string name="back">Retour</string>
     <string name="see_all">Tout voir</string>
     <string name="history_banner">Garder ce que tu copies, c\'est pour bientôt. Pour l\'instant, voici ce qui a été envoyé et reçu depuis le démarrage de paste-get : le type, la taille et l\'heure, jamais le contenu.</string>
-    <string name="history_empty">Rien pour l\'instant. Ce que tu envoies ou reçois s\'affiche ici, avec où c\'est arrivé et en combien de temps.</string>
+    <string name="history_empty_title">Rien d\'envoyé pour l\'instant</string>
+    <string name="history_empty">Ce que tu envoies ou reçois s\'affiche ici, avec où c\'est arrivé et en combien de temps.</string>
+    <string name="devices_empty_text">Ouvre paste-get sur ton ordinateur, puis touche Appairer un ordinateur ci-dessous.</string>
     <string name="this_phone_title">Ce téléphone</string>
     <string name="this_phone_id">Identifiant de l\'appareil</string>
     <string name="this_phone_id_text">Tes ordinateurs connaissent ce téléphone par cet identifiant, tiré de sa clé.</string>
@@ -113,6 +114,7 @@
     <string name="wallpaper_colors">Couleurs du fond d\'écran</string>
     <string name="wallpaper_colors_text">Les couleurs de ton fond d\'écran. Désactivé : l\'indigo de paste-get.</string>
     <string name="settings_language">Langue</string>
+    <string name="settings_language_choose">Langue de paste-get</string>
     <string name="settings_language_text">paste-get suit la langue du téléphone. Tu peux lui en choisir une autre, rien que pour lui.</string>
     <string name="settings_tile">Tuile des Réglages rapides</string>
     <string name="tile_text">Envoyer le presse-papiers envoie ce que tu as copié, depuis n\'importe quelle appli, en un appui.</string>
@@ -190,6 +192,7 @@
     <string name="builtin_no_debugging">active le Débogage sans fil dans les Options pour les développeurs</string>
     <string name="builtin_debugging_not_found">le débogage sans fil n\'a pas démarré. Est-il autorisé sur ce Wi-Fi ?</string>
     <string name="builtin_helper_silent">l\'assistant shell n\'a pas démarré</string>
+    <string name="builtin_helper_stopping">l\'assistant shell s\'arrête sans cesse</string>
     <string name="builtin_not_authorized">le débogage sans fil ne connaît plus paste-get : ré-associe-le</string>
     <string name="setup_title">Configurer la copie automatique</string>
     <string name="setup_intro">Une seule fois, en quelques minutes. Ensuite, chaque texte copié part tout seul vers tes ordinateurs, même après un redémarrage : le débogage sans fil d\'Android lance un petit assistant. Aucune autre appli ni aucun ordinateur n\'est nécessaire.</string>

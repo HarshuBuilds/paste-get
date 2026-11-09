@@ -27,8 +27,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import io.github.nexoryx.pasteget.R
@@ -94,11 +92,7 @@ private fun UnpairedBanner(computer: PairedComputer, actions: AppActions) {
 /** This phone's name, and the ID its computers know it by, in groups of four. */
 @Composable
 private fun ThisPhoneCard(phone: ThisPhone) {
-    Text(
-        stringResource(R.string.this_phone_title),
-        style = MaterialTheme.typography.titleSmall,
-        modifier = Modifier.semantics { heading() },
-    )
+    SectionTitle(stringResource(R.string.this_phone_title))
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.padding(16.dp),
@@ -127,17 +121,9 @@ fun groupedId(deviceId: String): String = deviceId.chunked(4).joinToString(" ")
 /** The paired computers, each with its state; a tap opens its page. */
 @Composable
 private fun ComputerList(state: AppState, onOpen: (String) -> Unit) {
-    Text(
-        stringResource(R.string.paired_computers),
-        style = MaterialTheme.typography.titleSmall,
-        modifier = Modifier.semantics { heading() },
-    )
+    SectionTitle(stringResource(R.string.paired_computers))
     if (state.computers.isEmpty()) {
-        Text(
-            stringResource(R.string.notification_no_computer),
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        EmptyState(R.drawable.ic_computer, stringResource(R.string.notification_no_computer), stringResource(R.string.devices_empty_text))
     }
     val details = stringResource(R.string.device_details)
     state.computers.forEach { computer ->

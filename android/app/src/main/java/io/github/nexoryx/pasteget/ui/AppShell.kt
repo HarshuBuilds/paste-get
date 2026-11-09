@@ -85,7 +85,12 @@ private fun Shell(state: AppState, actions: AppActions, backStack: MutableList<N
                         actions.codes,
                         names = state.computers.associate { it.deviceId to it.name },
                         onBack = { back(backStack) },
-                        onOpenCopies = { open(backStack, Route.Copies) },
+                        // Its set-up, with copies on (Back leads to the copies' screen).
+                        onOpenCopies = {
+                            if (!state.autoCopy.on) actions.autoCopy.onChange(true)
+                            open(backStack, Route.Copies)
+                            if (!state.autoCopy.setUp) open(backStack, Route.CopiesSetUp)
+                        },
                     )
                 }
                 entry<Route.History> { HistoryScreen(state.activity, state.computers, onSettings = settings) }

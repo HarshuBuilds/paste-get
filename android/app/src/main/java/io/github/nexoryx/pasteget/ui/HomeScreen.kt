@@ -4,15 +4,12 @@ package io.github.nexoryx.pasteget.ui
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.semantics
 import io.github.nexoryx.pasteget.Activity
 import io.github.nexoryx.pasteget.R
 import uniffi.pasteget_ffi.PairedComputer
@@ -46,11 +43,7 @@ private fun Recent(activity: List<Activity>, computers: List<PairedComputer>, on
     if (activity.isEmpty()) return
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                stringResource(R.string.recent_title),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.weight(1f).semantics { heading() },
-            )
+            SectionTitle(stringResource(R.string.recent_title), modifier = Modifier.weight(1f))
             TextButton(onClick = onSeeAll) { Text(stringResource(R.string.see_all)) }
         }
         val names = computers.associate { it.deviceId to it.name }

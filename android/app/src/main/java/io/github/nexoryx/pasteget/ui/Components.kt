@@ -10,9 +10,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -21,10 +23,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import io.github.nexoryx.pasteget.R
 
@@ -41,11 +47,15 @@ fun SwitchRow(
     titleStyle: TextStyle = MaterialTheme.typography.bodyLarge,
     @DrawableRes icon: Int? = null,
 ) {
+    val haptics = LocalHapticFeedback.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange),
+            .toggleable(value = checked, role = Role.Switch) { on ->
+                haptics.performHapticFeedback(if (on) HapticFeedbackType.ToggleOn else HapticFeedbackType.ToggleOff)
+                onCheckedChange(on)
+            },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -56,6 +66,46 @@ fun SwitchRow(
         }
         // The row handles the tap.
         Switch(checked = checked, onCheckedChange = null)
+    }
+}
+
+/** A screen's main switch: a [SwitchRow] on a card of its own. */
+@Composable
+fun SwitchCard(title: String, text: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit, @DrawableRes icon: Int? = null) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Box(modifier = Modifier.padding(16.dp)) {
+            SwitchRow(title = title, text = text, checked = checked, onCheckedChange = onCheckedChange, icon = icon)
+        }
+    }
+}
+
+/** A section's title, the same on every screen: a heading for TalkBack, in the accent color. */
+@Composable
+fun SectionTitle(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = modifier.semantics { heading() },
+    )
+}
+
+/** What a list shows while it has nothing: an icon, what will be there, and how it gets there. */
+@Composable
+fun EmptyState(@DrawableRes icon: Int, title: String, text: String) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp).semantics(mergeDescendants = true) {},
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        TonalIcon(icon)
+        Text(title, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+        Text(
+            text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 

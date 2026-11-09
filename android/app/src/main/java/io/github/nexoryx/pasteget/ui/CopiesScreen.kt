@@ -18,6 +18,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -30,7 +31,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -108,17 +108,13 @@ class CopiesActions(
 fun CopiesScreen(state: CopiesState, actions: CopiesActions, onBack: () -> Unit, onOpenSetUp: () -> Unit = {}) {
     val health = state.health
     ScreenScaffold(title = stringResource(R.string.copies_title), onBack = onBack) {
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Box(modifier = Modifier.padding(16.dp)) {
-                SwitchRow(
-                    title = stringResource(R.string.copies_title),
-                    text = if (state.on) stringResource(featureStatus(health)) else stringResource(R.string.copies_off),
-                    checked = state.on,
-                    onCheckedChange = actions.onChange,
-                    icon = R.drawable.ic_content_copy,
-                )
-            }
-        }
+        SwitchCard(
+            title = stringResource(R.string.copies_title),
+            text = if (state.on) stringResource(featureStatus(health)) else stringResource(R.string.copies_off),
+            checked = state.on,
+            onCheckedChange = actions.onChange,
+            icon = R.drawable.ic_content_copy,
+        )
         if (!state.on) {
             Body(stringResource(R.string.copies_explain))
             return@ScreenScaffold
@@ -167,11 +163,7 @@ private fun Body(text: String) {
 /** The three ways copies can be read, each with its cost, and a check on the one in use. */
 @Composable
 private fun Methods(mode: CopyMode?) {
-    Text(
-        stringResource(R.string.methods_title),
-        style = MaterialTheme.typography.titleSmall,
-        modifier = Modifier.semantics { heading() },
-    )
+    SectionTitle(stringResource(R.string.methods_title))
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Method(R.string.method_builtin, R.string.method_builtin_text, mode == CopyMode.BUILT_IN)
@@ -243,12 +235,12 @@ private fun BuiltInLine(builtIn: BuiltInState, actions: CopiesActions, onOpenSet
         BuiltInStatus.STARTING -> Body(stringResource(R.string.builtin_starting))
         BuiltInStatus.NEEDS_WIFI -> {
             Body(stringResource(R.string.builtin_needs_wifi))
-            TextButton(onClick = actions.onOpenWifi) { Text(stringResource(R.string.step_open_wifi)) }
+            OutlinedButton(onClick = actions.onOpenWifi) { Text(stringResource(R.string.step_open_wifi)) }
         }
         BuiltInStatus.FAILED -> {
             Body(stringResource(R.string.builtin_failed, detail))
-            Row {
-                TextButton(onClick = actions.onRetryBuiltIn) { Text(stringResource(R.string.builtin_retry)) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = actions.onRetryBuiltIn) { Text(stringResource(R.string.builtin_retry)) }
                 TextButton(onClick = actions.onResetBuiltIn) { Text(stringResource(R.string.builtin_pair_again)) }
             }
         }
@@ -269,11 +261,11 @@ fun ShizukuLine(shizuku: ShizukuState, actions: CopiesActions) {
     Body(text)
     when (shizuku.status) {
         ShizukuStatus.NOT_INSTALLED ->
-            TextButton(onClick = actions.onGetShizuku) { Text(stringResource(R.string.shizuku_get)) }
+            OutlinedButton(onClick = actions.onGetShizuku) { Text(stringResource(R.string.shizuku_get)) }
         ShizukuStatus.NOT_RUNNING ->
-            TextButton(onClick = actions.onOpenShizuku) { Text(stringResource(R.string.shizuku_open)) }
+            OutlinedButton(onClick = actions.onOpenShizuku) { Text(stringResource(R.string.shizuku_open)) }
         ShizukuStatus.NO_PERMISSION ->
-            TextButton(onClick = actions.onAllowShizuku) { Text(stringResource(R.string.shizuku_allow)) }
+            OutlinedButton(onClick = actions.onAllowShizuku) { Text(stringResource(R.string.shizuku_allow)) }
         else -> {}
     }
 }
@@ -286,11 +278,11 @@ private fun FallbackLine(shizuku: ShizukuState, fallback: FallbackAccess, action
         fallback.ready -> if (watching) Body(stringResource(R.string.fallback_ready))
         watching -> {
             Body(stringResource(R.string.fallback_offer))
-            TextButton(onClick = actions.onGrantFallback) { Text(stringResource(R.string.fallback_grant)) }
+            OutlinedButton(onClick = actions.onGrantFallback) { Text(stringResource(R.string.fallback_grant)) }
         }
         fallback.readLogs -> {
             Body(stringResource(R.string.fallback_needs_overlay))
-            TextButton(onClick = actions.onAllowOverlay) { Text(stringResource(R.string.fallback_allow_overlay)) }
+            OutlinedButton(onClick = actions.onAllowOverlay) { Text(stringResource(R.string.fallback_allow_overlay)) }
         }
         else -> {}
     }
@@ -303,19 +295,15 @@ private fun FallbackLine(shizuku: ShizukuState, fallback: FallbackAccess, action
 @Composable
 private fun NoticesLine(notices: AccessNotices, actions: CopiesActions) {
     if (notices.switchable) {
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Box(modifier = Modifier.padding(16.dp)) {
-                SwitchRow(
-                    title = stringResource(R.string.notices_title),
-                    text = stringResource(R.string.notices_text),
-                    checked = notices.hidden == true,
-                    onCheckedChange = actions.onHideNotices,
-                )
-            }
-        }
+        SwitchCard(
+            title = stringResource(R.string.notices_title),
+            text = stringResource(R.string.notices_text),
+            checked = notices.hidden == true,
+            onCheckedChange = actions.onHideNotices,
+        )
     } else if (notices.hidden != true) {
         Body(stringResource(R.string.notices_by_hand))
-        TextButton(onClick = actions.onOpenPrivacySettings) { Text(stringResource(R.string.notices_open_settings)) }
+        OutlinedButton(onClick = actions.onOpenPrivacySettings) { Text(stringResource(R.string.notices_open_settings)) }
     }
 }
 
@@ -330,7 +318,7 @@ private fun LogLine(logs: LogStatus, actions: CopiesActions) {
     }
     Body(stringResource(text))
     if (logs == LogStatus.STARTING) {
-        TextButton(onClick = actions.onRetryLogs) { Text(stringResource(R.string.logs_retry)) }
+        OutlinedButton(onClick = actions.onRetryLogs) { Text(stringResource(R.string.logs_retry)) }
     }
 }
 

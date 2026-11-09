@@ -35,7 +35,6 @@
     <string name="hero_step_codes">2FA codes need one more step.</string>
     <string name="step_allow_photos">Allow photo access</string>
     <string name="step_open_wifi">Open Wi-Fi settings</string>
-    <string name="step_turn_on_copies">Turn on Send what you copy</string>
     <string name="pair_button">Pair a computer</string>
     <string name="send_clipboard_button">Send clipboard now</string>
     <string name="scan_prompt">Scan the code shown by paste-get on your computer</string>
@@ -97,7 +96,9 @@
     <string name="back">Back</string>
     <string name="see_all">See all</string>
     <string name="history_banner">Keeping what you copy comes next. For now, this lists what was sent and received since paste-get started: its kind, size and time, never the contents.</string>
-    <string name="history_empty">Nothing yet. What you send or receive shows here, with where it went and how fast.</string>
+    <string name="history_empty_title">Nothing sent yet</string>
+    <string name="history_empty">What you send or receive shows here, with where it went and how fast.</string>
+    <string name="devices_empty_text">Open paste-get on your computer, then tap Pair a computer below.</string>
     <string name="this_phone_title">This phone</string>
     <string name="this_phone_id">Device ID</string>
     <string name="this_phone_id_text">Your computers know this phone by this ID, which comes from its key.</string>
@@ -109,6 +110,7 @@
     <string name="wallpaper_colors">Wallpaper colors</string>
     <string name="wallpaper_colors_text">The colors of your wallpaper. Off: paste-get\'s indigo.</string>
     <string name="settings_language">Language</string>
+    <string name="settings_language_choose">paste-get\'s language</string>
     <string name="settings_language_text">paste-get follows the phone\'s language. You can choose another one for it alone.</string>
     <string name="settings_tile">Quick Settings tile</string>
     <string name="tile_text">Send clipboard sends what you copied, from any app, in one tap.</string>
@@ -186,6 +188,7 @@
     <string name="builtin_no_debugging">turn on Wireless debugging in Developer options</string>
     <string name="builtin_debugging_not_found">wireless debugging didn\'t start. Is it allowed on this Wi-Fi?</string>
     <string name="builtin_helper_silent">the shell helper didn\'t start</string>
+    <string name="builtin_helper_stopping">the shell helper keeps stopping</string>
     <string name="builtin_not_authorized">wireless debugging no longer knows paste-get: pair again</string>
     <string name="setup_title">Set up the automatic copy</string>
     <string name="setup_intro">Once, in a few minutes. Then each text you copy goes to your computers by itself, even after a restart: Android\'s wireless debugging starts a small helper. No other app, no computer needed.</string>

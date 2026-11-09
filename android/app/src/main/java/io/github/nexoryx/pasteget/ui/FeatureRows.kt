@@ -22,10 +22,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import io.github.nexoryx.pasteget.R
@@ -72,11 +73,7 @@ fun FeatureRows(state: AppState, actions: AppActions, onOpen: (Route) -> Unit) {
         ),
     )
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            stringResource(R.string.sends_title),
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.semantics { heading() },
-        )
+        SectionTitle(stringResource(R.string.sends_title))
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             rows.forEachIndexed { index, row -> FeatureRow(row, Modifier.fillMaxWidth(), groupedShape(index, rows.size)) }
         }
@@ -94,6 +91,7 @@ private class FeatureRowState(
 
 @Composable
 private fun FeatureRow(row: FeatureRowState, modifier: Modifier, shape: Shape) {
+    val haptics = LocalHapticFeedback.current
     Surface(modifier = modifier, shape = shape, color = MaterialTheme.colorScheme.surfaceContainer) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             // Read as "Send what you copy, On, automatic", and opens its screen.
@@ -116,7 +114,10 @@ private fun FeatureRow(row: FeatureRowState, modifier: Modifier, shape: Shape) {
             // Its own target, named like the row: "Send what you copy, switch, on".
             Box(
                 modifier = Modifier
-                    .toggleable(value = row.checked, role = Role.Switch, onValueChange = row.onCheckedChange)
+                    .toggleable(value = row.checked, role = Role.Switch) { on ->
+                        haptics.performHapticFeedback(if (on) HapticFeedbackType.ToggleOn else HapticFeedbackType.ToggleOff)
+                        row.onCheckedChange(on)
+                    }
                     .semantics { contentDescription = row.title }
                     .padding(16.dp),
             ) {

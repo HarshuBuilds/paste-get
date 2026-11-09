@@ -26,6 +26,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -125,7 +126,7 @@ fun ColumnScope.KeepAliveChecklist(state: KeepAliveState, actions: KeepAliveActi
                 shape = groupedShape(2, count),
             ) {
                 if (!state.autostartTicked) OutlinedButton(onClick = actions.onOpenAutostart) { Text(stringResource(R.string.keepalive_open_autostart)) }
-                Tick(state.autostartTicked, actions.onTickAutostart)
+                Tick(stringResource(R.string.keepalive_autostart), state.autostartTicked, actions.onTickAutostart)
             }
             Item(
                 title = stringResource(R.string.keepalive_battery_saver),
@@ -134,7 +135,7 @@ fun ColumnScope.KeepAliveChecklist(state: KeepAliveState, actions: KeepAliveActi
                 shape = groupedShape(3, count),
             ) {
                 if (!state.batterySaverTicked) OutlinedButton(onClick = actions.onOpenAppInfo) { Text(stringResource(R.string.codes_open_app_info)) }
-                Tick(state.batterySaverTicked, actions.onTickBatterySaver)
+                Tick(stringResource(R.string.keepalive_battery_saver), state.batterySaverTicked, actions.onTickBatterySaver)
             }
             Item(
                 title = stringResource(R.string.keepalive_recents),
@@ -183,13 +184,17 @@ private fun Tip(@DrawableRes icon: Int, title: String, text: String) {
     }
 }
 
-/** "It's done", for what only the user can check. The whole row toggles. */
+/**
+ * "It's done", for what only the user can check. The whole row toggles; TalkBack names it after
+ * its [item]: "Autostart, It's done, checkbox".
+ */
 @Composable
-private fun Tick(checked: Boolean, onChange: (Boolean) -> Unit) {
+private fun Tick(item: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(
         modifier = Modifier
             .heightIn(min = 48.dp)
             .toggleable(value = checked, role = Role.Checkbox, onValueChange = onChange)
+            .semantics { contentDescription = item }
             .padding(end = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

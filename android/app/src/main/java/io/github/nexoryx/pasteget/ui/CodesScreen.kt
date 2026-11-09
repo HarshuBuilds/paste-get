@@ -3,7 +3,6 @@
 package io.github.nexoryx.pasteget.ui
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -15,8 +14,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import io.github.nexoryx.pasteget.Activity
 import io.github.nexoryx.pasteget.CodeAccess
@@ -54,27 +51,19 @@ class CodesActions(
 fun CodesScreen(state: CodesState, actions: CodesActions, names: Map<String, String>, onBack: () -> Unit, onOpenCopies: () -> Unit) {
     val health = codesHealth(state.on, state.access, state.shellReady)
     ScreenScaffold(title = stringResource(R.string.codes_title), onBack = onBack) {
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Box(modifier = Modifier.padding(16.dp)) {
-                SwitchRow(
-                    title = stringResource(R.string.codes_title),
-                    text = stringResource(if (state.on) featureStatus(health) else R.string.codes_off),
-                    checked = state.on,
-                    onCheckedChange = actions.onChange,
-                    icon = R.drawable.ic_password,
-                )
-            }
-        }
+        SwitchCard(
+            title = stringResource(R.string.codes_title),
+            text = stringResource(if (state.on) featureStatus(health) else R.string.codes_off),
+            checked = state.on,
+            onCheckedChange = actions.onChange,
+            icon = R.drawable.ic_password,
+        )
         Text(stringResource(R.string.codes_privacy), style = MaterialTheme.typography.bodyMedium)
         if (!state.on) return@ScreenScaffold
 
         CodesAccess(state, actions, onOpenCopies)
 
-        Text(
-            stringResource(R.string.codes_last),
-            style = MaterialTheme.typography.titleSmall,
-            modifier = Modifier.semantics { heading() },
-        )
+        SectionTitle(stringResource(R.string.codes_last))
         val last = state.last
         if (last == null) {
             Text(stringResource(R.string.codes_waiting), style = MaterialTheme.typography.bodyMedium)
@@ -87,11 +76,7 @@ fun CodesScreen(state: CodesState, actions: CodesActions, names: Map<String, Str
 /** The access codes need, as a checklist, and the one thing to do next. Also in the first-run guide. */
 @Composable
 fun CodesAccess(state: CodesState, actions: CodesActions, onOpenCopies: () -> Unit) {
-    Text(
-        stringResource(R.string.codes_access_title),
-        style = MaterialTheme.typography.titleSmall,
-        modifier = Modifier.semantics { heading() },
-    )
+    SectionTitle(stringResource(R.string.codes_access_title))
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             CheckedRow(

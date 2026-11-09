@@ -38,11 +38,7 @@ fun HistoryScreen(activity: List<Activity>, computers: List<PairedComputer>, onS
             )
         }
         if (activity.isEmpty()) {
-            Text(
-                stringResource(R.string.history_empty),
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            EmptyState(R.drawable.ic_history, stringResource(R.string.history_empty_title), stringResource(R.string.history_empty))
         } else {
             val names = computers.associate { it.deviceId to it.name }
             Column { activity.forEach { ActivityRow(it, names) } }

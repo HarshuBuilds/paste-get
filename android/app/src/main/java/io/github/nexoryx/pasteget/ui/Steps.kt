@@ -20,7 +20,7 @@ fun stepLabel(step: NextStep): Int = when (step) {
     NextStep.ALLOW_ALL_PHOTOS -> R.string.open_settings
     NextStep.ALLOW_CODES -> R.string.codes_allow
     NextStep.OPEN_NOTIFICATION_ACCESS -> R.string.codes_open_settings
-    NextStep.SET_UP_SHELL_FOR_CODES -> R.string.step_turn_on_copies
+    NextStep.SET_UP_SHELL_FOR_CODES -> R.string.codes_set_up_shell
 }
 
 /**
@@ -41,8 +41,11 @@ fun runStep(step: NextStep, actions: AppActions, onOpen: (Route) -> Unit) {
         NextStep.ALLOW_ALL_PHOTOS -> actions.onOpenAppSettings()
         NextStep.ALLOW_CODES -> actions.codes.onAllow()
         NextStep.OPEN_NOTIFICATION_ACCESS -> actions.codes.onOpenSettings()
-        // Codes on Android 15 need the shell the automatic copy runs.
-        NextStep.SET_UP_SHELL_FOR_CODES -> actions.autoCopy.onChange(true)
+        // Codes on Android 15 need the shell the automatic copy runs: turned on, then set up.
+        NextStep.SET_UP_SHELL_FOR_CODES -> {
+            actions.autoCopy.onChange(true)
+            onOpen(Route.CopiesSetUp)
+        }
     }
 }
 
