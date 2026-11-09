@@ -60,9 +60,10 @@ Two PKGBUILDs, for Arch users (`yay -S …` once they are on the AUR):
 - `paste-get-git` (`packaging/aur/paste-get-git/`) builds the latest commit of the GitHub
   repository's default branch from source, so it needs no update per release.
 
-CI builds and installs both with `makepkg` in an Arch container (`paste-get-bin` from the .deb of
-the same run, so the programs are seen to start with Arch's libraries), and checks that each
-`.SRCINFO` matches its PKGBUILD. After changing a PKGBUILD by hand, regenerate it on Arch:
+CI builds and installs both with `makepkg` in an Arch container, starts both programs
+(`--version`), and checks that each `.SRCINFO` matches its PKGBUILD. `paste-get-bin` is made from
+the .deb of the same run, so this also shows that programs built on Ubuntu find Arch's libraries.
+After changing a PKGBUILD by hand, regenerate its `.SRCINFO` on Arch:
 `makepkg --printsrcinfo > .SRCINFO`. Until they are published, Arch users can build them from the
 repository: `cd packaging/aur/paste-get-git && makepkg -si`.
 

@@ -192,7 +192,7 @@ jobs:
         with:
           # makepkg clones the repository; it needs the history for pkgver.
           fetch-depth: 0
-      - name: Build this commit with the PKGBUILD
+      - name: Build and install this commit with the PKGBUILD
         run: |
           useradd -m builder
           # The checkout belongs to root; makepkg clones it as builder.
@@ -203,7 +203,12 @@ jobs:
             /home/builder/PKGBUILD
           chown -R builder /home/builder
           echo 'builder ALL=(ALL) NOPASSWD: /usr/bin/pacman' > /etc/sudoers.d/builder
-          su builder -c 'cd ~ && makepkg --syncdeps --noconfirm'
+          su builder -c 'cd ~ && makepkg --syncdeps --install --noconfirm'
+      # Fails if package() put a program in the wrong place, or one can't find its libraries.
+      - name: Both programs start
+        run: |
+          pasteget --version
+          pasteget-tray --version
       - name: The committed .SRCINFO matches the PKGBUILD
         run: |
           cd packaging/aur/paste-get-git
