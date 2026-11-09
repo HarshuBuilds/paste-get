@@ -45,7 +45,7 @@ The full protocol is in [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 | 2FA codes leaking | Opt-in. The phone reads notifications on the phone only; just the code's digits go to paired computers, as a secret (out of history and *Recent*). The PC's notification names the app, never the code. Neither the code nor the message is logged |
 | A link from a paired device opening by itself | Nothing opens without a click on its notification. Only `http`/`https` links that are the whole clip; the site is shown first; links with a `user@` part (which hide the real site) and non-ASCII hosts are refused |
 | Clips leaving the local network through the OS | On Windows, received clips are marked so the cloud clipboard doesn't upload them to the Microsoft account (they stay in the local Win+V history unless sensitive) |
-| A copy kept for a device that is away | Only the last non-sensitive clip waits, in memory, never on disk; passwords and 2FA codes are never kept. Forgetting the device drops it |
+| A copy kept for a device that is away | Only the last non-sensitive clip waits, until the device confirms it got it, in memory, never on disk; passwords and 2FA codes are never kept. Forgetting the device drops it |
 | Oversized or malformed input from a paired device | Frames are limited to 1 MiB, clips to 64 MiB, images are size-checked before decoding; the parsers are fuzzed |
 | A lost or stolen phone, once you unpair it | On the PC: tray menu → the phone → *Forget this device*, or `pasteget forget <name>`. Its connection ends at once and it can't connect again without a new pairing code; the phone is told and forgets the PC too. The phone can forget a PC the same way |
 

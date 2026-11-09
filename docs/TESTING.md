@@ -465,17 +465,21 @@ can learn it.
 ## 15. Copies made while a device is off (v0.2)
 
 A copy made while the other side is off or out of range waits, and arrives as soon as it
-connects again. Only the last one waits (text or image), in memory only. Passwords and 2FA codes
-never wait: a code would be stale by then.
+connects again. That includes a connection that died without closing (a PC asleep, a phone that
+just left the Wi-Fi), which still looks alive for up to 90 s: a copy waits until the other side
+confirms it got it. Only the last one waits (text or image), in memory only. Passwords and 2FA
+codes never wait: a code would be stale by then.
 
 | # | Do this | Expected |
 |---|---|---|
 | Q1 | Quit paste-get on the PC (tray → *Quit*). On the phone, copy a line | The phone says it went to 0 computers |
 | Q2 | Start paste-get on the PC again | Within a few seconds the line is in the PC's clipboard; the log says "sending the clip it missed" |
 | Q3 | PC off, copy two lines on the phone one after the other, start the PC | Only the second one arrives |
-| Q4 | Phone's Wi-Fi off, copy something on the PC, turn Wi-Fi back on | The copy is in the phone's clipboard once it reconnects |
+| Q4 | Phone's Wi-Fi off, and right away copy something on the PC (the tray may still show the phone connected), turn Wi-Fi back on | The copy is in the phone's clipboard once it reconnects, once |
 | Q5 | PC off, copy a password from a password manager on the phone (or get a 2FA code), start the PC | Nothing arrives |
 | Q6 | PC off, copy on the phone, force-stop paste-get on the phone, start both | Nothing arrives: the copy was only in memory |
+| Q7 | Put the PC to sleep. Within a minute, copy a line on the phone (it may still say it went to 1 computer), then wake the PC | The line is in the PC's clipboard once the phone reconnects |
+| Q8 | With both connected, copy a line on the PC; once it's on the phone, turn the phone's Wi-Fi off and on | The line is not sent a second time when the phone reconnects |
 
 ## Known limitations
 

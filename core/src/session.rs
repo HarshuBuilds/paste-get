@@ -11,7 +11,8 @@
 //! [`SessionEvents::clip_delivered`] reports, to measure latency.
 //!
 //! [`Peers`] holds the outgoing queue of every connected device, so the app can send to all of
-//! them. What to do with received clips (clipboard, relay, notification) is up to the app.
+//! them, and the last clip each paired device hasn't acknowledged, to send again when it
+//! reconnects. What to do with received clips (clipboard, relay, notification) is up to the app.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -91,13 +92,24 @@ pub struct Delivery {
 }
 
 /// The devices currently connected, and their outgoing queues.
+///
+/// Lock order: `queues`, then `waiting`.
 #[derive(Debug, Default)]
 pub struct Peers {
     queues: Mutex<HashMap<DeviceId, PeerQueue>>,
     /// The paired devices, connected or not ([`Peers::expect`]), and the last clip each one
-    /// missed while it was away.
-    waiting: Mutex<HashMap<DeviceId, Option<Clip>>>,
+    /// hasn't acknowledged yet.
+    waiting: Mutex<HashMap<DeviceId, Option<Numbered>>>,
     next_session: AtomicU64,
+    next_clip: AtomicU64,
+}
+
+/// A broadcast clip, numbered so that the device's ack can be matched with the clip waiting for
+/// it. Shared by every queue and every device it waits for.
+#[derive(Clone, Debug)]
+struct Numbered {
+    number: u64,
+    clip: Arc<Clip>,
 }
 
 #[derive(Debug)]
@@ -110,7 +122,7 @@ struct PeerQueue {
 
 #[derive(Debug)]
 enum Outgoing {
-    Clip { clip: Clip, queued_at: Instant },
+    Clip { clip: Numbered, queued_at: Instant },
     Envelope(Envelope),
 }
 
@@ -120,6 +132,8 @@ struct Sent {
     mime_type: String,
     len: usize,
     queued_at: Instant,
+    /// Its [`Numbered::number`].
+    number: u64,
 }
 
 /// Shared by a session's writer, which adds sent clips, and its reader, which matches acks.
@@ -130,8 +144,8 @@ impl Peers {
         Self::default()
     }
 
-    /// A paired device: when it isn't connected, the last clip it misses waits for it (in memory
-    /// only) and is sent when it comes back. Call it for every paired device, and after pairing.
+    /// A paired device: the last clip it hasn't acknowledged waits for it (in memory only) and is
+    /// sent again when it connects. Call it for every paired device, and after pairing.
     pub fn expect(&self, peer: DeviceId) {
         lock(&self.waiting).entry(peer).or_insert(None);
     }
@@ -143,14 +157,22 @@ impl Peers {
 
     /// Queues `clip` for every connected device except `except`. Returns how many.
     ///
-    /// Paired devices that aren't connected get it when they come back, if it's still the last
-    /// clip by then. Secrets don't wait: a password or a code shouldn't turn up hours later.
+    /// Until it acknowledges the clip, a paired device gets it again when it connects, if it's
+    /// still the last clip by then: one that isn't connected, and one whose session is dead but
+    /// hasn't timed out yet (a PC asleep, a phone that just left the Wi-Fi), which queues it for
+    /// nothing. Secrets don't wait: a password or a code shouldn't turn up hours later.
     pub fn broadcast(&self, clip: &Clip, except: Option<DeviceId>) -> usize {
+        let clip = Numbered {
+            number: self.next_clip.fetch_add(1, Ordering::Relaxed),
+            clip: Arc::new(clip.clone()),
+        };
+        // Held throughout, so that a session starting meanwhile gets the clip exactly once:
+        // queued, or waiting for it.
         let queues = self.lock();
-        if !clip.sensitive {
-            for (id, missed) in lock(&self.waiting).iter_mut() {
-                if !queues.contains_key(id) && Some(*id) != except && *id != clip.origin {
-                    *missed = Some(clip.clone());
+        if !clip.clip.sensitive {
+            for (id, unacknowledged) in lock(&self.waiting).iter_mut() {
+                if Some(*id) != except && *id != clip.clip.origin {
+                    *unacknowledged = Some(clip.clone());
                 }
             }
         }
@@ -195,17 +217,19 @@ impl Peers {
     fn register(&self, peer: DeviceId, sender: mpsc::Sender<Outgoing>) -> (u64, Arc<Notify>) {
         let session = self.next_session.fetch_add(1, Ordering::Relaxed);
         let kick = Arc::new(Notify::new());
-        // What it missed while away goes first.
-        let missed = lock(&self.waiting).get_mut(&peer).and_then(Option::take);
-        if let Some(clip) = missed {
-            tracing::info!(%peer, mime_type = %clip.mime_type, len = clip.data.len(), "sending the clip it missed");
+        let mut queues = self.lock();
+        // What it missed goes first. It keeps waiting until the device acknowledges it, in case
+        // this session dies too.
+        let missed = lock(&self.waiting).get(&peer).cloned().flatten();
+        if let Some(missed) = missed {
+            tracing::info!(%peer, mime_type = %missed.clip.mime_type, len = missed.clip.data.len(), "sending the clip it missed");
             let _ = sender.try_send(Outgoing::Clip {
-                clip,
+                clip: missed,
                 queued_at: Instant::now(),
             });
         }
         // A newer session replaces an older one that hasn't noticed it's dead yet.
-        self.lock().insert(
+        queues.insert(
             peer,
             PeerQueue {
                 session,
@@ -214,6 +238,15 @@ impl Peers {
             },
         );
         (session, kick)
+    }
+
+    /// `peer` acknowledged the clip `number`: if it's the one waiting for it, it waits no more.
+    fn acknowledged(&self, peer: &DeviceId, number: u64) {
+        if let Some(waiting) = lock(&self.waiting).get_mut(peer)
+            && waiting.as_ref().is_some_and(|w| w.number == number)
+        {
+            *waiting = None;
+        }
     }
 
     /// Forgets `session`. Returns `false` if a newer session with the device replaced it.
@@ -301,7 +334,7 @@ where
     events.connected(peer, &their_hello);
 
     let result = tokio::select! {
-        result = read_loop(peer, reader, &sender, &awaiting, events) => result,
+        result = read_loop(peer, reader, &sender, &awaiting, peers, events) => result,
         () = kick.notified() => {
             tracing::info!(%peer, "session ended: the device was unpaired");
             Err(SessionError::Closed)
@@ -416,6 +449,7 @@ async fn read_loop<R: AsyncRead + Unpin>(
     mut reader: EnvelopeReader<R>,
     replies: &mpsc::Sender<Outgoing>,
     awaiting: &AwaitingAck,
+    peers: &Peers,
     events: &dyn SessionEvents,
 ) -> Result<(), SessionError> {
     let mut receiver = ClipReceiver::default();
@@ -439,7 +473,7 @@ async fn read_loop<R: AsyncRead + Unpin>(
                 continue;
             }
             Some(Payload::Ack(ack)) => {
-                acknowledged(peer, &ack, awaiting, events);
+                acknowledged(peer, &ack, awaiting, peers, events);
                 continue;
             }
             // Pongs only prove the peer is alive; unknown payloads come from newer peers.
@@ -475,11 +509,19 @@ async fn read_loop<R: AsyncRead + Unpin>(
 }
 
 /// Reports the delivery of the clip `ack` answers. Acks for unknown clips are ignored.
-fn acknowledged(peer: DeviceId, ack: &Ack, awaiting: &AwaitingAck, events: &dyn SessionEvents) {
+fn acknowledged(
+    peer: DeviceId,
+    ack: &Ack,
+    awaiting: &AwaitingAck,
+    peers: &Peers,
+    events: &dyn SessionEvents,
+) {
     let Some(sent) = lock(awaiting).remove(&ack.clip_id) else {
         tracing::debug!(%peer, "ack for a clip that isn't waiting for one");
         return;
     };
+    // Accepted or refused, the device has it: sending it again would change nothing.
+    peers.acknowledged(&peer, sent.number);
     let delivery = Delivery {
         mime_type: sent.mime_type,
         len: sent.len,
@@ -514,7 +556,7 @@ async fn reply(replies: &mpsc::Sender<Outgoing>, payload: Payload) -> Result<(),
         .map_err(|_| SessionError::Closed)
 }
 
-fn await_ack(awaiting: &AwaitingAck, clip_id: Vec<u8>, clip: &Clip, queued_at: Instant) {
+fn await_ack(awaiting: &AwaitingAck, clip_id: Vec<u8>, clip: &Numbered, queued_at: Instant) {
     let mut awaiting = lock(awaiting);
     if awaiting.len() >= AWAITING_ACK
         && let Some(oldest) = awaiting
@@ -527,9 +569,10 @@ fn await_ack(awaiting: &AwaitingAck, clip_id: Vec<u8>, clip: &Clip, queued_at: I
     awaiting.insert(
         clip_id,
         Sent {
-            mime_type: clip.mime_type.clone(),
-            len: clip.data.len(),
+            mime_type: clip.clip.mime_type.clone(),
+            len: clip.clip.data.len(),
             queued_at,
+            number: clip.number,
         },
     );
 }
@@ -549,7 +592,7 @@ async fn write_loop<W: AsyncWrite + Unpin>(
             tokio::select! {
                 next = queue.recv() => match next {
                     Some(Outgoing::Clip { clip, queued_at }) => {
-                        let envelopes = clip::outgoing(&clip)
+                        let envelopes = clip::outgoing(&clip.clip)
                             .map_err(|_| SessionError::Protocol("no randomness for a clip ID"))?;
                         for envelope in envelopes {
                             // Recorded before the offer leaves, so its ack can't come first.
@@ -907,19 +950,113 @@ mod tests {
 
         let (sender, mut received) = mpsc::channel(4);
         peers.register(pc, sender);
-        let Some(Outgoing::Clip { clip, .. }) = received.try_recv().ok() else {
-            panic!("the waiting clip was not sent");
-        };
-        assert_eq!(clip.data, b"last");
+        let missed = next_clip(&mut received).expect("the waiting clip was not sent");
+        assert_eq!(missed.clip.data, b"last");
         assert!(received.try_recv().is_err());
 
-        // Sent once; a device that isn't paired gets nothing.
-        let (again, mut nothing) = mpsc::channel(4);
+        // Sent again until the PC acknowledges it: that session may have died too.
+        let (again, mut received) = mpsc::channel(4);
         peers.register(pc, again);
+        assert_eq!(next_clip(&mut received).unwrap().number, missed.number);
+        peers.acknowledged(&pc, missed.number);
+        let (acknowledged, mut nothing) = mpsc::channel(4);
+        peers.register(pc, acknowledged);
         assert!(nothing.try_recv().is_err());
+
+        // A device that isn't paired gets nothing.
         let (other, mut none) = mpsc::channel(4);
         peers.register(stranger, other);
         assert!(none.try_recv().is_err());
+    }
+
+    fn next_clip(queue: &mut mpsc::Receiver<Outgoing>) -> Option<Numbered> {
+        match queue.try_recv() {
+            Ok(Outgoing::Clip { clip, .. }) => Some(clip),
+            _ => None,
+        }
+    }
+
+    /// A PC asleep, or a phone that just left the Wi-Fi: its session looks alive until it times
+    /// out, and what's queued for it meanwhile goes nowhere.
+    #[tokio::test]
+    async fn a_clip_queued_into_a_dead_session_is_sent_again_when_the_device_reconnects() {
+        let peers = Peers::new();
+        let origin = Identity::generate().unwrap().device_id();
+        let pc = Identity::generate().unwrap().device_id();
+        peers.expect(pc);
+        let (dead, mut lost) = mpsc::channel(4);
+        peers.register(pc, dead);
+
+        assert_eq!(peers.broadcast(&Clip::text("copied", origin), None), 1);
+        let first = next_clip(&mut lost).unwrap();
+        // The device reconnects without having acknowledged it.
+        let (sender, mut received) = mpsc::channel(4);
+        peers.register(pc, sender);
+
+        let again = next_clip(&mut received).expect("the clip was not sent again");
+        assert_eq!(again.number, first.number);
+        assert_eq!(again.clip.data, b"copied");
+    }
+
+    #[tokio::test]
+    async fn only_the_ack_of_the_last_clip_stops_it_waiting() {
+        let peers = Peers::new();
+        let origin = Identity::generate().unwrap().device_id();
+        let pc = Identity::generate().unwrap().device_id();
+        peers.expect(pc);
+        let (sender, mut queue) = mpsc::channel(4);
+        peers.register(pc, sender);
+        peers.broadcast(&Clip::text("older", origin), None);
+        peers.broadcast(&Clip::text("newer", origin), None);
+        let older = next_clip(&mut queue).unwrap();
+        let newer = next_clip(&mut queue).unwrap();
+
+        // The older one's ack comes first: the newer one still waits.
+        peers.acknowledged(&pc, older.number);
+        let (sender, mut received) = mpsc::channel(4);
+        peers.register(pc, sender);
+        assert_eq!(next_clip(&mut received).unwrap().clip.data, b"newer");
+
+        peers.acknowledged(&pc, newer.number);
+        let (sender, mut received) = mpsc::channel(4);
+        peers.register(pc, sender);
+        assert!(received.try_recv().is_err());
+    }
+
+    /// Through real sessions: the device's ack clears what waits for it, so a clip it got is never
+    /// sent twice.
+    #[tokio::test]
+    async fn a_delivered_clip_is_not_sent_again() {
+        let (phone, pc) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (phone_io, pc_io) = duplex(64 * 1024);
+        let (client, server) = tokio::join!(
+            transport::connect(phone_io, &phone, pc.device_id()),
+            async { transport::accept(pc_io, &pc).await?.authorize(|_| true) }
+        );
+        let (phone_peers, pc_peers) = (Arc::new(Peers::new()), Arc::new(Peers::new()));
+        pc_peers.expect(phone.device_id());
+        let (phone_events, pc_events) =
+            (Arc::new(Recorder::default()), Arc::new(Recorder::default()));
+        let _phone_session = tokio::spawn({
+            let (peers, events) = (Arc::clone(&phone_peers), Arc::clone(&phone_events));
+            async move { run_session(client.unwrap(), hello("phone"), &peers, &*events).await }
+        });
+        let _pc_session = tokio::spawn({
+            let (peers, events) = (Arc::clone(&pc_peers), Arc::clone(&pc_events));
+            async move { run_session(server.unwrap(), hello("pc"), &peers, &*events).await }
+        });
+        until(|| pc_peers.is_connected(&phone.device_id())).await;
+
+        assert_eq!(
+            pc_peers.broadcast(&Clip::text("delivered", pc.device_id()), None),
+            1
+        );
+        until(|| !pc_events.deliveries.lock().unwrap().is_empty()).await;
+
+        let (sender, mut received) = mpsc::channel(4);
+        pc_peers.register(phone.device_id(), sender);
+        assert!(received.try_recv().is_err());
+        assert_eq!(phone_events.clips.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

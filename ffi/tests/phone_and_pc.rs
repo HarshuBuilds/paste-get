@@ -17,6 +17,8 @@ use pasteget_desktop::clipboard::{Content, MemoryClipboard, Raw, RgbaImage};
 use pasteget_desktop::config::Profile;
 use pasteget_desktop::daemon::{Daemon, DaemonOptions};
 use pasteget_ffi::{ClipDelivery, PairedComputer, PastegetError, PhoneClient, PhoneListener};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::oneshot;
 
 /// A real 1×1 PNG.
 const PNG_1X1: &[u8] = &[
@@ -393,6 +395,177 @@ fn a_copy_made_while_the_pc_is_off_waits_for_it() {
     wait_until("the waiting copy on the PC", || {
         pc.clipboard.get() == Some(Raw::Text("copied while off".into()))
     });
+}
+
+/// Forwards TCP connections to the PC. It can go silent like a network that drops a device
+/// without closing its connections (a phone that leaves the Wi-Fi, a PC that goes to sleep).
+struct Proxy {
+    address: SocketAddr,
+    /// One per connection forwarded so far: fired, it stops forwarding, both ways.
+    freezes: Arc<Mutex<Vec<oneshot::Sender<()>>>>,
+    frozen: Frozen,
+}
+
+/// The frozen connections, still open: phone side, PC side.
+type Frozen = Arc<Mutex<Vec<(Option<TcpStream>, TcpStream)>>>;
+
+impl Proxy {
+    fn start(pc: &Pc) -> Self {
+        let target = pc.daemon.local_addr();
+        let listener = pc
+            .runtime
+            .block_on(TcpListener::bind((Ipv4Addr::LOCALHOST, 0)))
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let freezes = Arc::new(Mutex::new(Vec::new()));
+        let frozen = Arc::new(Mutex::new(Vec::new()));
+        let (accepted, held) = (Arc::clone(&freezes), Arc::clone(&frozen));
+        pc.runtime.spawn(async move {
+            while let Ok((phone, _)) = listener.accept().await {
+                let Ok(pc) = TcpStream::connect(target).await else {
+                    continue;
+                };
+                let (freeze, frozen) = oneshot::channel();
+                accepted.lock().unwrap().push(freeze);
+                tokio::spawn(forward(phone, pc, frozen, Arc::clone(&held)));
+            }
+        });
+        Self {
+            address,
+            freezes,
+            frozen,
+        }
+    }
+
+    /// The connections open now carry nothing more, either way, and stay open.
+    fn freeze(&self) {
+        let frozen_before = self.frozen.lock().unwrap().len();
+        let fired = self
+            .freezes
+            .lock()
+            .unwrap()
+            .drain(..)
+            .filter_map(|freeze| freeze.send(()).ok())
+            .count();
+        wait_until("the connections to freeze", || {
+            self.frozen.lock().unwrap().len() == frozen_before + fired
+        });
+    }
+
+    /// The frozen connections close on the phone's side only: the PC still sees them open.
+    fn hang_up_phone_side(&self) {
+        for (phone, _) in self.frozen.lock().unwrap().iter_mut() {
+            phone.take();
+        }
+    }
+}
+
+async fn forward(
+    mut phone: TcpStream,
+    mut pc: TcpStream,
+    freeze: oneshot::Receiver<()>,
+    frozen: Frozen,
+) {
+    {
+        let (mut from_phone, mut to_phone) = phone.split();
+        let (mut from_pc, mut to_pc) = pc.split();
+        tokio::select! {
+            _ = tokio::io::copy(&mut from_phone, &mut to_pc) => return,
+            _ = tokio::io::copy(&mut from_pc, &mut to_phone) => return,
+            _ = freeze => {}
+        }
+    }
+    frozen.lock().unwrap().push((Some(phone), pc));
+}
+
+/// A session that died without closing looks alive until it times out (90 s): copies made
+/// meanwhile, on either side, go into it for nothing. They arrive once the device reconnects,
+/// and what the old session delivered isn't delivered again.
+#[test]
+fn copies_made_while_a_session_is_silently_dead_arrive_when_it_reconnects() {
+    let pc = start_pc();
+    let proxy = Proxy::start(&pc);
+    let mut invite: PairingInvite = pc
+        .runtime
+        .block_on(pc.daemon.open_pairing())
+        .unwrap()
+        .to_uri()
+        .parse()
+        .unwrap();
+    invite.addresses = vec![proxy.address];
+    let phone_dir = tempfile::tempdir().unwrap();
+    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    phone.pair(invite.to_uri()).unwrap();
+    let listener = Arc::new(Recorder::default());
+    phone.start(listener.clone());
+    let connections = || listener.connections.lock().unwrap().len();
+    wait_until("the connection", || connections() == 1);
+    let text = |text: &str| Content {
+        mime_type: mime::TEXT.into(),
+        data: text.as_bytes().to_vec(),
+        sensitive: false,
+    };
+    let received_on_the_phone = || {
+        listener
+            .clips
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, data)| String::from_utf8(data.clone()).unwrap())
+            .collect::<Vec<_>>()
+    };
+    // Ids change each time a clip goes through, even the same one again.
+    let recent_on_the_pc = || {
+        pc.daemon
+            .recent()
+            .iter()
+            .map(|clip| clip.id)
+            .collect::<Vec<_>>()
+    };
+
+    // Delivered both ways, and acknowledged, while the network works.
+    assert_eq!(pc.daemon.send(text("before, from the PC")), 1);
+    assert_eq!(
+        phone.copied_text("before, from the phone".into(), false),
+        Some(1)
+    );
+    wait_until("both clips", || {
+        received_on_the_phone().len() == 1
+            && pc.clipboard.get() == Some(Raw::Text("before, from the phone".into()))
+    });
+    std::thread::sleep(Duration::from_millis(300));
+
+    // The session dies silently, and the phone reconnects: nothing is sent again.
+    proxy.freeze();
+    proxy.hang_up_phone_side();
+    let before = recent_on_the_pc();
+    wait_until("the reconnection", || connections() == 3);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(received_on_the_phone(), ["before, from the PC"]);
+    assert_eq!(recent_on_the_pc(), before);
+
+    // Copies made while it's dead go into it, on both sides, for nothing.
+    proxy.freeze();
+    assert_eq!(pc.daemon.send(text("copied on the PC meanwhile")), 1);
+    assert_eq!(
+        phone.copied_text("copied on the phone meanwhile".into(), false),
+        Some(1)
+    );
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(received_on_the_phone().len(), 1);
+
+    // Once the phone reconnects, each arrives, once.
+    proxy.hang_up_phone_side();
+    wait_until("the copies made meanwhile", || {
+        received_on_the_phone().len() == 2
+            && pc.clipboard.get() == Some(Raw::Text("copied on the phone meanwhile".into()))
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        received_on_the_phone(),
+        ["before, from the PC", "copied on the PC meanwhile"]
+    );
+    assert_eq!(pc.daemon.recent().len(), 4);
 }
 
 #[test]
