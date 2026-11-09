@@ -246,7 +246,10 @@ fn already_running() -> &'static str {
 pub fn down_reason(reason: &str) -> String {
     if reason.contains("already running") {
         already_running().into()
-    } else if reason.contains("did not answer") {
+    } else if reason.contains("did not answer") || reason.contains("is not running") {
+        // The daemon this tray runs stopped answering, or one started elsewhere went away (the
+        // tray then starts its own at once). Not `pasteget daemon`'s advice: tray users have no
+        // terminal, and the AppImage no `pasteget`.
         tr(
             "It doesn't answer: quit paste-get and start it again.",
             "Il ne répond pas : quitte paste-get et relance-le.",
@@ -499,6 +502,29 @@ mod tests {
         assert_eq!(
             labels(&entries(&State::Starting, None))[0],
             "paste-get is starting…"
+        );
+    }
+
+    /// What the control channel says when nothing answers on it: not its advice for the
+    /// command line (`pasteget daemon`), which tray users don't have.
+    #[tokio::test]
+    async fn no_daemon_on_the_control_channel_is_explained() {
+        use pasteget_desktop::control::{self, Endpoint, Request};
+        pasteget_desktop::i18n::force(pasteget_desktop::i18n::Lang::En);
+        let home = tempfile::tempdir().unwrap();
+        let profile = pasteget_desktop::config::Profile::open_in(home.path(), "pc").unwrap();
+
+        let e = control::call(&Endpoint::for_profile(&profile), &Request::Status, |_| {})
+            .await
+            .unwrap_err();
+
+        let gone = State::Down(down_reason(&format!("{e:#}")));
+        assert_eq!(
+            labels(&entries(&gone, None))[..2],
+            [
+                "paste-get is not running",
+                "It doesn't answer: quit paste-get and start it again."
+            ]
         );
     }
 

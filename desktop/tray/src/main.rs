@@ -318,6 +318,8 @@ async fn refresh_loop<R: Runtime>(app: AppHandle<R>, tray: Arc<Tray>) {
     // Said once, until the daemon runs: the menu says it too, but not every desktop shows the
     // icon (a bar without a tray).
     let mut told_down = false;
+    // Why the last start failed, shown until the next try rather than "not running".
+    let mut start_error: Option<String> = None;
     loop {
         let mut state = fetch(&tray.endpoint).await;
         if matches!(state, State::Down(_)) && !tray.is_hosting() && Instant::now() >= next_start {
@@ -329,7 +331,10 @@ async fn refresh_loop<R: Runtime>(app: AppHandle<R>, tray: Arc<Tray>) {
                 tray.start_hosted().await
             };
             match started {
-                Ok(()) => state = fetch(&tray.endpoint).await,
+                Ok(()) => {
+                    start_error = None;
+                    state = fetch(&tray.endpoint).await;
+                }
                 Err(e) => {
                     tracing::warn!(error = %format!("{e:#}"), "could not start the daemon");
                     let reason = menu::start_error(&e);
@@ -338,12 +343,20 @@ async fn refresh_loop<R: Runtime>(app: AppHandle<R>, tray: Arc<Tray>) {
                         told_down = true;
                         DesktopNotifier::start().notice(menu::start_failed(&reason));
                     }
+                    start_error = Some(reason.clone());
                     state = State::Down(reason);
                 }
             }
         }
+        if matches!(state, State::Down(_))
+            && !tray.is_hosting()
+            && let Some(reason) = &start_error
+        {
+            state = State::Down(reason.clone());
+        }
         if matches!(state, State::Running { .. }) {
             told_down = false;
+            start_error = None;
         }
 
         if !offered_pairing && let State::Running { status, .. } = &state {
