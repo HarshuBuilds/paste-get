@@ -44,6 +44,8 @@ use crate::recent::{RecentClip, RecentClips};
 
 /// Time a not-yet-paired device has to send its pairing request.
 const PAIRING_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// Time a session has to tell a device it was unpaired before its dialer is stopped.
+const UNPAIR_FAREWELL: Duration = Duration::from_secs(3);
 
 /// How to run a daemon.
 #[derive(Clone, Debug)]
@@ -305,7 +307,7 @@ impl Daemon {
     }
 
     /// Unpairs a device: it's no longer trusted, its connection ends now, and it can only come
-    /// back by pairing again.
+    /// back by pairing again. If it's connected, it's told, and forgets this computer too.
     pub fn forget(&self, id: &DeviceId) -> Result<KnownDevice> {
         let device = {
             let mut known = lock(&self.shared.known);
@@ -313,12 +315,22 @@ impl Daemon {
             self.shared.profile.save_known_devices(&known)?;
             device
         };
-        if let Some(dialer) = lock(&self.shared.dialers).remove(id) {
-            dialer.abort();
-        }
         self.shared.peers.unexpect(id);
-        self.shared.peers.disconnect(id);
-        tracing::info!(device = %device.name, id = %device.id, "unpaired");
+        let dialer = lock(&self.shared.dialers).remove(id);
+        let told = self.shared.peers.unpair(id);
+        if let Some(dialer) = dialer {
+            if told {
+                // Its session says so, then ends, and the dialer with it. Stopped anyway in case
+                // the session ended first for another reason.
+                self.shared.spawn(async move {
+                    sleep(UNPAIR_FAREWELL).await;
+                    dialer.abort();
+                });
+            } else {
+                dialer.abort();
+            }
+        }
+        tracing::info!(device = %device.name, id = %device.id, told, "unpaired");
         Ok(device)
     }
 
@@ -601,7 +613,7 @@ impl SessionEvents for Shared {
             // to end it.
             if !known.contains(&peer) {
                 drop(known);
-                self.peers.disconnect(&peer);
+                self.peers.unpair(&peer);
                 return;
             }
             // Renamed there since it last connected.
@@ -619,8 +631,9 @@ impl SessionEvents for Shared {
         tracing::info!(id = %peer, "disconnected");
     }
 
-    /// A computer this one joined unpaired it: forget it too. Its dialer is the caller, and
-    /// ends by itself.
+    /// A device unpaired this computer: forget it too. A phone or a computer that joined this one
+    /// says so in its session; a computer this one joined refuses its dialer, or says so too. Its
+    /// dialer, if any, ends by itself. The tray shows the device gone at its next refresh.
     fn unpaired_by(&self, peer: DeviceId) {
         let removed = {
             let mut known = lock(&self.known);
@@ -1128,11 +1141,22 @@ mod tests {
 
         laptop.daemon.forget(&pc.daemon.device_id()).unwrap();
 
-        // Its dialer stopped: the PC sees no connection coming back.
-        assert!(wait_for_async(|| async { !connected(&pc.daemon).await }).await);
-        sleep(Duration::from_millis(300)).await;
+        // The PC is told: it forgets the laptop too, and says so.
+        assert!(wait_for_async(|| async { pc.daemon.status().await.devices.is_empty() }).await);
+        assert!(
+            pc.notifications
+                .1
+                .lock()
+                .unwrap()
+                .contains(&"laptop unpaired this computer".to_owned())
+        );
+        let known = pc.daemon.shared.profile.known_devices().unwrap();
+        assert!(!known.contains(&laptop.daemon.device_id()));
+        // Its dialer stopped: no connection comes back.
+        sleep(Duration::from_millis(1500)).await;
         assert!(!connected(&pc.daemon).await);
         assert!(laptop.daemon.status().await.devices.is_empty());
+        assert!(laptop.notifications.1.lock().unwrap().is_empty());
     }
 
     async fn pair_as(

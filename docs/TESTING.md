@@ -93,7 +93,7 @@ Watch terminal 2 (the fake phone): each clip it receives logs `clip received …
 | 7 | Stop terminal 2 (Ctrl+C), start it again | Terminal 1 logs `connected` again within ~30 s |
 | 8 | `pasteget pause`, copy some text, then `pasteget --profile phone send "hi"` | Terminal 1 logs `local copy not sent: paused` and `clip dropped: paused`; `Ctrl+V` doesn't paste `hi`. `pasteget resume` brings syncing back |
 | 9 | `pasteget recent` | The last clips, newest first, with where they came from |
-| 10 | Last: `pasteget forget phone` | `Unpaired phone.` Terminal 1 logs `unpaired`; terminal 2 logs `the device unpaired this one: no longer dialing it` and forgets the PC too (`pasteget --profile phone status` lists no device). Pair again (section 2) to go on |
+| 10 | Last: `pasteget forget phone` | `Unpaired phone.` Terminal 1 logs `unpaired`; terminal 2 logs `the device unpaired this one` and forgets the PC too (`pasteget --profile phone status` lists no device). Pair again (section 2) to go on |
 | 11 | Stop terminal 2, replace the fake phone's `devices.toml` (`%APPDATA%\paste-get\phone\` on Windows, `~/.config/paste-get/phone/` on Linux) with a line of garbage, start terminal 2 again | It starts and logs `the paired devices could not be read: starting with none`; the garbage is now in `devices.toml.bad`. Pair again (section 2) to go on |
 
 Screenshot to clipboard:
@@ -144,9 +144,10 @@ The phone and the PC must be on the **same Wi-Fi**. On the PC, run `pasteget dae
 | P7 | Lock the phone for 5 minutes, unlock, repeat P3 | Still works, without opening the app |
 | P8 | Restart the phone, wait a minute, repeat P3 | Still works (the app restarts on boot) |
 | P9 | Scan the PC's pairing QR code with the **normal camera app** (only if it offers to open the link; not every camera does) | paste-get opens and pairs |
-| P10 | On the phone only, forget the computer (the PC still lists it). PC: `pasteget pair`, scan the new code | Phone: "Paired with …", then "Connected to 1 computer". The PC lists the phone once |
+| P10 | Quit paste-get on the PC, forget the computer on the phone, start the PC again (it still lists the phone: it wasn't told). PC: `pasteget pair`, scan the new code | Phone: "Paired with …", then "Connected to 1 computer". The PC lists the phone once |
 | P11 | Turn the phone's Wi-Fi off (mobile data on), scan a pairing code | Within about 10 s, an error that lists each address of the code with its reason, the PC's Wi-Fi or Ethernet address first |
 | P12 | Rename the phone (Settings → About phone → Device name), then force-stop paste-get and open it again | Within seconds `pasteget status` on the PC shows the new name, also after the PC restarts |
+| P13 | With the phone connected, forget the computer on the phone | Within 2 s the PC's tray no longer lists the phone and shows "<phone> unpaired this computer"; `pasteget status` lists no device. Pair again to go on |
 
 Phone logs never contain clipboard contents either. To get them: `adb logcat -s paste-get`.
 
@@ -314,7 +315,7 @@ see its log). Keep the fake phone of section 2 running.
 | T23 | Run an older paste-get (a build from before this row existed, or with a lower `version` in `Cargo.toml`), then start this one | The older icon disappears and this one's shows, without the "already running" notice; the log says "an older paste-get runs for this profile: asking it to quit". With the same version, T19 instead |
 | T24 | Windows: with paste-get running (tray, and `pasteget daemon` in a terminal), run the installer of a newer version | No "paste-get is running" question: both are stopped before the files are copied. After *Finish*, one icon, and `pasteget status` shows the new version |
 | T25 | Windows: tick *Start at login*, then uninstall paste-get (Settings → Apps) | paste-get is no longer in Task Manager → *Startup apps*. Updating with the installer (T24) keeps it there |
-| T13 | Last: menu → the phone → *Forget this device* | The phone disappears from the menu within 2 s and can't reconnect. Within a few seconds the real phone shows "<PC> unpaired this phone" and drops the computer from its list. Pair again to go on |
+| T13 | Last: menu → the phone → *Forget this device* | The phone disappears from the menu within 2 s and can't reconnect. Right away (or, if it was not connected, when it next connects) the real phone shows "<PC> unpaired this phone" and drops the computer from its list. Pair again to go on |
 
 If paste-get doesn't start at all, Windows shows a box saying why, and the log has the details.
 

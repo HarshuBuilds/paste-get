@@ -21,6 +21,7 @@ use std::io::Write;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use pasteget_core::clip::{Clip, Kind, mime};
 use pasteget_core::echo::EchoGuard;
@@ -42,6 +43,8 @@ const IDENTITY_FILE: &str = "identity.key";
 const COMPUTERS_FILE: &str = "computers.json";
 /// Addresses remembered per computer, and found addresses tried per announcement.
 const MAX_ADDRESSES: usize = 8;
+/// Time a session has to tell a computer it was forgotten before its dialer is stopped.
+const UNPAIR_FAREWELL: Duration = Duration::from_secs(3);
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 #[uniffi(flat_error)]
@@ -219,7 +222,8 @@ impl PhoneClient {
         Ok(computer)
     }
 
-    /// Unpairs a computer and drops its connection.
+    /// Unpairs a computer and drops its connection. If it's connected, it's told, and forgets
+    /// this phone too. Doesn't wait for the network.
     pub fn forget(&self, device_id: String) -> Result<(), PastegetError> {
         {
             let mut computers = lock(&self.state.computers);
@@ -232,8 +236,20 @@ impl PhoneClient {
         }
         if let Ok(id) = device_id.parse::<DeviceId>() {
             self.state.peers.unexpect(&id);
-            if let Some(dialer) = lock(&self.dialers).remove(&id) {
-                dialer.task.abort();
+            let dialer = lock(&self.dialers).remove(&id);
+            let told = self.state.peers.unpair(&id);
+            if let Some(dialer) = dialer {
+                if told {
+                    // Its session says so, then ends, and the dialer with it. Stopped anyway in
+                    // case the session ended first for another reason.
+                    let task = dialer.task;
+                    self.runtime.spawn(async move {
+                        tokio::time::sleep(UNPAIR_FAREWELL).await;
+                        task.abort();
+                    });
+                } else {
+                    dialer.task.abort();
+                }
             }
         }
         Ok(())
@@ -422,8 +438,8 @@ impl State {
 }
 
 impl SessionEvents for State {
-    /// The computer unpaired this phone: forget it too. Its dialer is the caller, and ends by
-    /// itself.
+    /// The computer unpaired this phone, and refused its dialer or said so in their session:
+    /// forget it too. Its dialer ends by itself.
     fn unpaired_by(&self, peer: DeviceId) {
         let id = peer.to_string();
         let removed = {
@@ -462,6 +478,12 @@ impl SessionEvents for State {
     }
 
     fn connected(&self, peer: DeviceId, hello: &Hello) {
+        // Forgotten while this connection was being set up: `forget` came too early to end it.
+        let id = peer.to_string();
+        if !lock(&self.computers).iter().any(|c| c.device_id == id) {
+            self.peers.unpair(&peer);
+            return;
+        }
         self.renamed(peer, &hello.device_name);
         if let Some(listener) = self.listener() {
             listener.on_connection_changed(peer.to_string(), true);

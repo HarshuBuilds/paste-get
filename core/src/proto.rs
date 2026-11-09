@@ -55,6 +55,18 @@ mod tests {
     }
 
     #[test]
+    fn unpaired_round_trips() {
+        let original = Envelope {
+            payload: Some(envelope::Payload::Unpaired(Unpaired {})),
+        };
+
+        let encoded = original.encode_to_vec();
+
+        assert_eq!(encoded, [0x52, 0x00]); // Field 10, length-delimited, empty.
+        assert_eq!(Envelope::decode(encoded.as_slice()).unwrap(), original);
+    }
+
+    #[test]
     fn chunk_debug_hides_clip_bytes() {
         let chunk = ClipChunk {
             clip_id: vec![1],

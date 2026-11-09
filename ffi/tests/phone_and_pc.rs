@@ -269,18 +269,21 @@ fn forgetting_a_computer_disconnects_it() {
     ));
 }
 
-/// The phone forgot the PC, which still knows it: scanning a new code pairs them again.
+/// The phone forgot the PC while not connected to it, so the PC still knows it: scanning a new
+/// code pairs them again.
 #[test]
 fn a_phone_that_forgot_the_pc_pairs_again() {
     let pc = start_pc();
     let phone = connected_phone(&pc, "POCO");
     let pc_id = pc.daemon.device_id().to_string();
-    phone.client.forget(pc_id.clone()).unwrap();
+    phone.client.stop();
     wait_until("the PC to see the phone leave", || {
         let status = pc.runtime.block_on(pc.daemon.status());
         status.devices.iter().all(|d| !d.connected)
     });
+    phone.client.forget(pc_id.clone()).unwrap();
     assert_eq!(pc.runtime.block_on(pc.daemon.status()).devices.len(), 1);
+    phone.client.start(phone.listener.clone());
 
     let qr_code = pc
         .runtime
@@ -344,7 +347,28 @@ fn renames_reach_the_other_side() {
     assert_eq!(again.paired_computers()[0].name, "Bureau");
 }
 
-/// The PC unpairs the phone: the phone hears it on its next dial, forgets the PC and says so.
+/// The phone forgets the PC while connected: the PC is told, and forgets the phone too.
+#[test]
+fn a_pc_forgotten_on_the_phone_forgets_it_too() {
+    let pc = start_pc();
+    let phone = connected_phone(&pc, "POCO");
+    let pc_id = pc.daemon.device_id().to_string();
+
+    phone.client.forget(pc_id).unwrap();
+
+    wait_until("the PC to forget the phone", || {
+        pc.runtime.block_on(pc.daemon.status()).devices.is_empty()
+    });
+    let profile = Profile::open_in(pc._home.path(), "pc").unwrap();
+    assert_eq!(profile.known_devices().unwrap().iter().count(), 0);
+    // The phone doesn't dial it again, and wasn't told it was unpaired: it did that itself.
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(phone.client.connected_count(), 0);
+    assert!(phone.listener.unpaired.lock().unwrap().is_empty());
+    assert!(phone.client.paired_computers().is_empty());
+}
+
+/// The PC unpairs the phone: the phone hears it at once, forgets the PC and says so.
 #[test]
 fn a_phone_unpaired_on_the_pc_forgets_it_and_says_so() {
     let pc = start_pc();

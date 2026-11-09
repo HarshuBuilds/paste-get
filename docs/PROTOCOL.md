@@ -56,11 +56,15 @@ ignored, and the certificate may be regenerated at any time without changing the
     acting on anything the client sent. (It reads and discards what arrives for a moment before
     closing, so that TCP doesn't reset the connection and lose the refusal.)
 - **Unpairing**: the device that forgets a peer deletes its ID, closes any session with it at
-  once and stops dialing it. When the peer, which still trusts it, connects again, it gets the
-  `Refusal` above: it then forgets that device too, stops dialing it and tells the user "<device>
-  unpaired this phone". The refusal can't be forged: the connecting side pinned the refusing
-  side's key during the TLS handshake. A client that doesn't know `Refusal` (an older version)
-  sees an unexpected message and keeps retrying, as before.
+  once and stops dialing it. If a session with it is open, it first sends `Unpaired` in it
+  (section 4.4): the peer forgets that device too, at once, whichever side dialed. Otherwise,
+  when the peer, which still trusts it, connects again, it gets the `Refusal` above, with the
+  same effect. Either way the peer stops dialing it and tells the user "<device> unpaired this
+  phone". Neither can be forged: the connecting side pinned the other's key during the TLS
+  handshake, and the accepting side only reads `Unpaired` in a session with a device whose key
+  it knows. A device that doesn't know `Refusal` or `Unpaired` (an older version) ignores
+  `Unpaired` and sees the `Refusal` as an unexpected message, and keeps retrying, as before. A
+  peer that is not connected when it is forgotten, and doesn't dial, isn't told.
 
 In version 0, the PC accepts connections and the phone connects.
 
@@ -184,6 +188,17 @@ say that it arrived, never what it holds.
 
 Either side may send `Ping` at any time; the peer answers with a `Pong` carrying the same
 `nonce`. Used to detect dead connections.
+
+### 4.4 `Unpaired`
+
+Sent in a session, after the `Hello` exchange, by a device that just unpaired the other (section
+2.3). It has no fields. The sender closes the connection right after; what it queued before
+(a clip in flight) may still arrive first. The receiver:
+1. ends the session;
+2. forgets the sender: deletes its ID and anything waiting for it, stops dialing it;
+3. tells the user "<device> unpaired this phone" (or "this computer").
+
+It never answers, and never sends `Unpaired` back.
 
 ## 5. Pairing
 

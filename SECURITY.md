@@ -47,7 +47,7 @@ The full protocol is in [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 | Clips leaving the local network through the OS | On Windows, received clips are marked so the cloud clipboard doesn't upload them to the Microsoft account (they stay in the local Win+V history unless sensitive) |
 | A copy kept for a device that is away | Only the last non-sensitive clip waits, until the device confirms it got it, in memory, never on disk; passwords and 2FA codes are never kept. Forgetting the device drops it |
 | Oversized or malformed input from a paired device | Frames are limited to 1 MiB, clips to 64 MiB, images are size-checked before decoding; the parsers are fuzzed |
-| A lost or stolen phone, once you unpair it | On the PC: tray menu → the phone → *Forget this device*, or `pasteget forget <name>`. Its connection ends at once and it can't connect again without a new pairing code; the phone is told and forgets the PC too. The phone can forget a PC the same way |
+| A lost or stolen phone, once you unpair it | On the PC: tray menu → the phone → *Forget this device*, or `pasteget forget <name>`. Its connection ends at once and it can't connect again without a new pairing code; the phone is told and forgets the PC too. The phone can forget a PC the same way: if connected, the PC is told and forgets the phone too |
 
 ## The built-in mode (wireless debugging)
 

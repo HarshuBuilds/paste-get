@@ -110,8 +110,10 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
 - [x] Pairing from the tray: a *Pair a phone* window with the QR code, opened by itself on the
   first start, so no terminal is needed
 - [x] PC side can revoke a paired phone: `pasteget forget <name>`, or the tray menu → the phone
-  → *Forget this device*; its session ends at once. The phone is told (`Refusal`, `NOT_PAIRED`),
-  forgets the PC too and shows "<PC> unpaired this phone"
+  → *Forget this device*; its session ends at once. The phone is told (`Unpaired` in the
+  session, or `Refusal`, `NOT_PAIRED`, when it next dials), forgets the PC too and shows "<PC>
+  unpaired this phone". Forgetting a connected PC on the phone tells the PC the same way
+  (`TESTING.md`, P13)
 - [x] *Settings…* window in the tray: this computer's name, notifications, links, hotkeys and
   starting at login, checked before saving. Notifications and links apply at once
   (`pasteget` control request `reload_settings`); a new name or hotkeys restart the daemon the

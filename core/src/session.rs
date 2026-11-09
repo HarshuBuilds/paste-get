@@ -22,13 +22,13 @@ use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
-use tokio::sync::{Notify, mpsc, watch};
+use tokio::sync::{mpsc, watch};
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep, sleep_until, timeout};
 
 use crate::clip::{self, Clip, ClipReceiver, Received};
 use crate::identity::{DeviceId, Identity};
 use crate::proto::envelope::Payload;
-use crate::proto::{Ack, AckStatus, Envelope, Hello, Ping, Pong};
+use crate::proto::{Ack, AckStatus, Envelope, Hello, Ping, Pong, Unpaired};
 use crate::transport::{self, Connection, EnvelopeReader, EnvelopeWriter, TransportError};
 
 /// Time allowed for the TLS handshake, and separately for the Hello exchange.
@@ -44,6 +44,8 @@ pub const RECONNECT_MAX: Duration = Duration::from_secs(30);
 pub const OUTGOING_QUEUE: usize = 16;
 /// Sent clips still waiting for their [`Ack`]. Beyond that, the oldest is no longer timed.
 const AWAITING_ACK: usize = 32;
+/// How long [`Peers::unpair`] waits for room in a full queue to say [`Unpaired`].
+const FAREWELL_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -55,6 +57,12 @@ pub enum SessionError {
     Protocol(&'static str),
     #[error("the session was closed")]
     Closed,
+    /// This device unpaired the other ([`Peers::unpair`]) and told it so.
+    #[error("this device unpaired the other one")]
+    Unpaired,
+    /// The other device unpaired this one and said so ([`Unpaired`]).
+    #[error("the device unpaired this one")]
+    UnpairedByPeer,
 }
 
 /// What a session reports to the app. Called from session tasks: keep it quick.
@@ -75,8 +83,9 @@ pub trait SessionEvents: Send + Sync {
     /// `peer` acknowledged a clip this side sent.
     fn clip_delivered(&self, _peer: DeviceId, _delivery: &Delivery) {}
 
-    /// `peer` refused [`keep_connected`] because it unpaired this device, which has then
-    /// stopped dialing it. The place to forget it and tell the user.
+    /// `peer` unpaired this device: it refused [`keep_connected`], or said so in a session
+    /// ([`Unpaired`]), which then ended, after [`SessionEvents::disconnected`]. Its dialer, if any,
+    /// has stopped. The place to forget it and tell the user.
     fn unpaired_by(&self, _peer: DeviceId) {}
 }
 
@@ -116,8 +125,17 @@ struct Numbered {
 struct PeerQueue {
     session: u64,
     sender: mpsc::Sender<Outgoing>,
-    /// Ends the session: the device was unpaired.
-    kick: Arc<Notify>,
+    /// Ends the session, and says how.
+    kick: watch::Sender<Option<Ending>>,
+}
+
+/// Why this side ends a session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ending {
+    /// [`Peers::disconnect`].
+    Disconnect,
+    /// [`Peers::unpair`]: the device is told first.
+    Unpair,
 }
 
 #[derive(Debug)]
@@ -201,22 +219,38 @@ impl Peers {
         self.lock().contains_key(peer)
     }
 
-    /// Ends the session with `peer`, if one runs: call it after unpairing the device, so it
-    /// doesn't stay connected until it hangs up. Returns whether a session was ended.
+    /// Ends the session with `peer`, if one runs, without saying why (it paired again, say).
+    /// Returns whether a session was ended.
     pub fn disconnect(&self, peer: &DeviceId) -> bool {
+        self.end(peer, Ending::Disconnect)
+    }
+
+    /// Tells `peer` it was unpaired ([`Unpaired`]) and ends the session with it, if one runs:
+    /// call it after unpairing the device, so that it forgets this one too, at once. Returns
+    /// whether a session runs; it then ends with [`SessionError::Unpaired`], which also stops
+    /// [`keep_connected`].
+    pub fn unpair(&self, peer: &DeviceId) -> bool {
+        self.end(peer, Ending::Unpair)
+    }
+
+    fn end(&self, peer: &DeviceId, ending: Ending) -> bool {
         match self.lock().get(peer) {
             Some(queue) => {
-                // Stored if the session isn't waiting yet.
-                queue.kick.notify_one();
+                // Kept if the session isn't waiting yet.
+                queue.kick.send_replace(Some(ending));
                 true
             }
             None => false,
         }
     }
 
-    fn register(&self, peer: DeviceId, sender: mpsc::Sender<Outgoing>) -> (u64, Arc<Notify>) {
+    fn register(
+        &self,
+        peer: DeviceId,
+        sender: mpsc::Sender<Outgoing>,
+    ) -> (u64, watch::Receiver<Option<Ending>>) {
         let session = self.next_session.fetch_add(1, Ordering::Relaxed);
-        let kick = Arc::new(Notify::new());
+        let (kick, kicked) = watch::channel(None);
         let mut queues = self.lock();
         // What it missed goes first. It keeps waiting until the device acknowledges it, in case
         // this session dies too.
@@ -234,10 +268,10 @@ impl Peers {
             PeerQueue {
                 session,
                 sender,
-                kick: Arc::clone(&kick),
+                kick,
             },
         );
-        (session, kick)
+        (session, kicked)
     }
 
     /// `peer` acknowledged the clip `number`: if it's the one waiting for it, it waits no more.
@@ -318,7 +352,7 @@ where
     let (reader, writer) = connection.into_split();
     let (sender, queue) = mpsc::channel(OUTGOING_QUEUE);
     let awaiting = AwaitingAck::default();
-    let (session, kick) = peers.register(peer, sender.clone());
+    let (session, mut kick) = peers.register(peer, sender.clone());
     let mut guard = SessionGuard {
         peers,
         events,
@@ -335,9 +369,18 @@ where
 
     let result = tokio::select! {
         result = read_loop(peer, reader, &sender, &awaiting, peers, events) => result,
-        () = kick.notified() => {
-            tracing::info!(%peer, "session ended: the device was unpaired");
-            Err(SessionError::Closed)
+        ending = kicked(&mut kick) => match ending {
+            Ending::Disconnect => {
+                tracing::info!(%peer, "session ended by this device");
+                Err(SessionError::Closed)
+            }
+            Ending::Unpair => {
+                tracing::info!(%peer, "session ended: this device unpaired it");
+                // The writer sends what's queued before it closes the connection.
+                let farewell = reply(&sender, Payload::Unpaired(Unpaired {}));
+                let _ = timeout(FAREWELL_TIMEOUT, farewell).await;
+                Err(SessionError::Unpaired)
+            }
         }
     };
 
@@ -350,7 +393,25 @@ where
         tracing::debug!(%peer, "writer did not stop in time");
         writer.abort();
     }
+    // Reports the disconnection first.
+    drop(guard);
+    if matches!(result, Err(SessionError::UnpairedByPeer)) {
+        tracing::info!(%peer, "the device unpaired this one");
+        events.unpaired_by(peer);
+    }
     result
+}
+
+/// Resolves once the session is kicked; never if its queue was replaced by a newer session's.
+async fn kicked(kick: &mut watch::Receiver<Option<Ending>>) -> Ending {
+    let ending = kick
+        .wait_for(Option::is_some)
+        .await
+        .map(|ending| ending.unwrap_or(Ending::Disconnect));
+    match ending {
+        Ok(ending) => ending,
+        Err(_) => std::future::pending().await,
+    }
 }
 
 /// Tears a session down even if `run_session` is cancelled: forgets the device, stops the
@@ -386,8 +447,9 @@ impl Drop for SessionGuard<'_> {
     }
 }
 
-/// Keeps a connection to `peer` open forever: dials its addresses in turn, runs a session, and
-/// redials with backoff when it ends. Cancel by dropping or aborting the task.
+/// Keeps a connection to `peer` open: dials its addresses in turn, runs a session, and redials
+/// with backoff when it ends. Stops once either side unpaired the other; otherwise cancel by
+/// dropping or aborting the task.
 ///
 /// `addresses` may change while it runs, for example when the device is found at a new address.
 /// Every update, even one with the same addresses, also cuts short the wait before the next
@@ -424,6 +486,13 @@ pub async fn keep_connected(
                             events.unpaired_by(peer);
                             return;
                         }
+                        // Said in the session, as genuine; the session reported it.
+                        Err(SessionError::UnpairedByPeer) => {
+                            tracing::info!(%peer, "no longer dialing it");
+                            return;
+                        }
+                        // This device unpaired it.
+                        Err(SessionError::Unpaired) => return,
                         Err(e) => tracing::info!(%peer, error = %e, "session ended"),
                     }
                     break;
@@ -476,6 +545,7 @@ async fn read_loop<R: AsyncRead + Unpin>(
                 acknowledged(peer, &ack, awaiting, peers, events);
                 continue;
             }
+            Some(Payload::Unpaired(Unpaired {})) => return Err(SessionError::UnpairedByPeer),
             // Pongs only prove the peer is alive; unknown payloads come from newer peers.
             Some(Payload::Pong(_)) | None => continue,
             Some(
@@ -758,6 +828,118 @@ mod tests {
         assert!(timeout(Duration::from_secs(5), phone_session).await.is_ok());
         // Nothing left to end.
         assert!(!pc_peers.disconnect(&phone.device_id()));
+    }
+
+    #[tokio::test]
+    async fn an_unpaired_device_is_told_and_forgets_this_one() {
+        let (phone, pc) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (phone_io, pc_io) = duplex(64 * 1024);
+        let (client, server) = tokio::join!(
+            transport::connect(phone_io, &phone, pc.device_id()),
+            async { transport::accept(pc_io, &pc).await?.authorize(|_| true) }
+        );
+        let (phone_peers, pc_peers) = (Arc::new(Peers::new()), Arc::new(Peers::new()));
+        let (phone_events, pc_events) =
+            (Arc::new(Recorder::default()), Arc::new(Recorder::default()));
+        let phone_session = tokio::spawn({
+            let (peers, events) = (Arc::clone(&phone_peers), Arc::clone(&phone_events));
+            async move { run_session(client.unwrap(), hello("phone"), &peers, &*events).await }
+        });
+        let pc_session = tokio::spawn({
+            let (peers, events) = (Arc::clone(&pc_peers), Arc::clone(&pc_events));
+            async move { run_session(server.unwrap(), hello("pc"), &peers, &*events).await }
+        });
+        until(|| {
+            phone_peers.is_connected(&pc.device_id()) && pc_peers.is_connected(&phone.device_id())
+        })
+        .await;
+
+        assert!(pc_peers.unpair(&phone.device_id()));
+
+        let pc_ended = timeout(Duration::from_secs(5), pc_session).await.unwrap();
+        assert!(matches!(pc_ended.unwrap(), Err(SessionError::Unpaired)));
+        let phone_ended = timeout(Duration::from_secs(5), phone_session)
+            .await
+            .unwrap();
+        assert!(matches!(
+            phone_ended.unwrap(),
+            Err(SessionError::UnpairedByPeer)
+        ));
+        assert_eq!(*phone_events.unpaired_by.lock().unwrap(), [pc.device_id()]);
+        assert_eq!(*phone_events.disconnected.lock().unwrap(), [pc.device_id()]);
+        // The side that unpaired isn't told it was.
+        assert!(pc_events.unpaired_by.lock().unwrap().is_empty());
+        assert!(!pc_peers.unpair(&phone.device_id()));
+    }
+
+    /// Accepts any device on `listener` and runs a session with it.
+    fn serve(listener: TcpListener, pc: Identity, peers: Arc<Peers>, events: Arc<Recorder>) {
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                let Ok(unverified) = transport::accept(socket, &pc).await else {
+                    continue;
+                };
+                let connection = unverified.authorize(|_| true).unwrap();
+                let _ = run_session(connection, hello("pc"), &peers, &*events).await;
+            }
+        });
+    }
+
+    #[tokio::test]
+    async fn keep_connected_stops_when_this_side_unpairs() {
+        let (phone, pc) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (phone_id, pc_id) = (phone.device_id(), pc.device_id());
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let (_addresses, watched) = watch::channel(vec![listener.local_addr().unwrap()]);
+        let (pc_peers, pc_events) = (Arc::new(Peers::new()), Arc::new(Recorder::default()));
+        serve(listener, pc, Arc::clone(&pc_peers), Arc::clone(&pc_events));
+        let phone_peers = Arc::new(Peers::new());
+        let phone_events = Arc::new(Recorder::default());
+        let dialer = tokio::spawn({
+            let (peers, events) = (Arc::clone(&phone_peers), Arc::clone(&phone_events));
+            async move {
+                keep_connected(&phone, pc_id, watched, &hello("phone"), &peers, &*events).await;
+            }
+        });
+        until(|| phone_peers.is_connected(&pc_id)).await;
+
+        assert!(phone_peers.unpair(&pc_id));
+
+        timeout(Duration::from_secs(5), dialer)
+            .await
+            .expect("keep_connected should stop")
+            .unwrap();
+        until(|| !pc_events.unpaired_by.lock().unwrap().is_empty()).await;
+        assert_eq!(*pc_events.unpaired_by.lock().unwrap(), [phone_id]);
+        assert!(phone_events.unpaired_by.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn keep_connected_stops_when_the_other_side_unpairs() {
+        let (phone, pc) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (phone_id, pc_id) = (phone.device_id(), pc.device_id());
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let (_addresses, watched) = watch::channel(vec![listener.local_addr().unwrap()]);
+        let pc_peers = Arc::new(Peers::new());
+        serve(listener, pc, Arc::clone(&pc_peers), Arc::default());
+        let phone_events = Arc::new(Recorder::default());
+        let dialer = tokio::spawn({
+            let events = Arc::clone(&phone_events);
+            async move {
+                let peers = Peers::new();
+                keep_connected(&phone, pc_id, watched, &hello("phone"), &peers, &*events).await;
+            }
+        });
+        until(|| pc_peers.is_connected(&phone_id)).await;
+
+        assert!(pc_peers.unpair(&phone_id));
+
+        timeout(Duration::from_secs(5), dialer)
+            .await
+            .expect("keep_connected should stop")
+            .unwrap();
+        // Reported once, by the session.
+        assert_eq!(*phone_events.unpaired_by.lock().unwrap(), [pc_id]);
     }
 
     #[tokio::test]

@@ -19,8 +19,14 @@ message Envelope {
     PairRequest pair_request = 7;
     PairResponse pair_response = 8;
     Refusal refusal = 9;
+    Unpaired unpaired = 10;
   }
 }
+
+// Sent in a session by a device that just unpaired the other, right before it closes the
+// connection. The receiver forgets the sender too, as after a Refusal with NOT_PAIRED, stops
+// dialing it and tells the user. Devices that don't know it ignore it.
+message Unpaired {}
 
 // Sent by the accepting device, instead of anything else, to a device it won't talk to; the
 // connection is closed right after. The connecting device has pinned the sender's key, so it
