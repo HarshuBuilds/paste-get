@@ -39,6 +39,7 @@ use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::{sleep, timeout};
 
+use crate::admission::{Admission, Ticket};
 use crate::clipboard::{ClipboardBackend, ClipboardWatcher, Content, DEFAULT_POLL_INTERVAL};
 use crate::config::{
     KnownDevice, KnownDevices, LoadedDevices, MAX_ADDRESSES, NotifyFor, Profile, Settings,
@@ -49,8 +50,9 @@ use crate::i18n::{french, tr};
 use crate::notify::{Notifier, Received};
 use crate::recent::{RecentClip, RecentClips};
 
-/// Time a not-yet-paired device has to send its pairing request.
-const PAIRING_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// Time an incoming connection has for its TLS handshake, and a device that isn't paired for its
+/// pairing request: anyone on the network can open one ([`Admission`]).
+const UNKNOWN_DEADLINE: Duration = Duration::from_secs(3);
 /// Time a session has to tell a device it was unpaired before its dialer is stopped.
 const UNPAIR_FAREWELL: Duration = Duration::from_secs(3);
 
@@ -128,6 +130,8 @@ struct Shared {
     known: Mutex<KnownDevices>,
     /// Locked only for quick checks, never across network I/O: status reads it.
     pairing: Mutex<Option<PairingWindow>>,
+    /// Incoming connections not known yet to come from a paired device.
+    admission: Arc<Admission>,
     peers: Peers,
     guard: Mutex<EchoGuard>,
     clipboard: ClipboardWatcher,
@@ -195,6 +199,7 @@ impl Daemon {
             advertised_ips: options.advertised_ips,
             known: Mutex::new(known),
             pairing: Mutex::new(None),
+            admission: Arc::default(),
             peers,
             clipboard,
             notifier: options.notifier,
@@ -665,19 +670,19 @@ impl Shared {
         self.paired(result)
     }
 
+    /// Says that a pairing attempt failed, and returns why.
+    fn pairing_failed(&self, e: PairingError) -> anyhow::Error {
+        // Closed: the code was used meanwhile, maybe by this device through another of its
+        // addresses, or closed after wrong attempts already reported.
+        if !matches!(e, PairingError::Closed) {
+            let _ = self.events.send(Event::PairingFailed(e.to_string()));
+        }
+        e.into()
+    }
+
     /// Stores a device that just paired, or paired again, and says so.
     fn paired(&self, result: Result<PairedDevice, PairingError>) -> Result<()> {
-        let paired = match result {
-            Ok(paired) => paired,
-            Err(e) => {
-                // Closed: the code was used meanwhile, maybe by this device through another of
-                // its addresses, or closed after wrong attempts already reported.
-                if !matches!(e, PairingError::Closed) {
-                    let _ = self.events.send(Event::PairingFailed(e.to_string()));
-                }
-                return Err(e.into());
-            }
-        };
+        let paired = result.map_err(|e| self.pairing_failed(e))?;
         // Paired again: it keeps its addresses, if this computer dials it.
         let known = lock(&self.known).get(&paired.device_id).cloned();
         let again = known.is_some();
@@ -843,9 +848,15 @@ async fn accept_loop(shared: Arc<Shared>, listener: TcpListener) {
     loop {
         match listener.accept().await {
             Ok((socket, address)) => {
+                // Closed at once.
+                let Some(ticket) = shared.admission.admit(address.ip()) else {
+                    tracing::debug!(%address, "connection refused: too many from this address");
+                    continue;
+                };
                 let shared_for_task = Arc::clone(&shared);
                 shared.spawn(async move {
-                    if let Err(e) = handle_incoming(Arc::clone(&shared_for_task), socket).await {
+                    let shared = Arc::clone(&shared_for_task);
+                    if let Err(e) = handle_incoming(shared, socket, ticket).await {
                         tracing::info!(%address, error = %e, "incoming connection ended");
                     }
                 });
@@ -858,49 +869,72 @@ async fn accept_loop(shared: Arc<Shared>, listener: TcpListener) {
     }
 }
 
-async fn handle_incoming(shared: Arc<Shared>, socket: TcpStream) -> Result<()> {
-    let unverified = timeout(
-        HANDSHAKE_TIMEOUT,
-        transport::accept(socket, &shared.identity),
-    )
-    .await
-    .context("TLS handshake timed out")??;
-    let peer = unverified.peer();
+/// What an incoming connection is, once past the part anyone on the network can reach.
+enum Opened<C, R> {
+    /// A paired device: its connection, past the TLS handshake.
+    Paired(C),
+    /// A device that isn't paired sent its pairing request, to answer.
+    Pairing(R),
+}
 
-    if lock(&shared.known).contains(&peer) {
-        let connection = unverified.authorize(|id| lock(&shared.known).contains(id))?;
-        let opening = timeout(HANDSHAKE_TIMEOUT, pairing::read_opening(connection))
-            .await
-            .context("the device sent nothing in time")??;
-        return match opening {
-            Opening::Hello(connection, hello) => {
-                session::answer_session(connection, hello, shared.hello(), &shared.peers, &*shared)
-                    .await?;
-                Ok(())
-            }
-            // It forgot this computer and scanned its pairing code: it pairs again.
-            Opening::PairRequest(request) => shared.answer_pairing(request).await,
-        };
-    }
-
-    if !shared.pairing_open() {
-        // Said, so that a phone unpaired here stops dialing and tells its user. Not to one that
-        // may be among the paired devices that couldn't be read: it would forget this computer.
-        let reason = if shared.devices_set_aside && !lock(&shared.forgotten).contains(&peer) {
-            RefusalReason::Unspecified
-        } else {
-            RefusalReason::NotPaired
-        };
-        let _ = timeout(HANDSHAKE_TIMEOUT, unverified.refuse(reason)).await;
-        bail!("refused device {peer}: not paired and no pairing code is shown");
-    }
-    // Nothing is locked while waiting: a device that stays silent holds up no other.
-    let request = match timeout(PAIRING_REQUEST_TIMEOUT, pairing::read_request(unverified)).await {
-        Ok(Ok(request)) => request,
-        Ok(Err(e)) => return shared.paired(Err(e)),
-        Err(_) => bail!("device {peer} did not send its pairing request in time"),
+async fn handle_incoming(shared: Arc<Shared>, socket: TcpStream, mut ticket: Ticket) -> Result<()> {
+    // Anyone can get this far: the TLS handshake, then, for a device that isn't paired, its
+    // pairing request or a refusal. It's short, and cut shorter when newer connections need the
+    // room. Nothing is locked while waiting: a device that stays silent holds up no other.
+    let reached = async {
+        let unverified = timeout(
+            UNKNOWN_DEADLINE,
+            transport::accept(socket, &shared.identity),
+        )
+        .await
+        .context("TLS handshake timed out")??;
+        let peer = unverified.peer();
+        if lock(&shared.known).contains(&peer) {
+            let connection = unverified.authorize(|id| lock(&shared.known).contains(id))?;
+            return Ok(Opened::Paired(connection));
+        }
+        if !shared.pairing_open() {
+            // Said, so that a phone unpaired here stops dialing and tells its user. Not to one
+            // that may be among the paired devices that couldn't be read: it would forget this
+            // computer.
+            let reason = if shared.devices_set_aside && !lock(&shared.forgotten).contains(&peer) {
+                RefusalReason::Unspecified
+            } else {
+                RefusalReason::NotPaired
+            };
+            let _ = timeout(UNKNOWN_DEADLINE, unverified.refuse(reason)).await;
+            bail!("refused device {peer}: not paired and no pairing code is shown");
+        }
+        match timeout(UNKNOWN_DEADLINE, pairing::read_request(unverified)).await {
+            Ok(Ok(request)) => Ok(Opened::Pairing(request)),
+            Ok(Err(e)) => Err(shared.pairing_failed(e)),
+            Err(_) => bail!("device {peer} did not send its pairing request in time"),
+        }
     };
-    shared.answer_pairing(request).await
+    let opened = tokio::select! {
+        opened = reached => opened?,
+        () = ticket.closed() => bail!("closed to make room for newer connections"),
+    };
+
+    let connection = match opened {
+        Opened::Paired(connection) => connection,
+        // Not cut short any more: once its secret is checked, the device must hear the answer.
+        Opened::Pairing(request) => return shared.answer_pairing(request).await,
+    };
+    // Proven paired: no longer limited.
+    drop(ticket);
+    let opening = timeout(HANDSHAKE_TIMEOUT, pairing::read_opening(connection))
+        .await
+        .context("the device sent nothing in time")??;
+    match opening {
+        Opening::Hello(connection, hello) => {
+            session::answer_session(connection, hello, shared.hello(), &shared.peers, &*shared)
+                .await?;
+            Ok(())
+        }
+        // It forgot this computer and scanned its pairing code: it pairs again.
+        Opening::PairRequest(request) => shared.answer_pairing(request).await,
+    }
 }
 
 /// An address of this PC, and the network interface it is on.
@@ -1611,6 +1645,101 @@ mod tests {
             .await
             .expect("pairing waited for the silent client");
         assert_eq!(joined.unwrap().name, "pc");
+    }
+
+    /// A TCP connection from `ip` to `pc` that sends nothing, once the daemon counts it.
+    async fn silent_connection(pc: &Daemon, ip: Ipv4Addr) -> TcpStream {
+        let before = pc.shared.admission.len();
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.bind(SocketAddr::from((ip, 0))).unwrap();
+        let stream = socket.connect(pc.local_addr()).await.unwrap();
+        assert!(wait_for(|| pc.shared.admission.len() > before).await);
+        stream
+    }
+
+    /// Whether the daemon closed `stream` within `within`.
+    async fn closed_within(stream: &mut TcpStream, within: Duration) -> bool {
+        use tokio::io::AsyncReadExt;
+        let mut buf = [0; 64];
+        matches!(
+            timeout(within, stream.read(&mut buf)).await,
+            Ok(Ok(0) | Err(_))
+        )
+    }
+
+    /// A paired phone opens a session with `pc`, from `ip`.
+    async fn connects_from(pc: &Daemon, phone: &Identity, ip: Ipv4Addr) -> bool {
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.bind(SocketAddr::from((ip, 0))).unwrap();
+        let socket = socket.connect(pc.local_addr()).await.unwrap();
+        let mut connection = transport::connect(socket, phone, pc.device_id())
+            .await
+            .unwrap();
+        let hello = Hello {
+            protocol_version: PROTOCOL_VERSION,
+            device_name: "POCO".into(),
+            ..Hello::default()
+        };
+        connection.exchange_hello(hello).await.is_ok()
+    }
+
+    #[tokio::test]
+    async fn a_silent_connection_is_closed_after_a_few_seconds() {
+        let pc = start("pc").await;
+        let started = Instant::now();
+        let mut silent = silent_connection(&pc.daemon, Ipv4Addr::LOCALHOST).await;
+
+        assert!(closed_within(&mut silent, UNKNOWN_DEADLINE + Duration::from_secs(2)).await);
+        assert!(started.elapsed() >= UNKNOWN_DEADLINE - Duration::from_millis(500));
+        assert!(wait_for(|| pc.daemon.shared.admission.is_empty()).await);
+    }
+
+    #[tokio::test]
+    async fn one_address_gets_eight_connections_at_once() {
+        let pc = start("pc").await;
+        let mut silent = Vec::new();
+        for _ in 0..crate::admission::PER_IP {
+            silent.push(silent_connection(&pc.daemon, Ipv4Addr::LOCALHOST).await);
+        }
+
+        // The ninth is closed at once; the others are still open.
+        let mut ninth = TcpStream::connect(pc.daemon.local_addr()).await.unwrap();
+        assert!(closed_within(&mut ninth, Duration::from_secs(1)).await);
+        for stream in &mut silent {
+            assert!(!closed_within(stream, Duration::from_millis(10)).await);
+        }
+
+        // Once they're gone, a paired device from that address connects.
+        drop(silent);
+        assert!(wait_for(|| pc.daemon.shared.admission.is_empty()).await);
+        let phone = Identity::generate().unwrap();
+        let invite = pc.daemon.open_pairing().await.unwrap();
+        pair_as(&pc.daemon, &phone, &invite, "POCO").await.unwrap();
+        assert!(connects_from(&pc.daemon, &phone, Ipv4Addr::LOCALHOST).await);
+    }
+
+    /// Silent connections from many addresses fill every place: the oldest makes room, and a
+    /// paired device still connects. Linux only: it needs several loopback addresses.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_paired_device_still_connects_during_a_flood() {
+        use crate::admission::{AT_ONCE, PER_IP};
+        let pc = start("pc").await;
+        let phone = Identity::generate().unwrap();
+        let invite = pc.daemon.open_pairing().await.unwrap();
+        pair_as(&pc.daemon, &phone, &invite, "POCO").await.unwrap();
+        let mut flood = Vec::new();
+        for n in 0..AT_ONCE {
+            let ip = Ipv4Addr::new(127, 0, 0, 2 + u8::try_from(n / PER_IP).unwrap());
+            flood.push(silent_connection(&pc.daemon, ip).await);
+        }
+        assert_eq!(pc.daemon.shared.admission.len(), AT_ONCE);
+
+        assert!(connects_from(&pc.daemon, &phone, Ipv4Addr::LOCALHOST).await);
+
+        assert!(wait_for_async(|| connected(&pc.daemon)).await);
+        assert!(closed_within(&mut flood[0], Duration::from_secs(1)).await);
+        assert!(!closed_within(&mut flood[1], Duration::from_millis(10)).await);
     }
 
     #[tokio::test]

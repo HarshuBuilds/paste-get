@@ -24,6 +24,7 @@ make trust decisions. In order of risk:
 | `core/src/history/record.rs` | The one place that decides what the clipboard history keeps | ~380 |
 | `core/src/history/retention.rs` | Deleting from the history, and keeping it small | ~360 |
 | `desktop/src/daemon.rs` | `handle_incoming`: known device → session, unknown → pairing only while a window is open | part |
+| `desktop/src/admission.rs` | Limits on connections not known yet to come from a paired device | ~110 |
 | `desktop/src/control.rs` | Local control channel: Unix socket in a 0700 directory, Windows named pipe | ~550 |
 | `desktop/src/config.rs` | Key file permissions (0600), profile names (path traversal) | part |
 | `ffi/src/lib.rs` | The same decisions on the phone side, through the core | part |
@@ -62,7 +63,9 @@ Each line is a claim to check. "→" points at where it's enforced.
 7. An unknown device can do nothing but send one `PairRequest`, and only while a window is
    open. A paired device that sends a `PairRequest` instead of its `Hello` (pairing again) is
    checked against the same window. → `desktop/src/daemon.rs` `handle_incoming`,
-   `PAIRING_REQUEST_TIMEOUT`, `pairing::read_opening`
+   `UNKNOWN_DEADLINE`, `pairing::read_opening`. Connections not known to come from a paired
+   device are limited (3 s deadlines, 8 per IP, 64 in all, the oldest closed past that), and
+   one that was proven paired is no longer counted. → `desktop/src/admission.rs`
 8. The secret: 16 bytes from the system RNG (`ring::rand::SystemRandom`), compared in
    constant time, valid once, for 5 minutes, at most 3 wrong tries. → `PairingWindow::check`.
    It runs under the window's lock, which is never held across network I/O: attempts made at

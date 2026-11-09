@@ -119,6 +119,9 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
   errors are explained in the phone's language, with the technical message under *Details*.
   Only the code's addresses on the local network are dialed, never one on the Internet or of
   the phone itself (`TESTING.md`, P18)
+- [x] Connections not known to come from a paired device are limited: 3 s for the TLS handshake
+  and the first message, 8 at once per address, 64 in all, the oldest closed past that so that a
+  paired device still gets in (`TESTING.md`, section 3, row 13)
 - [x] *Settings…* window in the tray: this computer's name, notifications, links, hotkeys and
   starting at login, checked before saving. Notifications and links apply at once
   (`pasteget` control request `reload_settings`); a new name or hotkeys restart the daemon the

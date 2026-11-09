@@ -55,6 +55,12 @@ ignored, and the certificate may be regenerated at any time without changing the
   - **otherwise** → send a `Refusal` with reason `NOT_PAIRED` and close the connection, without
     acting on anything the client sent. (It reads and discards what arrives for a moment before
     closing, so that TCP doesn't reset the connection and lose the refusal.)
+- **Limits.** Anyone on the network can open a connection, so the accepting side limits those
+  not known yet to come from a paired device (in their TLS handshake, or from a device that
+  isn't paired): **3 s** for the TLS handshake, 3 s more for the first message of a device that
+  isn't paired, at most **8 at once from one IP address** (one more is closed at once) and **64
+  in all** (one more makes the oldest close, so that a paired device can always get in). A
+  connection is no longer counted once the handshake proved its device is paired.
 - **Unpairing**: the device that forgets a peer deletes its ID, closes any session with it at
   once and stops dialing it. If a session with it is open, it first sends `Unpaired` in it
   (section 4.4): the peer forgets that device too, at once, whichever side dialed. Otherwise,
