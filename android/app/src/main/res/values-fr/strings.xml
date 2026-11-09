@@ -54,8 +54,11 @@
     <string name="paired_computers">Ordinateurs appairés</string>
     <string name="connected">Connecté</string>
     <string name="offline">Hors ligne</string>
-    <string name="forget">Oublier…</string>
-    <string name="forget_named">Oublier %s</string>
+    <string name="device_details">Détails</string>
+    <string name="device_connected_ms">Connecté · %d ms</string>
+    <string name="device_addresses">Adresses</string>
+    <string name="device_addresses_text">Là où ce téléphone le joint, la dernière qui a marché en premier. paste-get le retrouve aussi sur le réseau local quand son adresse change.</string>
+    <string name="forget_this">Oublier cet ordinateur…</string>
     <string name="forget_title">Oublier %s ?</string>
     <string name="forget_text">%1$s ne recevra plus ce que tu copies, et ce téléphone ne s\'y connectera plus. Pour le réutiliser, appaire-le à nouveau. Sur l\'ordinateur, ce téléphone reste dans la liste jusqu\'à ce que tu l\'oublies là-bas aussi.</string>
     <string name="forget_confirm">Oublier</string>

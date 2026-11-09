@@ -23,6 +23,10 @@ sealed interface Route : NavKey {
     @Serializable
     data object Devices : Route
 
+    /** A paired computer's page, above Devices. */
+    @Serializable
+    data class Device(val deviceId: String) : Route
+
     /** Behind the gear in each tab's top bar. */
     @Serializable
     data object Settings : Route

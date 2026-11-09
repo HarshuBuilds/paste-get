@@ -2,6 +2,7 @@
 
 package io.github.nexoryx.pasteget.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,15 +22,11 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -39,10 +36,10 @@ import uniffi.pasteget_ffi.PairedComputer
 
 /**
  * "Who is paired?": the computers, this phone, and the button that pairs another computer.
- * [onSettings] is the shell's.
+ * [onSettings] and [onOpen] (a computer's page, by device ID) are the shell's.
  */
 @Composable
-fun DevicesScreen(state: AppState, actions: AppActions, onSettings: () -> Unit = {}) {
+fun DevicesScreen(state: AppState, actions: AppActions, onSettings: () -> Unit = {}, onOpen: (String) -> Unit = {}) {
     val scroll = rememberScrollState()
     // Recomposes when the list leaves the top or comes back, not on every pixel scrolled.
     val atTop by remember { derivedStateOf { scroll.value == 0 } }
@@ -60,9 +57,12 @@ fun DevicesScreen(state: AppState, actions: AppActions, onSettings: () -> Unit =
             )
         },
         scroll = scroll,
+        // Pulling down dials every computer now and searches the network again.
+        refreshing = state.refreshing,
+        onRefresh = actions.onRefresh,
     ) {
         state.unpairedBy?.let { UnpairedBanner(it, actions) }
-        ComputerList(state.computers, state.connected, actions.onForget)
+        ComputerList(state, onOpen)
         state.thisPhone?.let { ThisPhoneCard(it) }
     }
 }
@@ -124,67 +124,60 @@ private fun ThisPhoneCard(phone: ThisPhone) {
 /** "3F2A 9C11 …": easier to compare than 52 characters in a row. */
 fun groupedId(deviceId: String): String = deviceId.chunked(4).joinToString(" ")
 
-/** The paired computers, each with its state and a Forget button that asks first. */
+/** The paired computers, each with its state; a tap opens its page. */
 @Composable
-fun ComputerList(computers: List<PairedComputer>, connected: Set<String>, onForget: (PairedComputer) -> Unit) {
-    // The device ID of the computer the dialog asks about: kept when the screen rotates.
-    var asking by rememberSaveable { mutableStateOf<String?>(null) }
+private fun ComputerList(state: AppState, onOpen: (String) -> Unit) {
     Text(
         stringResource(R.string.paired_computers),
         style = MaterialTheme.typography.titleSmall,
         modifier = Modifier.semantics { heading() },
     )
-    if (computers.isEmpty()) {
+    if (state.computers.isEmpty()) {
         Text(
             stringResource(R.string.notification_no_computer),
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
-    computers.forEach { computer ->
-        Card(modifier = Modifier.fillMaxWidth()) {
+    val details = stringResource(R.string.device_details)
+    state.computers.forEach { computer ->
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                // Read as one: "HP-AIO, Connected · 38 ms, double-tap to see details".
+                .clickable(onClickLabel = details) { onOpen(computer.deviceId) },
+        ) {
             Row(
-                modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                modifier = Modifier.padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 TonalIcon(R.drawable.ic_computer)
-                val isConnected = computer.deviceId in connected
-                // Name and state read as one: "HP-AIO, Connected".
-                Column(modifier = Modifier.weight(1f).semantics(mergeDescendants = true) {}) {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(computer.name, style = MaterialTheme.typography.bodyLarge)
                     Text(
-                        stringResource(if (isConnected) R.string.connected else R.string.offline),
-                        style = MaterialTheme.typography.bodySmall,
+                        connectionText(computer.deviceId in state.connected, state.activity.lastLatency(computer.deviceId)),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                // "Forget HP-AIO" rather than the same "Forget" for every computer.
-                val label = stringResource(R.string.forget_named, computer.name)
-                TextButton(
-                    onClick = { asking = computer.deviceId },
-                    modifier = Modifier.semantics { contentDescription = label },
-                ) {
-                    Text(stringResource(R.string.forget))
-                }
+                Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null)
             }
         }
     }
-    // Gone by itself if the computer is (unpaired from the PC meanwhile).
-    computers.firstOrNull { it.deviceId == asking }?.let { computer ->
-        ForgetDialog(
-            computer = computer,
-            onConfirm = {
-                asking = null
-                onForget(computer)
-            },
-            onDismiss = { asking = null },
-        )
-    }
+}
+
+/** "Connected · 38 ms" (the last clip it acknowledged), "Connected" or "Offline". */
+@Composable
+fun connectionText(connected: Boolean, latency: Long?): String = when {
+    !connected -> stringResource(R.string.offline)
+    latency != null -> stringResource(R.string.device_connected_ms, latency)
+    else -> stringResource(R.string.connected)
 }
 
 /** Forgetting can't be undone from the phone: it takes a new pairing. */
 @Composable
-private fun ForgetDialog(computer: PairedComputer, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+fun ForgetDialog(computer: PairedComputer, onConfirm: () -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.forget_title, computer.name)) },

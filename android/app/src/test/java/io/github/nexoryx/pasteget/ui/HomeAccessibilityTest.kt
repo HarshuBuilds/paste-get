@@ -16,7 +16,6 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isHeading
 import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.junit4.v2.createComposeRule
-import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -90,16 +89,19 @@ class HomeAccessibilityTest {
     }
 
     @Test
-    fun forgetButtonsNameTheirComputer() {
+    fun eachComputerReadsAsOneButton() {
+        val opened = mutableListOf<String>()
         compose.setContent {
-            MaterialTheme { DevicesScreen(AppFixtures.state(computers = listOf(AppFixtures.hp, AppFixtures.arch)), AppActions()) }
+            MaterialTheme {
+                DevicesScreen(AppFixtures.state(computers = listOf(AppFixtures.hp, AppFixtures.arch)), AppActions(), onOpen = { opened += it })
+            }
         }
 
-        compose.onNodeWithContentDescription(app.getString(R.string.forget_named, "Arch-PC"))
+        // Name and state in one node, which opens that computer's page.
+        compose.onNode(hasText("Arch-PC") and hasText(app.getString(R.string.offline)))
             .performScrollTo()
             .assertHasClickAction()
             .performClick()
-        // It asks about that one.
-        compose.onNodeWithText(app.getString(R.string.forget_title, "Arch-PC")).assertExists()
+        assertEquals(listOf("b2"), opened)
     }
 }

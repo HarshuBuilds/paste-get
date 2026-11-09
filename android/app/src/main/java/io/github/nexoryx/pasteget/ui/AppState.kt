@@ -23,6 +23,8 @@ data class AppState(
     val thisPhone: ThisPhone? = null,
     /** The computer that last unpaired this phone, until the user pairs again or closes the notice. */
     val unpairedBy: PairedComputer? = null,
+    /** The computers are being dialed again ([AppActions.onRefresh]). */
+    val refreshing: Boolean = false,
 )
 
 /** This phone as its computers know it. */
@@ -39,6 +41,8 @@ class AppActions(
     val onForget: (PairedComputer) -> Unit = {},
     /** Closes "<PC> unpaired this phone". */
     val onDismissUnpaired: () -> Unit = {},
+    /** Dials every computer now and searches the network again. */
+    val onRefresh: () -> Unit = {},
     val onScreenshotsChange: (Boolean) -> Unit = {},
     /** paste-get's page in the system settings, where photo access is. */
     val onOpenAppSettings: () -> Unit = {},

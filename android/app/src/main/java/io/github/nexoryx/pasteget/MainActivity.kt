@@ -135,6 +135,7 @@ class MainActivity : ComponentActivity() {
                 codes = CodesCardState(model.codesOn, model.codeAccess, shellReady, lastCode),
                 thisPhone = model.thisPhone,
                 unpairedBy = model.unpaired,
+                refreshing = model.refreshing,
             ),
             actions = actions,
             backStack = backStack,
@@ -148,6 +149,7 @@ class MainActivity : ComponentActivity() {
         onSendClipboard = ::sendClipboard,
         onForget = model::forget,
         onDismissUnpaired = model::dismissUnpaired,
+        onRefresh = model::refreshConnections,
         onScreenshotsChange = ::toggleScreenshots,
         onOpenAppSettings = ::openAppSettings,
         autoCopy = AutoCopyActions(

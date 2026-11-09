@@ -9,6 +9,10 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
+import io.github.nexoryx.pasteget.ActivityKind
+import io.github.nexoryx.pasteget.ActivityLog
 import io.github.nexoryx.pasteget.R
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -39,6 +43,26 @@ class DevicesScreenTest {
         compose.onNodeWithText(app.getString(R.string.connected)).assertIsDisplayed()
         compose.onNodeWithText("Arch-PC").assertIsDisplayed()
         compose.onNodeWithText(app.getString(R.string.offline)).assertIsDisplayed()
+    }
+
+    @Test
+    fun aConnectedComputerShowsItsLastLatency() {
+        val log = ActivityLog()
+        log.sent(ActivityKind.TEXT, 12, sentTo = 1, automatic = true)
+        log.delivered("a1", "text/plain", 12, millis = 38, accepted = true)
+        show(AppFixtures.state(computers = listOf(AppFixtures.hp), connected = setOf("a1"), activity = log.entries.value))
+
+        compose.onNodeWithText(app.getString(R.string.device_connected_ms, 38)).assertIsDisplayed()
+    }
+
+    @Test
+    fun pullingDownDialsAgain() {
+        var refreshes = 0
+        show(AppFixtures.state(computers = listOf(AppFixtures.hp)), AppActions(onRefresh = { refreshes++ }))
+
+        compose.onNodeWithText("HP-AIO").performTouchInput { swipeDown(startY = top, endY = top + 1_000f) }
+        compose.waitForIdle()
+        assertEquals(1, refreshes)
     }
 
     @Test

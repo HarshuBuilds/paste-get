@@ -24,6 +24,7 @@ import io.github.nexoryx.pasteget.pasteGet
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -54,6 +55,10 @@ class AppViewModel(
 
     /** `null` until read. */
     var thisPhone by mutableStateOf<ThisPhone?>(null)
+        private set
+
+    /** The computers are being dialed again ([refreshConnections]). */
+    var refreshing by mutableStateOf(false)
         private set
     var screenshots by mutableStateOf(ScreenshotSetting(wanted = false, access = PhotoAccess.NONE))
         private set
@@ -101,6 +106,21 @@ class AppViewModel(
         viewModelScope.launch {
             paired = withContext(io) { computers.paired() }
             if (thisPhone == null) thisPhone = withContext(io) { computers.thisPhone() }
+        }
+    }
+
+    /**
+     * Pull to refresh: dials every computer now and searches the network again. The list follows
+     * the connections as they come; the spinner shows for a moment so the pull is seen to work.
+     */
+    fun refreshConnections() {
+        if (refreshing) return
+        refreshing = true
+        viewModelScope.launch {
+            withContext(io) { computers.retry() }
+            paired = withContext(io) { computers.paired() }
+            delay(REFRESH_MS)
+            refreshing = false
         }
     }
 
@@ -252,5 +272,9 @@ class AppViewModel(
     /** [clip] was read by the activity, which has focus. */
     fun sendClipboard(clip: ClipData?) {
         viewModelScope.launch { message = Sender.send(app, clip) }
+    }
+
+    private companion object {
+        const val REFRESH_MS = 1_500L
     }
 }

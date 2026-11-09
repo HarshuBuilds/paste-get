@@ -117,6 +117,11 @@ class SyncService : Service() {
 
     /** Also called again by the app after pairing or a settings change. */
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_RETRY) {
+            // As on a new network: dial now, and search again.
+            pasteGet.client.networkChanged()
+            finder.restart()
+        }
         updateFinder()
         updateScreenshots()
         updateAutoCopy()
@@ -235,9 +240,15 @@ class SyncService : Service() {
         private const val UNPAIRED_CHANNEL_ID = "unpaired"
         private const val UNPAIRED_NOTIFICATION_TAG = "unpaired"
         private const val NOTIFICATION_ID = 1
+        private const val ACTION_RETRY = "io.github.nexoryx.pasteget.RETRY"
 
         fun start(context: Context) {
             ContextCompat.startForegroundService(context, Intent(context, SyncService::class.java))
+        }
+
+        /** Dials every paired computer now, rather than after its backoff, and searches the network. */
+        fun retry(context: Context) {
+            ContextCompat.startForegroundService(context, Intent(context, SyncService::class.java).setAction(ACTION_RETRY))
         }
     }
 }

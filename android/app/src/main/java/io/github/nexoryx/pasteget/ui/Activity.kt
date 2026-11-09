@@ -104,3 +104,7 @@ fun activityOutcome(entry: Activity, names: Map<String, String>): String {
         stringResource(R.string.send_waits)
     }
 }
+
+/** How long the last clip [deviceId] acknowledged took, if any did since the app started. */
+fun List<Activity>.lastLatency(deviceId: String): Long? =
+    firstNotNullOfOrNull { entry -> entry.deliveries.firstOrNull { it.deviceId == deviceId && it.accepted }?.millis }

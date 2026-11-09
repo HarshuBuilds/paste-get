@@ -11,6 +11,7 @@ class FakeComputers(
     var failure: Exception? = null,
 ) : Computers {
     val pairCalls = mutableListOf<String>()
+    var retries = 0
 
     override fun paired(): List<PairedComputer> = computers
 
@@ -25,5 +26,9 @@ class FakeComputers(
 
     override fun forget(deviceId: String) {
         computers = computers.filter { it.deviceId != deviceId }
+    }
+
+    override fun retry() {
+        retries++
     }
 }

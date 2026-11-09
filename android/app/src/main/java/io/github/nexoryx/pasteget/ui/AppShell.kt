@@ -40,7 +40,10 @@ fun PasteGetUi(state: AppState, actions: AppActions, backStack: MutableList<NavK
                     HomeScreen(state, actions, onSettings = settings, onSeeAll = { selectTab(backStack, Tab.HISTORY) })
                 }
                 entry<Route.History> { HistoryScreen(state.activity, state.computers, onSettings = settings) }
-                entry<Route.Devices> { DevicesScreen(state, actions, onSettings = settings) }
+                entry<Route.Devices> {
+                    DevicesScreen(state, actions, onSettings = settings, onOpen = { open(backStack, Route.Device(it)) })
+                }
+                entry<Route.Device> { key -> DeviceScreen(state, key.deviceId, actions, onBack = { back(backStack) }) }
                 entry<Route.Settings> { SettingsScreen(onBack = { back(backStack) }) }
             },
         )

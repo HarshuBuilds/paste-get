@@ -49,8 +49,11 @@
     <string name="paired_computers">Paired computers</string>
     <string name="connected">Connected</string>
     <string name="offline">Offline</string>
-    <string name="forget">Forget…</string>
-    <string name="forget_named">Forget %s</string>
+    <string name="device_details">Details</string>
+    <string name="device_connected_ms">Connected · %d ms</string>
+    <string name="device_addresses">Addresses</string>
+    <string name="device_addresses_text">Where this phone dials it, the last one that worked first. paste-get also finds it on the local network when its address changes.</string>
+    <string name="forget_this">Forget this computer…</string>
     <string name="forget_title">Forget %s?</string>
     <string name="forget_text">%1$s will stop receiving what you copy, and this phone will stop connecting to it. To use it again, pair again. On the computer, this phone stays listed until you forget it there too.</string>
     <string name="forget_confirm">Forget</string>

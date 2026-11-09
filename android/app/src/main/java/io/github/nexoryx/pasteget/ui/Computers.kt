@@ -3,6 +3,7 @@
 package io.github.nexoryx.pasteget.ui
 
 import io.github.nexoryx.pasteget.PasteGetApp
+import io.github.nexoryx.pasteget.SyncService
 import uniffi.pasteget_ffi.PairedComputer
 
 /**
@@ -20,6 +21,9 @@ interface Computers {
 
     /** Throws `PastegetException` if the computer is unknown or the change can't be saved. */
     fun forget(deviceId: String)
+
+    /** Dials every computer now, rather than after its backoff, and searches the network again. */
+    fun retry()
 }
 
 /** The app's own client. */
@@ -34,4 +38,6 @@ class NativeComputers(private val app: PasteGetApp) : Computers {
         app.client.forget(deviceId)
         app.setConnected(deviceId, false)
     }
+
+    override fun retry() = SyncService.retry(app)
 }

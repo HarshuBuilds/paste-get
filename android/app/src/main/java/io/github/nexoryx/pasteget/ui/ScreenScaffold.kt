@@ -4,6 +4,7 @@ package io.github.nexoryx.pasteget.ui
 
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.RowScope
@@ -17,6 +18,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
@@ -28,7 +30,8 @@ import io.github.nexoryx.pasteget.R
 
 /**
  * Every screen's frame: a top bar with [title] (and a back arrow when [onBack] is given), the
- * [actions] at its end, and [content] in a column that scrolls ([scroll]).
+ * [actions] at its end, and [content] in a column that scrolls ([scroll]). With [onRefresh],
+ * pulling the column down calls it, and shows a spinner while [refreshing].
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,6 +41,8 @@ fun ScreenScaffold(
     actions: @Composable RowScope.() -> Unit = {},
     floatingActionButton: @Composable () -> Unit = {},
     scroll: ScrollState = rememberScrollState(),
+    refreshing: Boolean = false,
+    onRefresh: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Scaffold(
@@ -56,15 +61,21 @@ fun ScreenScaffold(
         },
         floatingActionButton = floatingActionButton,
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(scroll)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            content = content,
-        )
+        val column = @Composable {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(scroll)
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                content = content,
+            )
+        }
+        if (onRefresh == null) {
+            Box(modifier = Modifier.padding(padding)) { column() }
+        } else {
+            PullToRefreshBox(isRefreshing = refreshing, onRefresh = onRefresh, modifier = Modifier.padding(padding)) { column() }
+        }
     }
 }
 
