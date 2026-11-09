@@ -1004,8 +1004,8 @@ async fn handle_incoming(shared: Arc<Shared>, socket: TcpStream, mut ticket: Tic
         // Not cut short any more: once its secret is checked, the device must hear the answer.
         Opened::Pairing(request) => return shared.answer_pairing(request).await,
     };
-    // Proven paired: no longer limited.
-    drop(ticket);
+    // Proven paired: no longer limited, and places are kept for its address.
+    ticket.proven_paired();
     let opening = timeout(HANDSHAKE_TIMEOUT, pairing::read_opening(connection))
         .await
         .context("the device sent nothing in time")??;
@@ -1801,8 +1801,8 @@ mod tests {
         assert!(connects_from(&pc.daemon, &phone, Ipv4Addr::LOCALHOST).await);
     }
 
-    /// Silent connections from many addresses fill every place: the oldest makes room, and a
-    /// paired device still connects. Linux only: it needs several loopback addresses.
+    /// Silent connections from 8 addresses fill every place: the oldest of theirs makes room,
+    /// and a paired device still connects. Linux only: it needs several loopback addresses.
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn a_paired_device_still_connects_during_a_flood() {
@@ -1823,6 +1823,35 @@ mod tests {
         assert!(wait_for_async(|| connected(&pc.daemon)).await);
         assert!(closed_within(&mut flood[0], Duration::from_secs(1)).await);
         assert!(!closed_within(&mut flood[1], Duration::from_millis(10)).await);
+    }
+
+    /// Once a paired device connected from an address, a connection from it is never closed to
+    /// make room for others, however many addresses they come from: here 64 more, one
+    /// connection each, while the device is slow to start its TLS handshake. Linux only.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_paired_device_slow_to_connect_is_not_closed_by_a_flood() {
+        use crate::admission::AT_ONCE;
+        let pc = start("pc").await;
+        let phone = Identity::generate().unwrap();
+        let invite = pc.daemon.open_pairing().await.unwrap();
+        pair_as(&pc.daemon, &phone, &invite, "POCO").await.unwrap();
+        assert!(connects_from(&pc.daemon, &phone, Ipv4Addr::LOCALHOST).await);
+        assert!(wait_for(|| pc.daemon.shared.admission.is_empty()).await);
+
+        let mut slow = silent_connection(&pc.daemon, Ipv4Addr::LOCALHOST).await;
+        let mut flood = Vec::new();
+        for n in 0..AT_ONCE {
+            let ip = Ipv4Addr::new(127, 0, 1, u8::try_from(n + 1).unwrap());
+            let socket = tokio::net::TcpSocket::new_v4().unwrap();
+            socket.bind(SocketAddr::from((ip, 0))).unwrap();
+            flood.push(socket.connect(pc.daemon.local_addr()).await.unwrap());
+        }
+
+        // The 64th of them made the first close, not the device's.
+        assert!(closed_within(&mut flood[0], Duration::from_secs(1)).await);
+        assert!(!closed_within(&mut slow, Duration::from_millis(10)).await);
+        assert_eq!(pc.daemon.shared.admission.len(), AT_ONCE);
     }
 
     #[tokio::test]

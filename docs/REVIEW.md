@@ -66,8 +66,10 @@ Each line is a claim to check. "→" points at where it's enforced.
    open. A paired device that sends a `PairRequest` instead of its `Hello` (pairing again) is
    checked against the same window. → `desktop/src/daemon.rs` `handle_incoming`,
    `UNKNOWN_DEADLINE`, `pairing::read_opening`. Connections not known to come from a paired
-   device are limited (3 s deadlines, 8 per IP, 64 in all, the oldest closed past that), and
-   one that was proven paired is no longer counted. → `desktop/src/admission.rs`
+   device are limited (3 s deadlines, 8 per IP, 64 in all; past that the oldest of the address
+   holding the most closes, and one from an address paired devices connected from only for
+   another such address), and one that was proven paired is no longer counted.
+   → `desktop/src/admission.rs` (`Admission::admit`, `State::to_close`, `Ticket::proven_paired`)
 8. The secret: 16 bytes from the system RNG (`ring::rand::SystemRandom`), compared in
    constant time, valid once, for 5 minutes. Wrong tries don't close the window, so junk
    requests can't keep closing it; the expiry and the connection limits (item 7) bound how

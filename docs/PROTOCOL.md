@@ -59,8 +59,13 @@ ignored, and the certificate may be regenerated at any time without changing the
   not known yet to come from a paired device (in their TLS handshake, or from a device that
   isn't paired): **3 s** for the TLS handshake, 3 s more for the first message of a device that
   isn't paired, at most **8 at once from one IP address** (one more is closed at once) and **64
-  in all** (one more makes the oldest close, so that a paired device can always get in). A
-  connection is no longer counted once the handshake proved its device is paired.
+  in all**. One more makes another close: the oldest of the address holding the most places,
+  so that a device flooding from a few addresses only closes its own. Connections from the
+  addresses paired devices last connected from (16, in memory) go last: one is never closed for
+  one from another address, which is refused instead when only those are left. A connection is no longer counted once the handshake proved its device is paired. So a
+  paired device gets in during a flood of silent connections, and during one that reconnects
+  without pause if it connects from an address a paired device used since the PC started, or
+  if the flood comes from fewer than 64 addresses.
 - **Unpairing**: the device that forgets a peer deletes its ID, closes any session with it at
   once and stops dialing it. If a session with it is open, it first sends `Unpaired` in it
   (section 4.4): the peer forgets that device too, at once, whichever side dialed. Otherwise,
