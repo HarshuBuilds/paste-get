@@ -148,7 +148,9 @@ History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart ac
     against SQLite's own), words under 3 characters, `site:`/`from:`/`type:`/`is:pinned`/
     `after:`/`before:`, filters for the chips, keyset pages, UTF-16 highlights. 20,000 items:
     13 ms p95 at worst on a PC (`search_speed_at_20000_items`); still to measure on the POCO
-  - [ ] Images: originals, thumbnails, gallery references
+  - [x] Images: originals as files (written whole or not at all, swept at open), thumbnails
+    made by the app and checked (JPEG, PNG or WebP, 64 KiB at most), phone screenshots as
+    MediaStore references that follow gallery deletions
   - [ ] Retention, delete and stats
   - [ ] Phone: recording through `ffi`, then the Android screens
   - [ ] PC: history in the daemon, `pasteget history`, the tray's history window

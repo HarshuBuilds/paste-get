@@ -4,8 +4,12 @@
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+use super::images::{self, MAX_ORIGINAL_LEN, Uncommitted};
 use super::types::Code;
-use super::{Context, Error, Format, HistoryStore, ItemId, Kept, Reason, Recorded, Thumb, now_day};
+use super::{
+    Context, Error, Format, HistoryStore, ItemId, Kept, Policy, Reason, Recorded, Source, Thumb,
+    now_day,
+};
 use crate::clip::{Clip, Kind, mime};
 use crate::detect::{self, Category};
 use crate::identity::DeviceId;
@@ -44,19 +48,24 @@ impl HistoryStore {
             }
             Decision::Ignore => return Ok(Recorded::Ignored),
         };
-        let expires_at = detect::bare_code(text).then_some(now + BARE_CODE_TTL_MS);
+        let expires_at = text
+            .filter(|text| detect::bare_code(text))
+            .map(|_| now + BARE_CODE_TTL_MS);
 
         let sha256 = clip.sha256();
+        let originals = self.originals_dir();
+        // The original written for this clip, removed again unless its row is committed.
+        let mut written = Uncommitted(None);
         let tx = self.conn.transaction()?;
-        let existing: Option<i64> = tx
+        let existing: Option<(i64, i64)> = tx
             .query_row(
-                "SELECT id FROM item WHERE sha256 = ?1",
+                "SELECT id, kept FROM item WHERE sha256 = ?1",
                 [&sha256[..]],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
         let recorded = match existing {
-            Some(id) => {
+            Some((id, kept)) => {
                 tx.execute(
                     "UPDATE item SET last_at = max(last_at, ?2), times = times + 1,
                          expires_at = CASE WHEN expires_at IS NULL THEN NULL
@@ -64,6 +73,27 @@ impl HistoryStore {
                      WHERE id = ?1",
                     params![id, now, expires_at],
                 )?;
+                // An image whose original was removed comes back whole.
+                let restorable =
+                    matches!(Kept::from_code(kept)?, Kept::OriginalEvicted | Kept::Gone)
+                        && text.is_none()
+                        && context.media_id.is_none()
+                        && clip.data.len() <= MAX_ORIGINAL_LEN;
+                if restorable {
+                    let name = images::original_name(&sha256, format).ok_or(Error::Corrupt)?;
+                    written.0 = Some(images::write_original(&originals, &name, &clip.data)?);
+                    tx.execute(
+                        "UPDATE item SET kept = ?2,
+                             thumb = CASE WHEN thumb = ?3 THEN thumb ELSE ?4 END
+                         WHERE id = ?1",
+                        params![
+                            id,
+                            Kept::Original.code(),
+                            Thumb::Done.code(),
+                            Thumb::Pending.code()
+                        ],
+                    )?;
+                }
                 Recorded::Again(ItemId(id))
             }
             None => {
@@ -73,11 +103,19 @@ impl HistoryStore {
                     Some(device_row(&tx, &clip.origin)?)
                 };
                 let via = context.via.map(|via| device_row(&tx, &via)).transpose()?;
-                let new = NewItem::text(text);
+                let new = match text {
+                    Some(text) => NewItem::text(text),
+                    None => NewItem::image(context, clip.data.len(), &self.policy),
+                };
+                if new.kept == Kept::Original {
+                    let name = images::original_name(&sha256, format).ok_or(Error::Corrupt)?;
+                    written.0 = Some(images::write_original(&originals, &name, &clip.data)?);
+                }
                 tx.execute(
                     "INSERT INTO item (sha256, format, size, category, host, source, origin, via,
-                                       first_at, last_at, expires_at, text_head, kept, thumb)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11, ?12, ?13)",
+                                       first_at, last_at, expires_at, text_head, kept, thumb,
+                                       media_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11, ?12, ?13, ?14)",
                     params![
                         &sha256[..],
                         format.code(),
@@ -91,7 +129,8 @@ impl HistoryStore {
                         expires_at,
                         new.head,
                         new.kept.code(),
-                        Thumb::None.code(),
+                        new.thumb.code(),
+                        context.media_id,
                     ],
                 )?;
                 let id = tx.last_insert_rowid();
@@ -106,6 +145,7 @@ impl HistoryStore {
         };
         delete_expired(&tx, now)?;
         tx.commit()?;
+        written.0 = None;
         tracing::debug!(
             ?recorded,
             ?format,
@@ -211,8 +251,10 @@ impl HistoryStore {
             _ => return Decision::Ignore,
         };
         if format != Format::Text {
-            // Images are not kept yet.
-            return Decision::Ignore;
+            if mime::of_image(&clip.data) != Some(clip.mime_type.as_str()) {
+                return Decision::Ignore;
+            }
+            return Decision::Keep { format, text: None };
         }
         let Some(text) = clip.as_text() else {
             return Decision::Ignore;
@@ -233,7 +275,10 @@ impl HistoryStore {
                 return Decision::KeptOut(Reason::OneTimeCode);
             }
         }
-        Decision::Keep { format, text }
+        Decision::Keep {
+            format,
+            text: Some(text),
+        }
     }
 
     fn count_kept_out(&mut self, reason: Reason, now: i64) -> Result<(), Error> {
@@ -247,7 +292,11 @@ impl HistoryStore {
 }
 
 enum Decision<'a> {
-    Keep { format: Format, text: &'a str },
+    /// `text` is set for a text clip.
+    Keep {
+        format: Format,
+        text: Option<&'a str>,
+    },
     KeptOut(Reason),
     Ignore,
 }
@@ -259,6 +308,7 @@ struct NewItem<'a> {
     head: Option<&'a str>,
     kept: Kept,
     body: Option<Vec<u8>>,
+    thumb: Thumb,
 }
 
 impl<'a> NewItem<'a> {
@@ -282,6 +332,35 @@ impl<'a> NewItem<'a> {
             head: Some(detect::head(text, HEAD_LEN)),
             kept,
             body,
+            thumb: Thumb::None,
+        }
+    }
+
+    /// A phone screenshot with its MediaStore ID is a reference to the gallery, which has its
+    /// own thumbnail; any other image keeps its original, and waits for a thumbnail.
+    fn image(context: &Context, len: usize, policy: &Policy) -> Self {
+        let (kept, thumb) = if context.media_id.is_some() {
+            let thumb = if policy.keep_screenshot_thumbnails {
+                Thumb::Pending
+            } else {
+                Thumb::None
+            };
+            (Kept::Gallery, thumb)
+        } else if len <= MAX_ORIGINAL_LEN {
+            (Kept::Original, Thumb::Pending)
+        } else {
+            (Kept::TooLarge, Thumb::None)
+        };
+        Self {
+            category: match context.source {
+                Source::Screenshot => Category::Screenshot,
+                _ => Category::Image,
+            },
+            host: None,
+            head: None,
+            kept,
+            body: None,
+            thumb,
         }
     }
 }

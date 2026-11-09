@@ -497,23 +497,26 @@ fn a_text_over_1_mib_keeps_its_start_only() {
 }
 
 #[test]
-fn empty_clips_and_images_are_ignored_for_now() {
+fn empty_clips_and_unknown_types_are_ignored() {
     let mut test = Test::new();
     assert_eq!(test.copy(""), Recorded::Ignored);
+    let context = Context::new(Source::CopiedHere);
     let not_utf8 = Clip {
         data: vec![0xff, 0xfe],
         ..Clip::text("", HERE)
     };
-    let context = Context::new(Source::CopiedHere);
-    assert_eq!(
-        test.store.record(&not_utf8, &context).unwrap(),
-        Recorded::Ignored
-    );
-    let png = Clip::png(b"\x89PNG\r\n\x1a\nrest".to_vec(), HERE);
-    assert_eq!(
-        test.store.record(&png, &context).unwrap(),
-        Recorded::Ignored
-    );
+    let not_a_png = Clip::png(b"GIF89a".to_vec(), HERE);
+    let unknown = Clip {
+        mime_type: "text/html".into(),
+        ..Clip::text("<b>x</b>", HERE)
+    };
+    for clip in [not_utf8, not_a_png, unknown] {
+        assert_eq!(
+            test.store.record(&clip, &context).unwrap(),
+            Recorded::Ignored
+        );
+    }
+    assert!(walk(&test.dir.path().join(ORIGINALS_DIR)).is_empty());
 }
 
 #[test]
@@ -1009,4 +1012,265 @@ proptest::proptest! {
             }
         }
     }
+}
+
+fn png(seed: u8, len: usize) -> Vec<u8> {
+    let mut data = b"\x89PNG\r\n\x1a\n".to_vec();
+    data.resize(len, seed);
+    data
+}
+
+const JPEG_THUMB: &[u8] = b"\xff\xd8\xff\xe0 a small thumbnail";
+const WEBP_THUMB: &[u8] = b"RIFF\x10\0\0\0WEBPVP8 thumbnail";
+
+impl Test {
+    fn received_image(&mut self, data: Vec<u8>) -> Recorded {
+        self.store
+            .record(&Clip::png(data, PC), &Context::received_from(PC))
+            .unwrap()
+    }
+
+    fn screenshot(&mut self, data: Vec<u8>, media_id: i64) -> Recorded {
+        let context = Context {
+            media_id: Some(media_id),
+            ..Context::new(Source::Screenshot)
+        };
+        self.store.record(&Clip::png(data, HERE), &context).unwrap()
+    }
+
+    fn originals(&self) -> Vec<PathBuf> {
+        walk(&self.dir.path().join(ORIGINALS_DIR))
+    }
+
+    fn reopen(self) -> Self {
+        let Test { dir, store, now } = self;
+        store.close().unwrap();
+        let mut store = HistoryStore::open(dir.path(), HERE, Policy::default()).unwrap();
+        let clock = now.clone();
+        store.set_clock(move || clock.load(Ordering::Relaxed));
+        Test { dir, store, now }
+    }
+}
+
+#[test]
+fn a_received_image_keeps_its_original_as_a_file() {
+    let mut test = Test::new();
+    let data = png(7, 5000);
+    let Recorded::Added(id) = test.received_image(data.clone()) else {
+        panic!("not added");
+    };
+
+    let item = test.item(id);
+    assert_eq!((item.format, item.category), (Format::Png, Category::Image));
+    assert_eq!((item.kept, item.thumb), (Kept::Original, Thumb::Pending));
+    assert_eq!(item.preview, "");
+    let path = test.store.original_path(id).unwrap().unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), data);
+    assert_eq!(test.originals(), std::slice::from_ref(&path));
+    assert_eq!(test.store.text(id).unwrap(), None);
+    assert_eq!(
+        test.store.pending_thumbnails(10).unwrap(),
+        [PendingThumbnail {
+            id,
+            format: Format::Png,
+            path: Some(path),
+            media_id: None,
+        }]
+    );
+
+    // The same image again: one item, one file.
+    assert_eq!(test.received_image(data), Recorded::Again(id));
+    assert_eq!(test.originals().len(), 1);
+    assert_eq!(test.item(id).times, 2);
+}
+
+#[test]
+fn thumbnails_are_checked_before_they_are_kept() {
+    let mut test = Test::new();
+    let Recorded::Added(id) = test.received_image(png(1, 100)) else {
+        panic!("not added");
+    };
+
+    for bad in [
+        &b"GIF89a not a thumbnail"[..],
+        b"",
+        b"RIFF\0\0\0\0WAVE",
+        &[0xff; 10],
+    ] {
+        assert!(matches!(
+            test.store.set_thumbnail(id, bad, 10, 10),
+            Err(Error::BadThumbnail)
+        ));
+    }
+    let mut too_big = JPEG_THUMB.to_vec();
+    too_big.resize(MAX_THUMBNAIL_LEN + 1, 0);
+    assert!(matches!(
+        test.store.set_thumbnail(id, &too_big, 10, 10),
+        Err(Error::BadThumbnail)
+    ));
+    assert_eq!(test.item(id).thumb, Thumb::Pending);
+    assert_eq!(test.store.thumbnail(id).unwrap(), None);
+
+    test.store
+        .set_thumbnail(id, WEBP_THUMB, 1920, 1080)
+        .unwrap();
+    let item = test.item(id);
+    assert_eq!(
+        (item.thumb, item.width, item.height),
+        (Thumb::Done, Some(1920), Some(1080))
+    );
+    assert_eq!(
+        test.store.thumbnail(id).unwrap().as_deref(),
+        Some(WEBP_THUMB)
+    );
+    assert!(test.store.pending_thumbnails(10).unwrap().is_empty());
+    // A new one replaces it; PNG and JPEG do too.
+    test.store
+        .set_thumbnail(id, JPEG_THUMB, 1920, 1080)
+        .unwrap();
+    test.store
+        .set_thumbnail(id, &png(0, 64), 1920, 1080)
+        .unwrap();
+    assert_eq!(test.store.thumbnail(id).unwrap(), Some(png(0, 64)));
+
+    // A text has no thumbnail, and an unknown item is no error.
+    let text = test.added("text");
+    test.store.set_thumbnail(text, JPEG_THUMB, 1, 1).unwrap();
+    test.store
+        .set_thumbnail(ItemId(999), JPEG_THUMB, 1, 1)
+        .unwrap();
+    assert_eq!(test.store.thumbnail(text).unwrap(), None);
+}
+
+#[test]
+fn a_thumbnail_the_app_cant_make_is_not_asked_for_again() {
+    let mut test = Test::new();
+    let Recorded::Added(id) = test.received_image(png(1, 100)) else {
+        panic!("not added");
+    };
+    test.store.thumbnail_failed(id).unwrap();
+    assert_eq!(test.item(id).thumb, Thumb::Failed);
+    assert!(test.store.pending_thumbnails(10).unwrap().is_empty());
+}
+
+#[test]
+fn phone_screenshots_are_references_to_the_gallery() {
+    let mut test = Test::new();
+    let Recorded::Added(id) = test.screenshot(png(2, 3000), 41) else {
+        panic!("not added");
+    };
+    let item = test.item(id);
+    assert_eq!(item.category, Category::Screenshot);
+    assert_eq!((item.kept, item.thumb), (Kept::Gallery, Thumb::None));
+    assert_eq!(item.media_id, Some(41));
+    assert!(test.originals().is_empty());
+    assert_eq!(test.store.original_path(id).unwrap(), None);
+    assert!(test.store.pending_thumbnails(10).unwrap().is_empty());
+
+    // Deleted from the gallery: gone from the history too.
+    assert_eq!(test.store.forget_media(&[41, 99]).unwrap(), 1);
+    assert!(test.store.item(id).unwrap().is_none());
+}
+
+#[test]
+fn screenshots_can_outlive_the_gallery_with_their_own_thumbnail() {
+    let mut test = Test::with_policy(Policy {
+        keep_screenshot_thumbnails: true,
+        ..Policy::default()
+    });
+    let Recorded::Added(kept) = test.screenshot(png(3, 3000), 41) else {
+        panic!("not added");
+    };
+    let Recorded::Added(not_yet) = test.screenshot(png(4, 3000), 42) else {
+        panic!("not added");
+    };
+    assert_eq!(
+        test.store
+            .pending_thumbnails(10)
+            .unwrap()
+            .iter()
+            .map(|p| (p.id, p.path.clone(), p.media_id))
+            .collect::<Vec<_>>(),
+        [(kept, None, Some(41)), (not_yet, None, Some(42))]
+    );
+    test.store
+        .set_thumbnail(kept, JPEG_THUMB, 1080, 2400)
+        .unwrap();
+
+    assert_eq!(test.store.forget_media(&[41, 42]).unwrap(), 2);
+
+    let item = test.item(kept);
+    assert_eq!((item.kept, item.media_id), (Kept::Gone, None));
+    assert_eq!(
+        test.store.thumbnail(kept).unwrap().as_deref(),
+        Some(JPEG_THUMB)
+    );
+    assert!(test.store.item(not_yet).unwrap().is_none());
+}
+
+#[test]
+fn images_too_large_keep_no_original() {
+    let mut test = Test::new();
+    let Recorded::Added(id) = test.received_image(png(5, MAX_ORIGINAL_LEN + 1)) else {
+        panic!("not added");
+    };
+    let item = test.item(id);
+    assert_eq!((item.kept, item.thumb), (Kept::TooLarge, Thumb::None));
+    assert_eq!(item.size, MAX_ORIGINAL_LEN as u64 + 1);
+    assert!(test.originals().is_empty());
+}
+
+#[test]
+fn the_folder_and_the_rows_agree_after_a_crash() {
+    let mut test = Test::new();
+    let Recorded::Added(kept) = test.received_image(png(6, 100)) else {
+        panic!("not added");
+    };
+    let Recorded::Added(lost) = test.received_image(png(7, 100)) else {
+        panic!("not added");
+    };
+    let originals = test.dir.path().join(ORIGINALS_DIR);
+    // A file written just before a crash, before its row was committed, and a half-written one.
+    std::fs::write(
+        originals.join(format!("{}.png", "ab".repeat(32))),
+        b"orphan",
+    )
+    .unwrap();
+    std::fs::write(originals.join(".tmp-whatever.png"), b"half").unwrap();
+    // A file that disappeared.
+    let lost_path = test.store.original_path(lost).unwrap().unwrap();
+    std::fs::remove_file(&lost_path).unwrap();
+
+    let mut test = test.reopen();
+
+    let kept_path = test.store.original_path(kept).unwrap().unwrap();
+    assert_eq!(test.originals(), [kept_path]);
+    let item = test.item(lost);
+    assert_eq!((item.kept, item.thumb), (Kept::Gone, Thumb::Failed));
+    assert_eq!(test.store.original_path(lost).unwrap(), None);
+
+    // Received again, it is whole again.
+    assert_eq!(test.received_image(png(7, 100)), Recorded::Again(lost));
+    let item = test.item(lost);
+    assert_eq!((item.kept, item.thumb), (Kept::Original, Thumb::Pending));
+    assert_eq!(std::fs::read(&lost_path).unwrap(), png(7, 100));
+}
+
+#[test]
+fn an_original_is_removed_if_its_row_is_not_committed() {
+    let mut test = Test::new();
+    // A trigger makes the insert fail after the file is written.
+    test.store
+        .conn
+        .execute_batch(
+            "CREATE TEMP TRIGGER fail BEFORE INSERT ON item
+             BEGIN SELECT RAISE(ABORT, 'no'); END;",
+        )
+        .unwrap();
+    assert!(
+        test.store
+            .record(&Clip::png(png(8, 100), PC), &Context::received_from(PC))
+            .is_err()
+    );
+    assert!(test.originals().is_empty());
 }
