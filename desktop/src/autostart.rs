@@ -237,8 +237,8 @@ fn exec_argument(arg: &str) -> Result<String> {
     Ok(out)
 }
 
-/// The name of `profile`'s value in the `Run` key. The uninstaller removes the default profile's
-/// (`desktop/tray/installer-hooks.nsh`).
+/// The name of `profile`'s value in the `Run` key. The uninstaller removes every profile's
+/// (`desktop/tray/installer-hooks.nsh`), by these names.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn run_value(profile: &str) -> String {
     if profile == DEFAULT_PROFILE {
@@ -308,14 +308,18 @@ mod tests {
     }
 
     #[test]
-    fn the_windows_uninstaller_removes_the_login_entry() {
+    fn the_windows_uninstaller_removes_the_login_entries_of_every_profile() {
         let hooks = include_str!("../tray/installer-hooks.nsh");
-        let removal = format!(
-            r#"DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "{}""#,
-            run_value(DEFAULT_PROFILE)
-        );
+        let default = format!(r#"${{If}} $1 == "{}""#, run_value(DEFAULT_PROFILE));
+        // What the other profiles' names start with, and its length.
+        let prefix = run_value("work").strip_suffix("work)").unwrap().to_owned();
+        let others = format!(r#"${{OrIf}} $2 == "{prefix}""#);
+        let cut = format!("StrCpy $2 $1 {}", prefix.chars().count());
 
-        assert!(hooks.contains(&removal), "{removal}");
+        for expected in [default, others, cut] {
+            assert!(hooks.contains(&expected), "{expected}");
+        }
+        assert!(hooks.contains("!insertmacro PASTEGET_REMOVE_LOGIN_ENTRIES"));
     }
 
     #[test]

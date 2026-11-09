@@ -24,6 +24,39 @@
   Pop $0
 !macroend
 
+; Removes starting at login, for every profile: the values desktop/src/autostart.rs writes in
+; the Run key, "paste-get" for the default profile and "paste-get (<profile>)" for the others.
+!macro PASTEGET_REMOVE_LOGIN_ENTRIES
+  Push $0
+  Push $1
+  Push $2
+  StrCpy $0 0
+  ${Do}
+    ClearErrors
+    EnumRegValue $1 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" $0
+    ; No more values.
+    ${If} ${Errors}
+    ${OrIf} $1 == ""
+      ${Break}
+    ${EndIf}
+    StrCpy $2 $1 11
+    ${If} $1 == "paste-get"
+    ${OrIf} $2 == "paste-get ("
+      ClearErrors
+      DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" $1
+      ; The next value takes this one's index, unless this one stayed.
+      ${If} ${Errors}
+        IntOp $0 $0 + 1
+      ${EndIf}
+    ${Else}
+      IntOp $0 $0 + 1
+    ${EndIf}
+  ${Loop}
+  Pop $2
+  Pop $1
+  Pop $0
+!macroend
+
 !macro NSIS_HOOK_PREINSTALL
   !insertmacro PASTEGET_STOP
 !macroend
@@ -33,11 +66,10 @@
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
-  ; Starting at login: the value desktop/src/autostart.rs writes for the default profile. Tauri's
-  ; own uninstaller removes the one named after the product, the same name today; this keeps it
-  ; removed if either changes. Kept on an update, like Tauri's.
+  ; Starting at login, for every profile. Tauri's own uninstaller removes only the value named
+  ; after the product, the default profile's today. Kept on an update, like Tauri's.
   ${If} $UpdateMode <> 1
-    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "paste-get"
+    !insertmacro PASTEGET_REMOVE_LOGIN_ENTRIES
   ${EndIf}
   DeleteRegKey HKCU "Software\Classes\AppUserModelId\io.github.nexoryx.pasteget"
   Delete "$LOCALAPPDATA\paste-get\notification-icon.png"
