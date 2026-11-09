@@ -5,6 +5,8 @@ package io.github.nexoryx.pasteget.ui
 import android.app.Application
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -85,8 +87,8 @@ class DevicesScreenTest {
         var pairs = 0
         show(AppFixtures.state(), AppActions(onPair = { pairs++ }))
 
-        // The button's label is in its unmerged tree.
-        compose.onNodeWithText(app.getString(R.string.pair_button), useUnmergedTree = true).performClick()
+        // What TalkBack reads: the button, with its label.
+        compose.onNode(hasContentDescription(app.getString(R.string.pair_button)) and hasClickAction()).performClick()
         assertEquals(1, pairs)
     }
 

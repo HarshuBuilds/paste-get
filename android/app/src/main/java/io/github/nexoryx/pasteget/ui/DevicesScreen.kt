@@ -47,7 +47,11 @@ fun DevicesScreen(state: AppState, actions: AppActions, onSettings: () -> Unit =
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 text = { Text(stringResource(R.string.pair_button)) },
-                icon = { Icon(painterResource(R.drawable.ic_qr_code_scanner), contentDescription = null) },
+                // Material clears the text's semantics: the icon's description is what TalkBack
+                // reads, expanded or not.
+                icon = {
+                    Icon(painterResource(R.drawable.ic_qr_code_scanner), contentDescription = stringResource(R.string.pair_button))
+                },
                 // One pairing at a time.
                 onClick = { if (state.pairing != PairingState.Busy) actions.onPair() },
                 // Just the icon once the list scrolls, so it hides less of it.
