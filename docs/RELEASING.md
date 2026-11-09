@@ -16,7 +16,8 @@ How the packages are built, and the steps of a release. CI does the building
 | Arch package `paste-get-git` | `packaging/aur/paste-get-git/PKGBUILD`, tested with `makepkg` in an Arch container | `/usr/bin/pasteget` and `pasteget-tray`, a desktop entry, an icon and the metainfo. Built from source on the user's machine |
 
 Every push that changes the packaging builds them all, without releasing: they're in the run's
-artifacts.
+artifacts. A `v*` tag builds the packages and puts them, with a `SHA256SUMS` file, in a **draft**
+GitHub release.
 
 The workflows name their runner images (`ubuntu-24.04`, `windows-2025`, and `ubuntu-22.04` for
 the Linux packages, whose glibc sets the oldest system they run on) rather than `…-latest`, so
@@ -24,13 +25,12 @@ a release isn't built on a different system than the last test run without anyon
 it. Move them on purpose, in a commit of their own, before GitHub retires one. The actions they
 use run on Node.js 24 (`actions/checkout@v7`, `upload-artifact@v7`, `download-artifact@v8`,
 `setup-java@v6`, `gradle/actions/setup-gradle@v6` with its open-source `basic` cache,
-`actions-rust-lang/setup-rust-toolchain@v2`); Dependabot proposes new major versions weekly. A `v*` tag builds them and puts them, with a `SHA256SUMS` file, in a **draft**
-GitHub release.
+`actions-rust-lang/setup-rust-toolchain@v2`); Dependabot proposes new major versions weekly.
 
-Before that, CI checks the Linux packages: `packaging/linux/check-packages.sh` lists what the
-.deb and .rpm install and the libraries they ask for, then the .deb is installed with `apt` on
-Debian 12 and the .rpm with `dnf` on the latest Fedora, and both programs must start
-(`--version`). A dependency with the wrong name, or a library missing from the list, fails there.
+Every run also checks the Linux packages, and a tag's release waits for that:
+`packaging/linux/check-packages.sh` lists what the .deb and .rpm install and the libraries they
+ask for, then the .deb is installed with `apt` on Debian 12 and the .rpm with `dnf` on the
+latest Fedora, and both programs must start (`--version`). A dependency with the wrong name, or a library missing from the list, fails there.
 On Fedora, the installed desktop entry, metainfo and firewalld service also go through
 `desktop-file-validate`, `appstreamcli validate` and `firewall-offline-cmd --info-service`.
 
