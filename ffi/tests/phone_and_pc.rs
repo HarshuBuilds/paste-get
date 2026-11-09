@@ -299,6 +299,49 @@ fn a_phone_that_forgot_the_pc_pairs_again() {
     });
 }
 
+/// A device renamed on one side shows its new name on the other once it reconnects, and keeps it.
+#[test]
+fn renames_reach_the_other_side() {
+    let pc = start_pc();
+    let Phone {
+        client, _dir: dir, ..
+    } = connected_phone(&pc, "POCO");
+    let pc_id = pc.daemon.device_id().to_string();
+
+    // The phone was renamed: the app starts again with its new name.
+    client.stop();
+    drop(client);
+    let client = PhoneClient::new(path_of(&dir), "Mon téléphone".into()).unwrap();
+    client.start(Arc::new(Recorder::default()));
+    wait_until("the new name on the PC", || {
+        let status = pc.runtime.block_on(pc.daemon.status());
+        status.devices[0].connected && status.devices[0].device.name == "Mon téléphone"
+    });
+
+    // The PC was renamed in its settings, which restarts it.
+    let profile = Profile::open_in(pc._home.path(), "pc").unwrap();
+    let mut settings = profile.settings().unwrap();
+    settings.device_name = "Bureau".into();
+    profile.save_settings(&settings).unwrap();
+    let pc = restart(pc);
+    assert!(client.computer_found(
+        pc_id,
+        vec!["127.0.0.1".into()],
+        pc.daemon.local_addr().port()
+    ));
+    wait_until("the new name on the phone", || {
+        client.paired_computers()[0].name == "Bureau"
+    });
+
+    // Both are saved.
+    let known = profile.known_devices().unwrap();
+    assert_eq!(known.iter().next().unwrap().name, "Mon téléphone");
+    client.stop();
+    drop(client);
+    let again = PhoneClient::new(path_of(&dir), "Mon téléphone".into()).unwrap();
+    assert_eq!(again.paired_computers()[0].name, "Bureau");
+}
+
 /// The PC unpairs the phone: the phone hears it on its next dial, forgets the PC and says so.
 #[test]
 fn a_phone_unpaired_on_the_pc_forgets_it_and_says_so() {

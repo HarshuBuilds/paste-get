@@ -71,8 +71,9 @@ Each line is a claim to check. "→" points at where it's enforced.
     the window accepts the secret once. → `pair_with_any_address`
 11. Invite parsing rejects what `PROTOCOL.md` §5.1 says to reject (length, version, duplicates,
     missing keys) and can't panic. → `PairingInvite::from_str`, fuzz target `pairing_invite`
-12. Device names from peers are sanitized before display or storage.
-    → `sanitize_device_name`
+12. Device names from peers are sanitized before display or storage, also when a paired
+    device's `Hello` renames it. → `sanitize_device_name`, `KnownDevices::rename`,
+    `ffi/src/lib.rs` `renamed`
 
 ### Untrusted input from a paired device
 13. No allocation is sized by a peer beyond the limits: frame ≤ 1 MiB, chunk ≤ 256 KiB, clip ≤

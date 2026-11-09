@@ -119,7 +119,9 @@ If the versions differ, the side with the higher version decides whether it can 
 otherwise it closes the connection. Version 0 implementations close on any mismatch, after
 sending their own `Hello`, so that the other side learns their version.
 
-`device_name` is untrusted: receivers sanitize it as in section 5.1.
+`device_name` is untrusted: receivers sanitize it as in section 5.1. It is the name the device
+goes by now: a receiver that stored another name for it at pairing (or at an earlier `Hello`)
+replaces it, since the device was renamed.
 
 ### 4.2 Sending a clip: `ClipOffer`, `ClipChunk`, `Ack`
 

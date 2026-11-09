@@ -145,6 +145,7 @@ The phone and the PC must be on the **same Wi-Fi**. On the PC, run `pasteget dae
 | P9 | Scan the PC's pairing QR code with the **normal camera app** (only if it offers to open the link; not every camera does) | paste-get opens and pairs |
 | P10 | On the phone only, forget the computer (the PC still lists it). PC: `pasteget pair`, scan the new code | Phone: "Paired with …", then "Connected to 1 computer". The PC lists the phone once |
 | P11 | Turn the phone's Wi-Fi off (mobile data on), scan a pairing code | Within about 10 s, an error that lists each address of the code with its reason, the PC's Wi-Fi or Ethernet address first |
+| P12 | Rename the phone (Settings → About phone → Device name), then force-stop paste-get and open it again | Within seconds `pasteget status` on the PC shows the new name, also after the PC restarts |
 
 Phone logs never contain clipboard contents either. To get them: `adb logcat -s paste-get`.
 
@@ -301,7 +302,7 @@ see its log). Keep the fake phone of section 2 running.
 | T11 | Phone: **Pair a computer**, scan that code | The window shows ✓ "Paired with <phone>" and closes after a few seconds; the tray keeps running and lists the phone as ● |
 | T12 | Menu → *Pair a phone…*, then close the window with its × | The tray keeps running (closing the window doesn't quit) |
 | T15 | Menu → *Settings…*, change the notifications to "Images and text", **Save** | "Saved."; text from the phone now shows a notification, without a restart |
-| T16 | In *Settings…*, rename this computer, **Save** | "Saved. paste-get restarted…"; within seconds the phone reconnects and shows the new name |
+| T16 | In *Settings…*, rename this computer, **Save** | "Saved. paste-get restarted…"; within seconds the phone reconnects, and its app shows the new name (bring the app back to the front if it was open). It still shows it after the phone restarts |
 | T17 | In *Settings…*, click a hotkey field, press Ctrl+Alt+K, **Save**, then press Ctrl+Alt+K | It does that action (KDE may ask to allow the shortcut again). Backspace in the field turns the hotkey off |
 | T18 | In *Settings…*, give both hotkeys the same keys, **Save** | An error says so; nothing is saved |
 | T19 | With the tray running, open paste-get again from the Start menu | A notification: "paste-get is already running: its icon is in the notification area…"; no second icon |

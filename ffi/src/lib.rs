@@ -70,6 +70,7 @@ impl From<std::io::Error> for PastegetError {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
 pub struct PairedComputer {
     pub device_id: String,
+    /// The name it sent when it last connected (or paired).
     pub name: String,
     /// Socket addresses, e.g. `192.168.1.20:47290`: from the pairing code, then the last one
     /// that worked moves to the front.
@@ -91,6 +92,7 @@ pub struct ClipDelivery {
 /// Implemented by the app to hear what happens. Called from background threads.
 #[uniffi::export(with_foreign)]
 pub trait PhoneListener: Send + Sync {
+    /// When a computer connects, `paired_computers` already has the name it now goes by.
     fn on_connection_changed(&self, device_id: String, connected: bool);
 
     /// A clip arrived from a computer. `sensitive` clips must stay out of history.
@@ -399,6 +401,23 @@ impl State {
     fn listener(&self) -> Option<Arc<dyn PhoneListener>> {
         lock(&self.listener).clone()
     }
+
+    /// A computer connected with a new name: it was renamed there.
+    fn renamed(&self, peer: DeviceId, name: &str) {
+        let id = peer.to_string();
+        let name = sanitize_device_name(name);
+        let mut computers = lock(&self.computers);
+        let Some(computer) = computers.iter_mut().find(|c| c.device_id == id) else {
+            return;
+        };
+        if computer.name == name {
+            return;
+        }
+        computer.name = name;
+        // Best effort: if saving fails, it shows the old name again after a restart, until it
+        // connects.
+        let _ = save_computers(&self.data_dir, &computers);
+    }
 }
 
 impl SessionEvents for State {
@@ -441,7 +460,8 @@ impl SessionEvents for State {
         let _ = save_computers(&self.data_dir, &computers);
     }
 
-    fn connected(&self, peer: DeviceId, _hello: &Hello) {
+    fn connected(&self, peer: DeviceId, hello: &Hello) {
+        self.renamed(peer, &hello.device_name);
         if let Some(listener) = self.listener() {
             listener.on_connection_changed(peer.to_string(), true);
         }

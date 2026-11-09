@@ -253,6 +253,18 @@ impl KnownDevices {
         self.0.iter()
     }
 
+    /// Gives a device the name it now goes by, in place. Returns whether it changed.
+    pub fn rename(&mut self, id: &DeviceId, name: &str) -> bool {
+        let name = sanitize_device_name(name);
+        match self.0.iter_mut().find(|device| device.id == *id) {
+            Some(device) if device.name != name => {
+                device.name = name;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Removes a device. Returns it, if it was there.
     pub fn remove(&mut self, id: &DeviceId) -> Option<KnownDevice> {
         let index = self.0.iter().position(|device| device.id == *id)?;
@@ -450,6 +462,28 @@ mod tests {
 
         assert_eq!(devices.iter().count(), 1);
         assert_eq!(devices.get(&id).unwrap().name, "New name");
+    }
+
+    #[test]
+    fn renaming_keeps_the_order_and_cleans_the_name() {
+        let (first, second) = (
+            Identity::generate().unwrap().device_id(),
+            Identity::generate().unwrap().device_id(),
+        );
+        let mut devices = KnownDevices::default();
+        for (id, name) in [(first, "First"), (second, "Second")] {
+            devices.insert(KnownDevice {
+                id,
+                name: name.into(),
+                addresses: vec![],
+            });
+        }
+
+        assert!(devices.rename(&first, "  Renamed\n"));
+        assert!(!devices.rename(&first, "Renamed"));
+        assert!(!devices.rename(&Identity::generate().unwrap().device_id(), "Nobody"));
+        let names: Vec<_> = devices.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["Renamed", "Second"]);
     }
 
     #[test]

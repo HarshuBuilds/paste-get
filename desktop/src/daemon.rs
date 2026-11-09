@@ -579,11 +579,22 @@ impl Shared {
 /// Received clips go to the clipboard and on to the other devices.
 impl SessionEvents for Shared {
     fn connected(&self, peer: DeviceId, hello: &Hello) {
-        // Unpaired while this connection was being set up: [`Daemon::forget`] came too early to
-        // end it.
-        if !lock(&self.known).contains(&peer) {
-            self.peers.disconnect(&peer);
-            return;
+        {
+            let mut known = lock(&self.known);
+            // Unpaired while this connection was being set up: [`Daemon::forget`] came too early
+            // to end it.
+            if !known.contains(&peer) {
+                drop(known);
+                self.peers.disconnect(&peer);
+                return;
+            }
+            // Renamed there since it last connected.
+            if known.rename(&peer, &hello.device_name) {
+                tracing::info!(device = %hello.device_name, id = %peer, "device renamed");
+                if let Err(e) = self.profile.save_known_devices(&known) {
+                    tracing::warn!(error = %format!("{e:#}"), "could not save the paired devices");
+                }
+            }
         }
         tracing::info!(device = %hello.device_name, id = %peer, "connected");
     }
@@ -1164,6 +1175,36 @@ mod tests {
             pair_as(&pc.daemon, &phone, &invite, "Third").await,
             Err(PairingError::Rejected)
         ));
+    }
+
+    #[tokio::test]
+    async fn a_device_renamed_there_is_renamed_here() {
+        let pc = start("pc").await;
+        let phone = Identity::generate().unwrap();
+        let invite = pc.daemon.open_pairing().await.unwrap();
+        pair_as(&pc.daemon, &phone, &invite, "POCO").await.unwrap();
+
+        // It connects with the name it was given since.
+        let socket = TcpStream::connect(pc.daemon.local_addr()).await.unwrap();
+        let connection = transport::connect(socket, &phone, pc.daemon.device_id())
+            .await
+            .unwrap();
+        let _session = tokio::spawn(async move {
+            let hello = Hello {
+                protocol_version: PROTOCOL_VERSION,
+                device_name: "Mon téléphone\u{7}".into(),
+                ..Hello::default()
+            };
+            session::run_session(connection, hello, &Peers::new(), &NoEvents).await
+        });
+
+        assert!(wait_for_async(|| connected(&pc.daemon)).await);
+        assert_eq!(
+            pc.daemon.status().await.devices[0].device.name,
+            "Mon téléphone"
+        );
+        let saved = pc.daemon.shared.profile.known_devices().unwrap();
+        assert_eq!(saved.get(&phone.device_id()).unwrap().name, "Mon téléphone");
     }
 
     #[tokio::test]
