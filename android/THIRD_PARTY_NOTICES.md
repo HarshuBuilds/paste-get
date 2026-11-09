@@ -1,6 +1,8 @@
 # Third-party material in the Android app
 
-Code libraries are listed with their licences in `app/build.gradle.kts`. This file covers what
+Code libraries are listed with their licences in `app/build.gradle.kts`, and in the app under
+Settings → Open-source licences, which also shows the Apache License 2.0 text
+(`app/src/main/res/raw/apache_license_2_0.txt`, from apache.org, unchanged). This file covers what
 is copied into the app's own sources.
 
 ## Material Symbols (icons)

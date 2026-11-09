@@ -10,6 +10,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.nexoryx.pasteget.AccessNotices
+import io.github.nexoryx.pasteget.Appearance
 import io.github.nexoryx.pasteget.BuiltInShell
 import io.github.nexoryx.pasteget.CodeAccess
 import io.github.nexoryx.pasteget.FallbackAccess
@@ -83,6 +84,12 @@ class AppViewModel(
     var builtInSetUp by mutableStateOf(false)
         private set
 
+    /** Read once: only Settings changes them. */
+    var appearance by mutableStateOf(Preferences.appearance(app))
+        private set
+    var wallpaperColors by mutableStateOf(Preferences.wallpaperColors(app))
+        private set
+
     init {
         // Taken from the app as it arrives, so the next screen doesn't say it again.
         viewModelScope.launch {
@@ -127,6 +134,21 @@ class AppViewModel(
             delay(REFRESH_MS)
             refreshing = false
         }
+    }
+
+    fun chooseAppearance(chosen: Appearance) {
+        Preferences.setAppearance(app, chosen)
+        appearance = chosen
+    }
+
+    fun chooseWallpaperColors(on: Boolean) {
+        Preferences.setWallpaperColors(app, on)
+        wallpaperColors = on
+    }
+
+    /** Shows [text] as a Snackbar, for results the activity gets (adding the tile). */
+    fun say(text: String) {
+        message = text
     }
 
     /** [shown] was on screen and went away. A newer message stays, to be shown next. */

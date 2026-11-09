@@ -25,6 +25,7 @@ data class AppState(
     val unpairedBy: PairedComputer? = null,
     /** The computers are being dialed again ([AppActions.onRefresh]). */
     val refreshing: Boolean = false,
+    val settings: SettingsState = SettingsState(),
 )
 
 /** This phone as its computers know it. */
@@ -50,4 +51,5 @@ class AppActions(
     val onOpenAppSettings: () -> Unit = {},
     val autoCopy: CopiesActions = CopiesActions(),
     val codes: CodesActions = CodesActions(),
+    val settings: SettingsActions = SettingsActions(),
 )

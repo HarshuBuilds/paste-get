@@ -75,6 +75,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    androidResources {
+        // Lists the app's languages (values-fr…) for Android 13's per-app language setting.
+        generateLocaleConfig = true
+    }
+
     buildFeatures {
         compose = true
         // IShellClipboard: the app talks to its Shizuku service through AIDL.

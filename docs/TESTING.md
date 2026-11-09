@@ -139,13 +139,14 @@ The phone and the PC must be on the **same Wi-Fi**. On the PC, run `pasteget dae
 | P2b | Turn Wi-Fi off on the phone for a minute | The card says "Looking for <PC>…" with a moving bar; after 30 s it says what to check and offers **Try again**. Wi-Fi back on: "Connected to <PC>" again |
 | P3 | In any app, select text → **Share** → **Send to PC**, then `Ctrl+V` on the PC | The text is pasted |
 | P4 | Gallery → a screenshot → **Share** → **Send to PC**, then paste on the PC (Paint, GIMP, Discord) | The image is pasted |
-| P5 | Add the **Send clipboard** tile to Quick Settings. Copy text, pull down the shade, tap the tile | "Sent to 1 computer"; `Ctrl+V` on the PC pastes it |
+| P5 | Add the **Send clipboard** tile to Quick Settings (on Android 13+: the gear → **Add the tile**). Copy text, pull down the shade, tap the tile | "Sent to 1 computer"; `Ctrl+V` on the PC pastes it |
 | P6 | PC: `pasteget send "depuis le PC"`, then long-press a text field on the phone → Paste | `depuis le PC` is pasted |
 | P7 | Lock the phone for 5 minutes, unlock, repeat P3 | Still works, without opening the app |
 | P8 | Restart the phone, wait a minute, repeat P3 | Still works (the app restarts on boot) |
 | P9 | Scan the PC's pairing QR code with the **normal camera app** (only if it offers to open the link; not every camera does) | paste-get opens and asks first, as in P2; it pairs only on **Pair**. Rotating the phone doesn't ask again |
 | P10 | Turn on dark mode, close paste-get (swipe it away in recents), open it again | The start screen and the app are dark from the first frame, with no white flash |
 | P13 | Tap **History**, **Devices**, then the gear at the top right; press Back twice | History lists what was sent (P3–P5) with sizes and times. Devices lists the PC ("Connected · … ms") and *This phone* with its device ID in groups of four; tapping the PC shows its addresses. With the PC's daemon stopped and started again, pulling the Devices list down reconnects at once instead of after the backoff. The gear opens Settings; Back goes to Devices, then Home. Rotate the phone on any of them: the same screen stays |
+| P14 | The gear → **Dark**, then **Light**, then **System**; turn **Wallpaper colors** off and on (Android 12+); **Language** → French (Android 13+); **Open-source licences** | The app changes at once; after closing and reopening it, the start screen matches the choice too (Android 12+). Without wallpaper colors, the app is indigo. In French, every screen is in French. The licences list the libraries and show the Apache License text |
 | P11 | PC: `pasteget pair`, then quit the daemon. Phone: scan the code, **Pair** | After a few seconds: "Pairing didn't work" and what to check (same Wi-Fi, paste-get open on the PC), in the phone's language. **Details** shows the technical error |
 | P12 | Last: in the **Devices** tab, tap the PC, then **Forget this computer…**, then **Cancel**; tap it again, then **Forget** | Cancel keeps the PC. Forget removes it from the list, and the phone stops connecting to it. The PC still lists the phone (forget it there too, or pair again) |
 

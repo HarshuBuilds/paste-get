@@ -40,6 +40,10 @@ sealed interface Route : NavKey {
     /** Behind the gear in each tab's top bar. */
     @Serializable
     data object Settings : Route
+
+    /** The open-source licences, from Settings. */
+    @Serializable
+    data object Licences : Route
 }
 
 /** The navigation bar's (or rail's) destinations, in order. */

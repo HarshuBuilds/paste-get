@@ -70,7 +70,7 @@ class ShellTest {
         tab(R.string.tab_devices).performClick()
 
         compose.onNodeWithContentDescription(app.getString(R.string.settings_title)).performClick()
-        compose.onNodeWithText(app.getString(R.string.settings_about)).assertIsDisplayed()
+        compose.onNodeWithText(app.getString(R.string.settings_appearance)).assertIsDisplayed()
         // Still under the Devices tab.
         tab(R.string.tab_devices).assertIsSelected()
 

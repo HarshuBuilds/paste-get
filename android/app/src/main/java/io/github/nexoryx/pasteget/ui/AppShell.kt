@@ -81,7 +81,10 @@ private fun Shell(state: AppState, actions: AppActions, backStack: MutableList<N
                     DevicesScreen(state, actions, onSettings = settings, onOpen = { open(backStack, Route.Device(it)) })
                 }
                 entry<Route.Device> { key -> DeviceScreen(state, key.deviceId, actions, onBack = { back(backStack) }) }
-                entry<Route.Settings> { SettingsScreen(onBack = { back(backStack) }) }
+                entry<Route.Settings> {
+                    SettingsScreen(state.settings, actions.settings, onBack = { back(backStack) }, onOpenLicences = { open(backStack, Route.Licences) })
+                }
+                entry<Route.Licences> { LicencesScreen(onBack = { back(backStack) }) }
             },
         )
     }

@@ -3,19 +3,26 @@
 package io.github.nexoryx.pasteget
 
 import android.Manifest
+import android.app.StatusBarManager
+import android.app.UiModeManager
 import android.content.ActivityNotFoundException
 import android.content.ClipboardManager
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -32,13 +39,15 @@ import com.journeyapps.barcodescanner.ScanOptions
 import io.github.nexoryx.pasteget.ui.AppActions
 import io.github.nexoryx.pasteget.ui.AppState
 import io.github.nexoryx.pasteget.ui.AppViewModel
-import io.github.nexoryx.pasteget.ui.CopiesActions
-import io.github.nexoryx.pasteget.ui.CopiesState
 import io.github.nexoryx.pasteget.ui.CodesActions
 import io.github.nexoryx.pasteget.ui.CodesState
+import io.github.nexoryx.pasteget.ui.CopiesActions
+import io.github.nexoryx.pasteget.ui.CopiesState
 import io.github.nexoryx.pasteget.ui.NativeComputers
 import io.github.nexoryx.pasteget.ui.PasteGetUi
 import io.github.nexoryx.pasteget.ui.Route
+import io.github.nexoryx.pasteget.ui.SettingsActions
+import io.github.nexoryx.pasteget.ui.SettingsState
 import io.github.nexoryx.pasteget.ui.appStatus
 import io.github.nexoryx.pasteget.ui.codesHealth
 import io.github.nexoryx.pasteget.ui.copiesHealth
@@ -76,9 +85,20 @@ class MainActivity : ComponentActivity() {
         // are none.
         installSplashScreen().setKeepOnScreenCondition { model.paired == null }
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
         setContent {
-            PasteGetTheme { App() }
+            val dark = when (model.appearance) {
+                Appearance.SYSTEM -> isSystemInDarkTheme()
+                Appearance.LIGHT -> false
+                Appearance.DARK -> true
+            }
+            // Status and navigation bar icons that read on the app's background.
+            LaunchedEffect(dark) {
+                enableEdgeToEdge(
+                    statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark },
+                    navigationBarStyle = SystemBarStyle.auto(LIGHT_SCRIM, DARK_SCRIM) { dark },
+                )
+            }
+            PasteGetTheme(dark = dark, wallpaperColors = model.wallpaperColors) { App() }
         }
         startSyncService()
         // Not again when the activity is recreated (a rotation): its intent is still the link.
@@ -141,6 +161,7 @@ class MainActivity : ComponentActivity() {
                 thisPhone = model.thisPhone,
                 unpairedBy = model.unpaired,
                 refreshing = model.refreshing,
+                settings = SettingsState(model.appearance, model.wallpaperColors),
             ),
             actions = actions,
             backStack = backStack,
@@ -181,7 +202,56 @@ class MainActivity : ComponentActivity() {
             onOpenSettings = ::openNotificationAccess,
             onOpenAppInfo = ::openAppSettings,
         ),
+        settings = SettingsActions(
+            onAppearanceChange = ::setAppearance,
+            onWallpaperColorsChange = model::chooseWallpaperColors,
+            onOpenLanguage = ::openLanguageSettings,
+            onAddTile = ::addTile,
+        ),
     )
+
+    /**
+     * Also tells Android (12+), so the window behind the app and the start screen match the
+     * choice from the next start, not only the screens.
+     */
+    private fun setAppearance(appearance: Appearance) {
+        model.chooseAppearance(appearance)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val mode = when (appearance) {
+                Appearance.SYSTEM -> UiModeManager.MODE_NIGHT_AUTO
+                Appearance.LIGHT -> UiModeManager.MODE_NIGHT_NO
+                Appearance.DARK -> UiModeManager.MODE_NIGHT_YES
+            }
+            getSystemService(UiModeManager::class.java).setApplicationNightMode(mode)
+        }
+    }
+
+    /** Android's language page for paste-get alone (Android 13+). */
+    private fun openLanguageSettings() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        try {
+            startActivity(Intent(Settings.ACTION_APP_LOCALE_SETTINGS, Uri.fromParts("package", packageName, null)))
+        } catch (e: ActivityNotFoundException) {
+            openAppSettings()
+        }
+    }
+
+    /** Android 13+ asks the user to add the Send clipboard tile, without opening the shade's editor. */
+    private fun addTile() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        getSystemService(StatusBarManager::class.java).requestAddTileService(
+            ComponentName(this, ClipboardTileService::class.java),
+            getString(R.string.tile_label),
+            Icon.createWithResource(this, R.drawable.ic_tile),
+            mainExecutor,
+        ) { result ->
+            when (result) {
+                StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED -> model.say(getString(R.string.tile_added))
+                StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED -> model.say(getString(R.string.tile_already))
+                else -> {}
+            }
+        }
+    }
 
     /** Photo access, notification access and more may have changed in the system settings meanwhile. */
     override fun onResume() {
@@ -330,5 +400,9 @@ class MainActivity : ComponentActivity() {
     private companion object {
         const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
         const val SHIZUKU_DOWNLOAD = "https://shizuku.rikka.app/download/"
+
+        // The navigation bar's scrims enableEdgeToEdge uses by default, for 3-button navigation.
+        val LIGHT_SCRIM = Color.argb(0xe6, 0xFF, 0xFF, 0xFF)
+        val DARK_SCRIM = Color.argb(0x80, 0x1b, 0x1b, 0x1b)
     }
 }

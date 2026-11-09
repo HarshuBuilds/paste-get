@@ -12,6 +12,8 @@ object Preferences {
     private const val SEND_COPIES = "send_copies"
     private const val BUILT_IN_PAIRED = "built_in_paired"
     private const val SEND_CODES = "send_codes"
+    private const val APPEARANCE = "appearance"
+    private const val WALLPAPER_COLORS = "wallpaper_colors"
 
     /** Off until the user turns it on and grants photo access. */
     fun sendScreenshots(context: Context): Boolean =
@@ -44,4 +46,25 @@ object Preferences {
     fun setBuiltInPaired(context: Context, paired: Boolean) {
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit { putBoolean(BUILT_IN_PAIRED, paired) }
     }
+
+    /** Light, dark, or as the system is (the default). */
+    fun appearance(context: Context): Appearance {
+        val saved = context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getString(APPEARANCE, null)
+        return Appearance.entries.firstOrNull { it.name == saved } ?: Appearance.SYSTEM
+    }
+
+    fun setAppearance(context: Context, appearance: Appearance) {
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit { putString(APPEARANCE, appearance.name) }
+    }
+
+    /** Android 12+: the wallpaper's colors (the default), or paste-get's own. */
+    fun wallpaperColors(context: Context): Boolean =
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getBoolean(WALLPAPER_COLORS, true)
+
+    fun setWallpaperColors(context: Context, on: Boolean) {
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit { putBoolean(WALLPAPER_COLORS, on) }
+    }
 }
+
+/** How the app looks, chosen in Settings. */
+enum class Appearance { SYSTEM, LIGHT, DARK }
