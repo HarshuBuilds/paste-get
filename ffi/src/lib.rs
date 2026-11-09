@@ -134,7 +134,8 @@ struct State {
 #[uniffi::export]
 impl PhoneClient {
     /// Loads this phone's identity and pairings from `data_dir` (the app's private files
-    /// directory), creating the identity on first use.
+    /// directory), creating the identity on first use. Pairings that can't be read are set
+    /// aside (`computers.json.bad`): the phone then starts with none.
     #[uniffi::constructor]
     pub fn new(data_dir: String, device_name: String) -> Result<Arc<Self>, PastegetError> {
         let data_dir = PathBuf::from(data_dir);
@@ -533,13 +534,33 @@ fn load_or_create_identity(dir: &Path) -> Result<Identity, PastegetError> {
     }
 }
 
+/// The saved computers. A file that doesn't read as such (a write cut short, a bug) is moved
+/// aside to `computers.json.bad` and none are loaded: the app still starts, and the user pairs
+/// again.
 fn load_computers(dir: &Path) -> Result<Vec<PairedComputer>, PastegetError> {
-    match fs::read(dir.join(COMPUTERS_FILE)) {
-        Ok(json) => {
-            serde_json::from_slice(&json).map_err(|e| PastegetError::Storage(e.to_string()))
+    let path = dir.join(COMPUTERS_FILE);
+    let json = match fs::read(&path) {
+        Ok(json) => json,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+    match serde_json::from_slice(&json) {
+        Ok(computers) => Ok(computers),
+        Err(e) => {
+            let aside = dir.join(format!("{COMPUTERS_FILE}.bad"));
+            // Where it failed, not the message: that can quote the file.
+            tracing::warn!(
+                category = ?e.classify(),
+                line = e.line(),
+                column = e.column(),
+                len = json.len(),
+                "the saved computers could not be read: moved to {COMPUTERS_FILE}.bad, starting with none"
+            );
+            if let Err(e) = fs::rename(&path, &aside) {
+                tracing::warn!(error = %e, "could not move the unreadable file aside");
+            }
+            Ok(Vec::new())
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(e) => Err(e.into()),
     }
 }
 

@@ -703,6 +703,33 @@ fn pairing_says_why_each_address_failed() {
     );
 }
 
+/// A saved list of computers that can't be read is set aside: the app starts with none.
+#[test]
+fn an_unreadable_computer_list_is_set_aside() {
+    let pc = start_pc();
+    let phone_dir = tempfile::tempdir().unwrap();
+    let saved = phone_dir.path().join("computers.json");
+    std::fs::write(&saved, b"[{\"device_id\": \"ABC\", \"na").unwrap();
+
+    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+
+    assert!(phone.paired_computers().is_empty());
+    assert_eq!(
+        std::fs::read(phone_dir.path().join("computers.json.bad")).unwrap(),
+        b"[{\"device_id\": \"ABC\", \"na"
+    );
+    // Pairing again works, and is saved.
+    let qr_code = pc
+        .runtime
+        .block_on(pc.daemon.open_pairing())
+        .unwrap()
+        .to_uri();
+    let computer = phone.pair(qr_code).unwrap();
+    drop(phone);
+    let again = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    assert_eq!(again.paired_computers(), [computer]);
+}
+
 #[test]
 fn bad_input_is_refused() {
     let phone_dir = tempfile::tempdir().unwrap();

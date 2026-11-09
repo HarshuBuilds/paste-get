@@ -7,7 +7,7 @@
 //!   identity.key    Ed25519 private key (PKCS#8 DER). Readable by the user only.
 //!   settings.toml   Device name, port, notifications, links, hotkeys. Created with defaults, safe
 //!                   to edit.
-//!   devices.toml    Paired devices.
+//!   devices.toml    Paired devices. Moved to devices.toml.bad if it can't be read.
 //! ```
 //!
 //! `<config dir>` is `%APPDATA%` on Windows and `$XDG_CONFIG_HOME` (`~/.config`) on Linux.
@@ -128,20 +128,36 @@ impl Profile {
         )
     }
 
+    /// Loads the paired devices.
+    ///
+    /// A file that doesn't read as paired devices (a write cut short, a bad hand edit) is moved
+    /// aside to `devices.toml.bad` and none are loaded, so the daemon still starts: devices pair
+    /// again.
     pub fn known_devices(&self) -> Result<KnownDevices> {
         let path = self.dir.join(DEVICES_FILE);
-        match fs::read_to_string(&path) {
-            Ok(text) => {
-                let file: DevicesFile = toml::from_str(&text)
-                    .with_context(|| format!("{} is not valid", path.display()))?;
-                file.device
-                    .into_iter()
-                    .map(KnownDevice::try_from)
-                    .collect::<Result<Vec<_>>>()
-                    .map(KnownDevices)
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(KnownDevices::default());
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(KnownDevices::default()),
-            Err(e) => Err(e).with_context(|| format!("could not read {}", path.display())),
+            Err(e) => return Err(e).with_context(|| format!("could not read {}", path.display())),
+        };
+        match parse_known_devices(&bytes) {
+            Ok(devices) => Ok(devices),
+            Err(reason) => {
+                let aside = self.dir.join(format!("{DEVICES_FILE}.bad"));
+                // The reason only: the file's contents stay out of the log.
+                tracing::warn!(
+                    reason,
+                    len = bytes.len(),
+                    moved_to = %aside.display(),
+                    "the paired devices could not be read: starting with none"
+                );
+                if let Err(e) = fs::rename(&path, &aside) {
+                    tracing::warn!(error = %e, "could not move the unreadable file aside");
+                }
+                Ok(KnownDevices::default())
+            }
         }
     }
 
@@ -311,6 +327,18 @@ impl TryFrom<StoredDevice> for KnownDevice {
     }
 }
 
+/// The paired devices in `devices.toml`, or why it isn't such a file.
+fn parse_known_devices(bytes: &[u8]) -> Result<KnownDevices, &'static str> {
+    let text = std::str::from_utf8(bytes).map_err(|_| "not UTF-8")?;
+    let file: DevicesFile = toml::from_str(text).map_err(|_| "not valid TOML")?;
+    file.device
+        .into_iter()
+        .map(KnownDevice::try_from)
+        .collect::<Result<Vec<_>>>()
+        .map(KnownDevices)
+        .map_err(|_| "a device ID is invalid")
+}
+
 fn create_private_dir(dir: &Path) -> Result<()> {
     fs::create_dir_all(dir).with_context(|| format!("could not create {}", dir.display()))?;
     #[cfg(unix)]
@@ -445,6 +473,36 @@ mod tests {
         assert_eq!(loaded, devices);
         assert!(loaded.contains(&phone));
         assert_eq!(loaded.get(&pc).unwrap().addresses.len(), 1);
+    }
+
+    #[test]
+    fn an_unreadable_devices_file_is_moved_aside() {
+        let (_base, profile) = profile();
+        let path = profile.dir().join(DEVICES_FILE);
+        let bad = profile.dir().join("devices.toml.bad");
+        let valid_toml_bad_id = "[[device]]\nid = \"not an ID\"\nname = \"POCO\"\n";
+
+        for contents in [
+            &b"[[device]\nid = "[..],
+            &[0xff, 0xfe],
+            valid_toml_bad_id.as_bytes(),
+        ] {
+            fs::write(&path, contents).unwrap();
+
+            assert_eq!(profile.known_devices().unwrap(), KnownDevices::default());
+            assert!(!path.exists());
+            assert_eq!(fs::read(&bad).unwrap(), contents);
+        }
+
+        // New pairings are saved as usual.
+        let mut devices = KnownDevices::default();
+        devices.insert(KnownDevice {
+            id: Identity::generate().unwrap().device_id(),
+            name: "POCO".into(),
+            addresses: vec![],
+        });
+        profile.save_known_devices(&devices).unwrap();
+        assert_eq!(profile.known_devices().unwrap(), devices);
     }
 
     #[test]

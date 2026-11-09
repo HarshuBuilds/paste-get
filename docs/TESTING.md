@@ -94,6 +94,7 @@ Watch terminal 2 (the fake phone): each clip it receives logs `clip received …
 | 8 | `pasteget pause`, copy some text, then `pasteget --profile phone send "hi"` | Terminal 1 logs `local copy not sent: paused` and `clip dropped: paused`; `Ctrl+V` doesn't paste `hi`. `pasteget resume` brings syncing back |
 | 9 | `pasteget recent` | The last clips, newest first, with where they came from |
 | 10 | Last: `pasteget forget phone` | `Unpaired phone.` Terminal 1 logs `unpaired`; terminal 2 logs `the device unpaired this one: no longer dialing it` and forgets the PC too (`pasteget --profile phone status` lists no device). Pair again (section 2) to go on |
+| 11 | Stop terminal 2, replace the fake phone's `devices.toml` (`%APPDATA%\paste-get\phone\` on Windows, `~/.config/paste-get/phone/` on Linux) with a line of garbage, start terminal 2 again | It starts and logs `the paired devices could not be read: starting with none`; the garbage is now in `devices.toml.bad`. Pair again (section 2) to go on |
 
 Screenshot to clipboard:
 - **Windows:** `Win+Shift+S`
