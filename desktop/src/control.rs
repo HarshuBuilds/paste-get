@@ -123,6 +123,10 @@ pub struct StatusReply {
     /// The daemon's [`CONTROL_VERSION`]. `None` from daemons older than this field.
     #[serde(default)]
     pub control_version: Option<u32>,
+    /// The ID of the daemon's process (the tray's, when the tray runs it), so that a newer
+    /// version can end it if it doesn't quit. `None` from daemons older than this field.
+    #[serde(default)]
+    pub pid: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -334,6 +338,7 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(daemon: Arc<Daemon>, stream: 
                         .collect(),
                     app_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
                     control_version: Some(CONTROL_VERSION),
+                    pid: Some(std::process::id()),
                 });
                 write_half.write_all(line_of(response).as_bytes()).await?;
             }
@@ -769,6 +774,7 @@ mod tests {
             Some(env!("CARGO_PKG_VERSION"))
         );
         assert_eq!(status.control_version, Some(CONTROL_VERSION));
+        assert_eq!(status.pid, Some(std::process::id()));
         assert!(!*quit.borrow());
 
         let answer = ask(&pc.endpoint, Request::Quit).await;
@@ -794,6 +800,7 @@ mod tests {
             }],
             app_version: Some("0.2.0".into()),
             control_version: Some(CONTROL_VERSION),
+            pid: Some(4242),
         });
         let Response::Status(read) =
             serde_json::from_str(&serde_json::to_string(&reply).unwrap()).unwrap()
@@ -802,6 +809,7 @@ mod tests {
         };
         assert_eq!(read.app_version.as_deref(), Some("0.2.0"));
         assert_eq!(read.control_version, Some(CONTROL_VERSION));
+        assert_eq!(read.pid, Some(4242));
         assert!(read.paused && read.devices[0].connected);
 
         // What a daemon from before the versions were sent answers.
@@ -811,6 +819,7 @@ mod tests {
         };
         assert_eq!(older.app_version, None);
         assert_eq!(older.control_version, None);
+        assert_eq!(older.pid, None);
         assert_eq!(older.device_name, "PC");
     }
 

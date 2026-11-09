@@ -244,6 +244,7 @@ mod tests {
                 .collect(),
             app_version: None,
             control_version: None,
+            pid: None,
         }
     }
 
