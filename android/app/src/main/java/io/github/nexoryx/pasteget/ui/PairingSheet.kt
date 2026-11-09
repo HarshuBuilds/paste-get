@@ -4,6 +4,8 @@ package io.github.nexoryx.pasteget.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -59,6 +61,7 @@ fun PairingFlow(
     computers: List<PairedComputer>,
     onConfirm: (PairingState.Confirm) -> Unit,
     onCancel: () -> Unit,
+    onRetry: (PairingState.Failed) -> Unit = {},
 ) {
     // Paired: from Busy back to Idle (a failure goes to Failed). Felt as well as read.
     val haptics = LocalHapticFeedback.current
@@ -84,7 +87,11 @@ fun PairingFlow(
             val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { it != SheetValue.Hidden || !busy })
             ModalBottomSheet(onDismissRequest = onCancel, sheetState = sheet) {
                 Column(modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 24.dp)) {
-                    if (pairing is PairingState.Failed) PairingErrorCard(pairing.error, onCancel) else PairingProgress()
+                    if (pairing is PairingState.Failed) {
+                        PairingErrorCard(pairing.error, onRetry = pairing.retry?.let { { onRetry(pairing) } }, onDismiss = onCancel)
+                    } else {
+                        PairingProgress()
+                    }
                 }
             }
         }
@@ -174,9 +181,13 @@ private fun PairingProgress() {
     }
 }
 
-/** What went wrong, what to try, and the technical message behind "Details" for a bug report. */
+/**
+ * What went wrong, what to try, and the technical message behind "Details" for a bug report.
+ * [onRetry]: when the same code is worth trying again.
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun PairingErrorCard(error: PairingError, onDismiss: () -> Unit) {
+private fun PairingErrorCard(error: PairingError, onRetry: (() -> Unit)?, onDismiss: () -> Unit) {
     var showDetails by rememberSaveable { mutableStateOf(false) }
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -202,11 +213,12 @@ private fun PairingErrorCard(error: PairingError, onDismiss: () -> Unit) {
                     Text(error.details, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = { showDetails = !showDetails }) {
                     Text(stringResource(if (showDetails) R.string.hide_details else R.string.details))
                 }
                 TextButton(onClick = onDismiss) { Text(stringResource(R.string.close)) }
+                if (onRetry != null) TextButton(onClick = onRetry) { Text(stringResource(R.string.pair_retry)) }
             }
         }
     }

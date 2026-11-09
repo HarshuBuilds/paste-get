@@ -227,7 +227,7 @@ fun OnboardingScreen(
             }
         }
     }
-    PairingFlow(state.pairing, state.computers, actions.onConfirmPairing, actions.onCancelPairing)
+    PairingFlow(state.pairing, state.computers, actions.onConfirmPairing, actions.onCancelPairing, actions.onRetryPairing)
 }
 
 /** The dots that say where the guide is, and the one button that goes on. */

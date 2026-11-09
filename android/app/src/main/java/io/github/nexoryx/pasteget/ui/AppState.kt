@@ -38,6 +38,8 @@ class AppActions(
     val onPair: () -> Unit = {},
     /** Yes to the code the sheet showed. */
     val onConfirmPairing: (PairingState.Confirm) -> Unit = {},
+    /** Try again after a pairing error that offers it. */
+    val onRetryPairing: (PairingState.Failed) -> Unit = {},
     /** No to the code shown, or closing the pairing error. */
     val onCancelPairing: () -> Unit = {},
     val onSendClipboard: () -> Unit = {},

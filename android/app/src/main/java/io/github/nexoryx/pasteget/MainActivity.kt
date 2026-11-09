@@ -243,6 +243,7 @@ class MainActivity : ComponentActivity() {
         onPair = ::scan,
         onConfirmPairing = model::confirmPairing,
         onCancelPairing = model::cancelPairing,
+        onRetryPairing = model::retryPairing,
         onSendClipboard = ::sendClipboard,
         onForget = model::forget,
         onDismissUnpaired = model::dismissUnpaired,

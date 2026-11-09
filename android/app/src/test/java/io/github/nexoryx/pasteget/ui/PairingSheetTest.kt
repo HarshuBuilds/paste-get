@@ -97,5 +97,17 @@ class PairingSheetTest {
         compose.onNodeWithText("192.168.1.20:47290 did not answer").assertIsDisplayed()
         compose.onNodeWithText(app.getString(R.string.close)).performClick()
         assertEquals(1, closed)
+        // Nothing to try again with.
+        compose.onNodeWithText(app.getString(R.string.pair_retry)).assertDoesNotExist()
+    }
+
+    @Test
+    fun anUnreachableComputerOffersToTryAgain() {
+        val retried = mutableListOf<PairingState.Failed>()
+        val failed = PairingState.Failed(PairingError(R.string.pair_error_unreachable, "no answer"), retry = confirm)
+        show(AppFixtures.state().copy(pairing = failed), AppActions(onRetryPairing = { retried += it }))
+
+        compose.onNodeWithText(app.getString(R.string.pair_retry)).performClick()
+        assertEquals(listOf(failed), retried)
     }
 }

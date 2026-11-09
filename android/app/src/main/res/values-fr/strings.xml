@@ -60,13 +60,14 @@
     <string name="pair_confirm_button">Appairer</string>
     <string name="pair_error_title">L\'appairage n\'a pas marché</string>
     <string name="pair_error_invalid">Ce code est inutilisable. Sur l\'ordinateur, affiche un nouveau code d\'appairage et scanne-le.</string>
-    <string name="pair_error_unreachable">Le téléphone n\'a pas pu joindre l\'ordinateur. Vérifie que les deux sont sur le même Wi-Fi et que paste-get est ouvert sur l\'ordinateur, puis scanne à nouveau le code. Un réseau invité ou le pare-feu de l\'ordinateur peut le bloquer.</string>
+    <string name="pair_error_unreachable">Le téléphone n\'a pas pu joindre l\'ordinateur. Vérifie que les deux sont sur le même Wi-Fi et que paste-get est ouvert sur l\'ordinateur, puis touche Réessayer. Un réseau invité ou le pare-feu de l\'ordinateur peut le bloquer.</string>
     <string name="pair_error_refused">L\'ordinateur a refusé l\'appairage : le code a peut-être expiré ou déjà servi. Affiche un nouveau code sur l\'ordinateur et scanne-le.</string>
     <string name="pair_error_storage">L\'appairage n\'a pas pu être enregistré sur ce téléphone. Libère de l\'espace, puis scanne à nouveau le code.</string>
     <string name="pair_error_other">Quelque chose s\'est mal passé. Scanne à nouveau le code ; si ça échoue encore, joins les détails ci-dessous à ton signalement.</string>
     <string name="details">Détails</string>
     <string name="hide_details">Masquer les détails</string>
     <string name="close">Fermer</string>
+    <string name="pair_retry">Réessayer</string>
     <string name="paired_computers">Ordinateurs appairés</string>
     <string name="connected">Connecté</string>
     <string name="offline">Hors ligne</string>

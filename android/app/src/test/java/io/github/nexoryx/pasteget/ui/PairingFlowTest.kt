@@ -7,6 +7,7 @@ import io.github.nexoryx.pasteget.R
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -115,6 +116,36 @@ class PairingFlowTest {
         assertEquals("192.168.1.20:47290 did not answer", error.details)
         model.cancelPairing()
         assertEquals(PairingState.Idle, model.pairing)
+    }
+
+    @Test
+    fun anUnreachableComputerCanBeTriedAgainWithTheSameCode() {
+        fake.failure = PastegetException.Unreachable("192.168.1.20:47290 did not answer")
+        val model = model()
+        model.offerPairing(LINK)
+        val shown = model.pairing as PairingState.Confirm
+        model.confirmPairing(shown)
+
+        // Back to the question, not straight to pairing.
+        model.retryPairing(model.pairing as PairingState.Failed)
+        assertSame(shown, model.pairing)
+        fake.failure = null
+        model.confirmPairing(shown)
+        assertEquals(listOf(LINK, LINK), fake.pairCalls)
+        assertEquals(PairingState.Idle, model.pairing)
+    }
+
+    @Test
+    fun aRefusedCodeIsntTriedAgain() {
+        fake.failure = PastegetException.PairingFailed("wrong secret")
+        val model = model()
+        model.offerPairing(LINK)
+        model.confirmShown()
+
+        val failed = model.pairing as PairingState.Failed
+        assertNull(failed.retry)
+        model.retryPairing(failed)
+        assertSame(failed, model.pairing)
     }
 
     @Test

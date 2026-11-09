@@ -29,7 +29,7 @@ fun PasteGetUi(state: AppState, actions: AppActions, backStack: MutableList<NavK
     CompositionLocalProvider(LocalSnackbarHost provides snackbar) {
         Shell(state, actions, backStack, tab, settings)
     }
-    PairingFlow(state.pairing, state.computers, actions.onConfirmPairing, actions.onCancelPairing)
+    PairingFlow(state.pairing, state.computers, actions.onConfirmPairing, actions.onCancelPairing, actions.onRetryPairing)
 }
 
 /**

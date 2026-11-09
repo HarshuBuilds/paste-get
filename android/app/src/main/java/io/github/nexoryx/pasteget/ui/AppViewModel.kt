@@ -259,9 +259,15 @@ class AppViewModel(
                 throw e
             } catch (e: Exception) {
                 // Also an unexpected error from the native library: "Pairing…" must not stay.
-                pairing = PairingState.Failed(pairingError(e))
+                pairing = PairingState.Failed(pairingError(e), retry = confirmed.takeIf { e is PastegetException.Unreachable })
             }
         }
+    }
+
+    /** Try again from [shown]: the same code, confirmed again. */
+    fun retryPairing(shown: PairingState.Failed) {
+        if (pairing !== shown) return
+        pairing = shown.retry ?: return
     }
 
     /** No to the code shown, or closing the error. */
