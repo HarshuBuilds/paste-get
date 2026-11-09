@@ -20,6 +20,9 @@ window.pastegetCopyable = (field, button) => {
   field.addEventListener("click", select);
   field.addEventListener("focus", select);
   if (!button) return;
+  // The button's own label, read once: a second click while it says "Copied" would keep that.
+  let label = null;
+  let restore = null;
   button.addEventListener("click", async () => {
     select();
     let copied = false;
@@ -33,9 +36,10 @@ window.pastegetCopyable = (field, button) => {
     }
     if (!copied) copied = document.execCommand("copy");
     if (copied) {
-      const label = button.textContent;
+      if (label === null) label = button.textContent;
       button.textContent = window.pastegetText("copied", "Copied");
-      setTimeout(() => (button.textContent = label), 1500);
+      clearTimeout(restore);
+      restore = setTimeout(() => (button.textContent = label), 1500);
     }
   });
 };
