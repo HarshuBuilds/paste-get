@@ -16,6 +16,7 @@ use pasteget_desktop::clipboard::{MemoryClipboard, SystemClipboard};
 use pasteget_desktop::config::{DEFAULT_PROFILE, Profile};
 use pasteget_desktop::control::{self, Endpoint, Request, Response, StatusReply};
 use pasteget_desktop::daemon::{Daemon, DaemonOptions};
+use pasteget_desktop::i18n::{french, tr};
 use pasteget_desktop::notify::DesktopNotifier;
 use pasteget_desktop::recent;
 use qrcode::QrCode;
@@ -370,6 +371,7 @@ async fn status_json(endpoint: &Endpoint) -> Result<()> {
 /// `tooltip` for a Waybar `custom` module (`return-type: json`): the number of devices
 /// connected, and one of `stopped`, `paused`, `connected`, `away` (none connected) or
 /// `unpaired`. Waybar reads `text` and `tooltip` as Pango markup: names are escaped there.
+/// The tooltip is in the user's language, like the tray: the bar shows it.
 fn status_value(status: Option<&StatusReply>) -> serde_json::Value {
     let Some(status) = status else {
         return json!({
@@ -377,7 +379,7 @@ fn status_value(status: Option<&StatusReply>) -> serde_json::Value {
             "text": "0",
             "alt": "stopped",
             "class": "stopped",
-            "tooltip": "paste-get is not running",
+            "tooltip": tr("paste-get is not running", "paste-get ne tourne pas"),
         });
     };
     let connected: Vec<&str> = status
@@ -387,16 +389,30 @@ fn status_value(status: Option<&StatusReply>) -> serde_json::Value {
         .map(|device| device.name.as_str())
         .collect();
     let (state, tooltip) = if status.paused {
-        ("paused", "paste-get: paused".to_owned())
-    } else if !connected.is_empty() {
         (
-            "connected",
-            format!("paste-get: connected to {}", markup(&connected.join(", "))),
+            "paused",
+            tr("paste-get: paused", "paste-get : en pause").to_owned(),
         )
+    } else if !connected.is_empty() {
+        let names = markup(&connected.join(", "));
+        let tooltip = if french() {
+            format!("paste-get : connecté à {names}")
+        } else {
+            format!("paste-get: connected to {names}")
+        };
+        ("connected", tooltip)
     } else if !status.devices.is_empty() {
-        ("away", "paste-get: no device connected".to_owned())
+        let tooltip = tr(
+            "paste-get: no device connected",
+            "paste-get : aucun appareil connecté",
+        );
+        ("away", tooltip.to_owned())
     } else {
-        ("unpaired", "paste-get: no paired device yet".to_owned())
+        let tooltip = tr(
+            "paste-get: no paired device yet",
+            "paste-get : aucun appareil appairé",
+        );
+        ("unpaired", tooltip.to_owned())
     };
     json!({
         "running": true,
@@ -511,6 +527,8 @@ mod tests {
     use pasteget_desktop::control::DeviceStatusReply;
 
     fn status(paused: bool, devices: &[(&str, bool)]) -> StatusReply {
+        // The tooltips compared below are the English ones.
+        pasteget_desktop::i18n::force(pasteget_desktop::i18n::Lang::En);
         StatusReply {
             device_id: "PCID".into(),
             device_name: "HP-AIO".into(),
@@ -569,7 +587,9 @@ mod tests {
             )
         };
 
+        pasteget_desktop::i18n::force(pasteget_desktop::i18n::Lang::En);
         assert_eq!(state(None), (json!("stopped"), json!("0"), json!(false)));
+        assert_eq!(status_value(None)["tooltip"], "paste-get is not running");
         assert_eq!(
             state(Some(&status(true, &[("POCO", true)]))),
             (json!("paused"), json!("1"), json!(true))

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The language of what the desktop shows people: menus, notifications, windows. French when the
-//! system is in French, English otherwise. Logs and the `pasteget` command stay in English.
+//! system is in French, English otherwise. Logs and the `pasteget` command stay in English,
+//! except the tooltip in `pasteget status --json`, which a status bar shows.
 //!
 //! `PASTEGET_LANG=fr` or `=en` overrides the system language.
 

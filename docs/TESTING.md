@@ -374,7 +374,7 @@ stays until closed, and the log has the details.
 (`"running": false`), so a status bar can poll it. Besides the facts (`name`, `paused`,
 `devices`…), it has the four fields of a Waybar `custom` module: `text` (how many devices are
 connected), `alt` and `class` (`stopped`, `paused`, `connected`, `away` or `unpaired`) and
-`tooltip`. In `~/.config/waybar/config.jsonc`, add `"custom/paste-get"` to a `modules-…` list,
+`tooltip` (in French when the system is, like the tray). In `~/.config/waybar/config.jsonc`, add `"custom/paste-get"` to a `modules-…` list,
 and:
 ```jsonc
 "custom/paste-get": {
