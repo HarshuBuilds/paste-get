@@ -16,8 +16,8 @@ sync over your own Wi-Fi, with no account and no server.
 - 2FA codes from text messages and app notifications can go to the PC clipboard, ready to paste.
   Only the code is sent, never the message. Off until you turn it on.
 - A link copied on the phone shows a notification on the PC that opens it when clicked.
-- Share anything from another app with **Send to PC**, or use the Quick Settings tile, the
-  notification's **Send clipboard** button or the launcher shortcuts.
+- Share text or an image from another app with **Send to PC**, or use the Quick Settings
+  tile, the notification's **Send clipboard** button or the launcher shortcuts.
 
 **From the PC to the phone**
 - Text and images copied on the PC go to the phone's clipboard, long texts included.
@@ -54,7 +54,8 @@ sync over your own Wi-Fi, with no account and no server.
 - Unpair a device from either side: the other side is told and forgets it too.
 
 **Known limits**
-- Only text copied on the phone is sent automatically; share images and files.
+- Only text copied on the phone is sent automatically; images go by sharing them. Files can't be
+  sent yet.
 - The Windows installer isn't code-signed yet: SmartScreen warns once.
 - Google Play Protect may block the APK because of the 2FA feature (the README says what to do).
 - Nothing is kept on disk: there is no clipboard history yet, and a copy waiting for a device
