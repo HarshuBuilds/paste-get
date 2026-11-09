@@ -50,11 +50,21 @@ object Sender {
         } catch (e: PastegetException) {
             return context.getString(R.string.send_failed, e.message)
         }
-        return if (sentTo == 0) {
-            context.getString(R.string.nothing_connected)
-        } else {
-            context.resources.getQuantityString(R.plurals.sent_to, sentTo, sentTo)
-        }
+        if (sentTo > 0) return resultText(context, sentTo, emptyList())
+        val paired = withContext(Dispatchers.IO) { client.pairedComputers().map { it.name } }
+        return resultText(context, sentTo, paired)
+    }
+
+    /**
+     * What to say once a clip went to [sentTo] connected computers. When none is connected, it
+     * waits for the [paired] ones (by name) and goes as soon as one is back: what's shared by
+     * hand is never sensitive, and only sensitive clips don't wait.
+     */
+    fun resultText(context: Context, sentTo: Int, paired: List<String>): String = when {
+        sentTo > 0 -> context.resources.getQuantityString(R.plurals.sent_to, sentTo, sentTo)
+        paired.isEmpty() -> context.getString(R.string.notification_no_computer)
+        paired.size == 1 -> context.getString(R.string.send_waits_for, paired.single())
+        else -> context.getString(R.string.send_waits)
     }
 
     /** Makes sure the connection service runs, and gives it a moment to connect if it just started. */

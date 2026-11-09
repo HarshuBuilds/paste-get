@@ -5,6 +5,8 @@ package io.github.nexoryx.pasteget.ui
 import android.app.Application
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -57,5 +59,21 @@ class HomeScreenTest {
         show(HomeFixtures.state(message = "Paired with HP-AIO"))
 
         compose.onNodeWithText("Paired with HP-AIO").assertIsDisplayed()
+    }
+
+    @Test
+    fun theClipboardCanBeSentWhileTheComputersAreAway() {
+        var sends = 0
+        show(HomeFixtures.state(computers = listOf(HomeFixtures.hp)), HomeActions(onSendClipboard = { sends++ }))
+
+        compose.onNodeWithText(app.getString(R.string.send_clipboard_button)).assertIsEnabled().performClick()
+        assertEquals(1, sends)
+    }
+
+    @Test
+    fun withNothingPairedThereIsNoOneToSendTo() {
+        show(HomeFixtures.state())
+
+        compose.onNodeWithText(app.getString(R.string.send_clipboard_button)).assertIsNotEnabled()
     }
 }

@@ -14,7 +14,8 @@
         <item quantity="one">Sent to %d computer</item>
         <item quantity="other">Sent to %d computers</item>
     </plurals>
-    <string name="nothing_connected">No computer is connected</string>
+    <string name="send_waits_for">It will arrive when %s is back</string>
+    <string name="send_waits">It will arrive when your computers are back</string>
     <string name="clipboard_empty">The clipboard is empty</string>
     <string name="unsupported_content">Only text and images can be sent</string>
     <string name="send_failed">Could not send: %s</string>

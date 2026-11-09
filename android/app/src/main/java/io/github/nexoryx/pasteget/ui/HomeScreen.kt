@@ -99,9 +99,10 @@ fun HomeScreen(state: HomeState, actions: HomeActions) {
             PairingState.Busy -> PairingProgress()
             is PairingState.Failed -> PairingErrorCard(pairing.error, actions.onCancelPairing)
         }
+        // Also while the computers are away: the clip waits for them.
         OutlinedButton(
             onClick = actions.onSendClipboard,
-            enabled = state.connected.isNotEmpty(),
+            enabled = state.computers.isNotEmpty(),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(stringResource(R.string.send_clipboard_button))
