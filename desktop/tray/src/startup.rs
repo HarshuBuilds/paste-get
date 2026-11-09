@@ -287,11 +287,11 @@ fn end(pids: &[u32]) {
 }
 
 #[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// `program` in `%SystemRoot%\System32`.
 #[cfg(windows)]
-fn system32(program: &str) -> PathBuf {
+pub(crate) fn system32(program: &str) -> PathBuf {
     match std::env::var_os("SystemRoot") {
         Some(root) => PathBuf::from(root).join("System32").join(program),
         None => PathBuf::from(program),

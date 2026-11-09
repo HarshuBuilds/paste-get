@@ -18,6 +18,7 @@ mod about;
 mod i18n_check;
 mod linux_tray;
 mod menu;
+mod network;
 mod pairing;
 mod settings;
 mod startup;
@@ -183,7 +184,8 @@ fn run(cli: &Cli) -> Result<()> {
             save_settings,
             close_window,
             app_info,
-            hyprland_lines
+            hyprland_lines,
+            network_advice
         ])
         .setup(move |app| {
             // A tray app: no Dock icon on macOS.
@@ -224,6 +226,12 @@ fn setup<R: Runtime>(app: &AppHandle<R>, tray: Arc<Tray>) -> Result<()> {
         })
         .build(app)?;
     linux_tray::warn_if_no_tray();
+    // Windows: a Public network keeps the phone out. Said once per network.
+    #[cfg(windows)]
+    tauri::async_runtime::spawn(async {
+        let notifier = DesktopNotifier::start();
+        network::watch(move |text| notifier.notice(text)).await;
+    });
     tauri::async_runtime::spawn(refresh_loop(app.clone(), tray));
     Ok(())
 }
@@ -554,6 +562,18 @@ fn hyprland_lines(tray: tauri::State<'_, Arc<Tray>>) -> Result<Option<String>, S
         &Runner::of_this_program(),
     );
     Ok(Some(lines.join("\n")))
+}
+
+/// Windows: what to do about a network marked Public, for the settings window; `None` when
+/// there is none, and elsewhere.
+#[tauri::command]
+async fn network_advice() -> Result<Option<network::Advice>, String> {
+    if !cfg!(windows) {
+        return Ok(None);
+    }
+    // The tray runs the daemon: the firewall rule is for this program.
+    let program = std::env::current_exe().map_err(|e| e.to_string())?;
+    Ok(network::advice(&network::public_now().await, &program))
 }
 
 /// The settings window asks for the current values.

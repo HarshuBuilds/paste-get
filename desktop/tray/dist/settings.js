@@ -43,6 +43,18 @@ function showHyprland() {
     .catch(() => {});
 }
 
+// Windows: what to do about a network marked Public (desktop/tray/src/network.rs).
+function showNetwork() {
+  invoke("network_advice")
+    .then((advice) => {
+      $("network_section").hidden = !advice;
+      if (!advice) return;
+      $("network_text").textContent = advice.text;
+      $("network_command").value = advice.command;
+    })
+    .catch(() => {});
+}
+
 function read() {
   const notify = notifyChoices.find((choice) => choice.checked);
   return {
@@ -103,6 +115,7 @@ document.addEventListener("DOMContentLoaded", () => {
   notifyChoices = Array.from(document.querySelectorAll('input[name="notify"]'));
   document.querySelectorAll(".hotkey").forEach(captureHotkeys);
   window.pastegetCopyable($("hyprland_lines"), $("copy_hyprland"));
+  window.pastegetCopyable($("network_command"), $("copy_network"));
 
   $("close").addEventListener("click", () => invoke("close_window").catch(() => {}));
   $("settings").addEventListener("submit", async (event) => {
@@ -123,4 +136,5 @@ document.addEventListener("DOMContentLoaded", () => {
     .then(show)
     .catch((error) => say(String(error), "bad"));
   showHyprland();
+  showNetwork();
 });

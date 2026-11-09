@@ -40,6 +40,15 @@
       <p class="hint" data-i18n="hotkeysHint">Click a field and press the keys, such as Ctrl+Alt+Shift+P. Backspace turns it off.</p>
     </section>
 
+    <section id="network_section" class="warning" hidden>
+      <h2 data-i18n="networkTitle">Network</h2>
+      <p id="network_text" class="hint"></p>
+      <input id="network_command" class="command" readonly spellcheck="false" aria-label="Command to run as administrator" data-i18n-label="networkCommandLabel">
+      <div class="buttons">
+        <button type="button" id="copy_network" data-i18n="copy">Copy</button>
+      </div>
+    </section>
+
     <section id="hyprland_section" hidden>
       <h2 data-i18n="hyprlandTitle">Hyprland</h2>
       <p class="hint" data-i18n="hyprlandHint">Hyprland starts paste-get at login and runs its hotkeys from its own configuration. Add these lines to ~/.config/hypr/hyprland.conf, then run hyprctl reload. Copy them again after changing a hotkey.</p>
