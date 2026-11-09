@@ -69,8 +69,9 @@ Each line is a claim to check. "→" points at where it's enforced.
    device are limited (3 s deadlines, 8 per IP, 64 in all, the oldest closed past that), and
    one that was proven paired is no longer counted. → `desktop/src/admission.rs`
 8. The secret: 16 bytes from the system RNG (`ring::rand::SystemRandom`), compared in
-   constant time, valid once, for 5 minutes, at most 1000 wrong tries (a few don't close the
-   window, so junk requests can't keep closing it). → `PairingWindow::check`.
+   constant time, valid once, for 5 minutes. Wrong tries don't close the window, so junk
+   requests can't keep closing it; the expiry and the connection limits (item 7) bound how
+   many tries there are. → `PairingWindow::check`.
    It runs under the window's lock, which is never held across network I/O: attempts made at
    once can't get around these limits, and a client that connects and stays silent holds up
    no other attempt. → `Shared::answer_pairing`, `PairingRequest::answer`

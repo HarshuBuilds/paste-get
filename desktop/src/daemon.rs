@@ -753,7 +753,7 @@ impl Shared {
     /// Says that a pairing attempt failed, and returns why.
     fn pairing_failed(&self, e: PairingError) -> anyhow::Error {
         // Closed: the code was used meanwhile, maybe by this device through another of its
-        // addresses, or closed after wrong attempts already reported.
+        // addresses.
         if !matches!(e, PairingError::Closed) {
             let _ = self.events.send(Event::PairingFailed(e.to_string()));
         }

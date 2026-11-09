@@ -40,10 +40,6 @@ use crate::transport::{self, Connection, TransportError, UnverifiedConnection};
 /// How long a pairing QR code stays valid.
 pub const PAIRING_TTL: Duration = Duration::from_secs(5 * 60);
 
-/// Wrong secrets tolerated before the window closes. Many, so that a device on the network can't
-/// close it with a few junk requests; guessing a 128-bit secret is hopeless anyway.
-pub const MAX_ATTEMPTS: u16 = 1000;
-
 /// Longest device name kept, in characters.
 pub const MAX_DEVICE_NAME_CHARS: usize = 64;
 
@@ -61,7 +57,7 @@ pub enum PairingError {
     Random,
     #[error("the pairing code has expired")]
     Expired,
-    #[error("the pairing code was already used or too many wrong attempts were made")]
+    #[error("the pairing code was already used")]
     Closed,
     #[error("wrong pairing code")]
     WrongSecret,
@@ -245,7 +241,6 @@ pub struct PairedDevice {
 pub struct PairingWindow {
     secret: PairingSecret,
     expires_at: Instant,
-    wrong_attempts: u16,
     closed: bool,
 }
 
@@ -255,7 +250,6 @@ impl PairingWindow {
         Ok(Self {
             secret: PairingSecret::generate()?,
             expires_at: now + PAIRING_TTL,
-            wrong_attempts: 0,
             closed: false,
         })
     }
@@ -281,6 +275,10 @@ impl PairingWindow {
     }
 
     /// Checks a secret. A match closes the window: each code pairs one device.
+    ///
+    /// Wrong secrets don't close it: anyone on the network can send them, and could otherwise
+    /// close every window as it opens. Guessing a 128-bit secret is hopeless however many tries
+    /// the 5 minutes allow.
     pub fn check(&mut self, candidate: &[u8], now: Instant) -> Result<(), PairingError> {
         if self.closed {
             return Err(PairingError::Closed);
@@ -291,10 +289,6 @@ impl PairingWindow {
         if self.secret.matches(candidate) {
             self.closed = true;
             return Ok(());
-        }
-        self.wrong_attempts = self.wrong_attempts.saturating_add(1);
-        if self.wrong_attempts >= MAX_ATTEMPTS {
-            self.closed = true;
         }
         Err(PairingError::WrongSecret)
     }
@@ -738,37 +732,23 @@ mod tests {
     }
 
     #[test]
-    fn wrong_secrets_leave_the_window_open_until_too_many() {
+    fn wrong_secrets_never_close_the_window() {
         let now = Instant::now();
         let mut window = PairingWindow::open(now).unwrap();
         let secret = window.secret.clone();
 
-        // A few junk requests don't close it: the right secret still pairs.
-        for _ in 0..3 {
+        // However many junk requests come in, as fast as a script sends them, the right secret
+        // still pairs.
+        for n in 0..10_000_u32 {
+            let mut wrong = [0; SECRET_LEN];
+            wrong[..4].copy_from_slice(&n.to_le_bytes());
             assert!(matches!(
-                window.check(&[0; SECRET_LEN], now),
+                window.check(&wrong, now),
                 Err(PairingError::WrongSecret)
             ));
         }
         assert!(window.is_open(now));
         assert!(window.check(secret.0.as_slice(), now).is_ok());
-
-        // The 1000th wrong secret closes it, and the 1001st request, right or not, is refused.
-        let mut window = PairingWindow::open(now).unwrap();
-        let secret = window.secret.clone();
-        for _ in 1..MAX_ATTEMPTS {
-            assert!(window.check(&[0; SECRET_LEN], now).is_err());
-        }
-        assert!(window.is_open(now));
-        assert!(matches!(
-            window.check(&[1; SECRET_LEN], now),
-            Err(PairingError::WrongSecret)
-        ));
-        assert!(!window.is_open(now));
-        assert!(matches!(
-            window.check(secret.0.as_slice(), now),
-            Err(PairingError::Closed)
-        ));
     }
 
     #[test]
