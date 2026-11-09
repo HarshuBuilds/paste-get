@@ -158,7 +158,8 @@ second. Update both sides first: `git pull` and `cargo build --release` on the P
 the latest CI run on the phone (it installs over the previous one; pairings are kept).
 
 On the phone, turn on **Send new screenshots** and choose **Allow all** for photos. "Select
-photos" hides new screenshots: the card then says so and offers **Open settings**.
+photos" hides new screenshots: the row then says "One step left", and its screen says why
+and offers **Open settings**.
 
 On Hyprland, notifications need a notification daemon (mako, dunst, swaync…). KDE Plasma and
 Windows have one built in.
@@ -218,8 +219,8 @@ C4 worked.
 
 ## 8. Copy on the phone, paste on the PC (M5)
 
-Android lets only the app in front read the clipboard. paste-get reads it in two ways, shown on
-the home screen under **Send what you copy**:
+Android lets only the app in front read the clipboard. paste-get reads it in two ways, shown on the
+**Send what you copy** screen (tap its row on the home screen):
 
 - **Mode A, Shizuku.** [Shizuku](https://shizuku.rikka.app/) runs a small part of paste-get as the
   shell user, which may read the clipboard in the background. Shizuku has to be started again
@@ -247,23 +248,23 @@ Watch the PC daemon's terminal, and on the phone `adb logcat -s paste-get` if yo
 
 | # | Do this | Expected |
 |---|---|---|
-| A1 | Turn on **Send what you copy**, allow paste-get in Shizuku | The card says "Mode: Shizuku, as shell" |
-| A2 | In any app (Chrome, Notes…), select text → **Copy**. On the PC, `Ctrl+V` | The text is pasted. The card says "Last copy (…) sent at …" |
+| A1 | Turn on **Send what you copy**, allow paste-get in Shizuku | The row says "On, automatic"; its screen checks **Shizuku** under *How copies are read* |
+| A2 | In any app (Chrome, Notes…), select text → **Copy**. On the PC, `Ctrl+V` | The text is pasted. The Copies screen says "Last copy (…) sent at …"; the home screen's Recent lists it |
 | A3 | Copy the same text again | The PC logs nothing new (the phone logs "seen before, not sent") |
 | A4 | Copy text **on the PC**, paste it on the phone, wait 5 s | The PC does not receive it back from the phone |
-| A5 | During A2: does the phone show a notice like "Shell pasted from your clipboard"? | Report what it says (Android 12+ may show one; the card's *Open privacy settings* leads to "Show clipboard access", which turns it off) |
+| A5 | During A2: does the phone show a notice like "Shell pasted from your clipboard"? | Report what it says (Android 12+ may show one; the Copies screen's *Open privacy settings* leads to "Show clipboard access", which turns it off) |
 | A6 | Copy a password from a password manager (Bitwarden, KeePassDX…), paste it on the PC | Pasted, and absent from Windows' clipboard history (`Win+V`) or Klipper |
 | A7 | Windows, if you have a second PC on the same Microsoft account with *Settings → System → Clipboard → Share across devices* on: copy text on the phone, then `Win+V` on the other PC | Not there (it is in this PC's own `Win+V` history) |
-| B1 | With Shizuku running, tap **Grant them (paste-get restarts)** | paste-get restarts. The card says "Ready for when Shizuku stops" |
-| B2 | In Shizuku, tap **Stop**. Back in paste-get | Within a few seconds Android asks to allow access to the device logs: allow it. The card says "Mode: fallback, through the system log" |
+| B1 | With Shizuku running, tap **Prepare the backup method (paste-get restarts)** on the Copies screen | paste-get restarts. The Copies screen says "Ready for when Shizuku stops" |
+| B2 | In Shizuku, tap **Stop**. Back in paste-get | Within a few seconds Android asks to allow access to the device logs: allow it. The row says "On, backup method" |
 | B3 | Go to another app, copy text, paste on the PC | Pasted. Report whether anything flashed or the keyboard closed |
 | B4 | Restart the phone, don't start Shizuku | A notification says "Copies are not sent". Tap it, allow log access, then repeat B3: it works |
-| B5 | Start Shizuku again | The card goes back to "Mode: Shizuku" within a few seconds; B3 no longer takes focus |
+| B5 | Start Shizuku again | The row goes back to "On, automatic" within a few seconds; B3 no longer takes focus |
 | B6 | Lock the phone for 5 minutes, unlock it, repeat A2 (or B3 without Shizuku) | Still works |
 
 The phone's log names the hidden Android methods it uses, in a line like "Shizuku: watching the
 clipboard as uid 2000 with addPrimaryClipChangedListener(…), …". **Please include that line in
-your report**: it shows which variant HyperOS has. If the card says "Shizuku can't watch the
+your report**: it shows which variant HyperOS has. If the Copies screen says "Shizuku can't watch the
 clipboard on this phone: unknown signature …", report the whole message: the app only needs that
 signature added.
 
@@ -397,15 +398,15 @@ report what happens.
 **Once, to set up** (the phone on Wi-Fi):
 1. Developer options must be on: Settings → About phone → tap *OS version* (HyperOS) or *Build
    number* seven times.
-2. In paste-get, turn on **Send what you copy**, then tap **Set up without Shizuku**. A
-   notification "Pair paste-get with wireless debugging" appears, and Developer options open.
+2. In paste-get, turn on **Send what you copy**: its screen opens. Tap **Set up without
+   Shizuku**. A notification "Pair paste-get with wireless debugging" appears, and Developer options open.
    The code is typed into that notification, so paste-get's notifications must be allowed: if
-   they aren't, the card says so and **Allow notifications** opens their settings instead.
+   they aren't, the screen says so and **Allow notifications** opens their settings instead.
 3. Turn on **Wireless debugging** (allow it on this network), tap it, then **Pair device with
    pairing code**. A 6-digit code shows.
 4. Without leaving that screen, pull down the notifications and type the code in paste-get's
    notification (**Enter code**).
-5. The notification goes away, and the card says "Mode: built-in, as shell, without Shizuku".
+5. The notification goes away, the row says "On, automatic" and the screen checks **Built-in**.
    You can turn Wireless debugging off: paste-get switches it on for a moment when it needs it,
    then off again.
 
@@ -413,17 +414,17 @@ If Shizuku was set up, the built-in mode replaces it; you can uninstall Shizuku.
 
 | # | Do this | Expected |
 |---|---|---|
-| W1 | Set up as above | "Paired devices" in Wireless debugging lists **paste-get**; the card says "Mode: built-in" |
+| W1 | Set up as above | "Paired devices" in Wireless debugging lists **paste-get**; the Copies screen checks **Built-in** |
 | W2 | Copy text in any app, paste on the PC | Pasted. Android shows "Shell pasted from your clipboard", as with Shizuku |
 | W3 | Turn Wireless debugging off by hand, copy again | Still works (the helper runs on its own) |
 | W4 | Restart the phone, unlock it, wait a minute on Wi-Fi, copy text | Pasted on the PC, without opening paste-get. Wireless debugging is off again afterwards |
-| W5 | Restart the phone with Wi-Fi off | The card says "waiting for Wi-Fi"; turn Wi-Fi on: it starts by itself |
-| W6 | In Wireless debugging → Paired devices, forget paste-get, then restart the phone | The card says "wireless debugging no longer knows paste-get: pair again" |
-| W7 | **Pair again** in the card | Back to step 2 |
-| W8 | With the built-in mode running, turn on **Hide "pasted from your clipboard"** in the card, then repeat W2 | Pasted, with no notice. Settings → Privacy → *Show clipboard access* is now off. Turning the switch off brings the notice back |
-| W9 | Before setting up: Settings → Apps → paste-get → Notifications off. In paste-get, turn on **Send what you copy** | The card says the set-up needs notifications, and offers **Allow notifications** (paste-get's notification settings) instead of **Set up without Shizuku**. Turn them on, come back: **Set up without Shizuku** is back |
+| W5 | Restart the phone with Wi-Fi off | The home screen's card says "Copies need one more step" with **Open Wi-Fi settings**; turn Wi-Fi on: it starts by itself |
+| W6 | In Wireless debugging → Paired devices, forget paste-get, then restart the phone | The row says "Not working: tap to fix"; the Copies screen says "wireless debugging no longer knows paste-get: pair again" |
+| W7 | **Pair again** on the Copies screen | Back to step 2 |
+| W8 | With the built-in mode running, turn on **Hide "pasted from your clipboard"** on the Copies screen (it shows once a copy went out), then repeat W2 | Pasted, with no notice. Settings → Privacy → *Show clipboard access* is now off. Turning the switch off brings the notice back |
+| W9 | Before setting up: Settings → Apps → paste-get → Notifications off. In paste-get, turn on **Send what you copy** | The Copies screen says the set-up needs notifications, and offers **Allow notifications** (paste-get's notification settings) instead of **Set up without Shizuku**. Turn them on, come back: **Set up without Shizuku** is back |
 
-If a step fails, the card shows why. **Please report that text**, and, if you can, the log:
+If a step fails, the Copies screen shows why. **Please report that text** (and what **Details** shows), and, if you can, the log:
 `adb logcat -s paste-get` (lines start with "built-in mode" or "shell helper").
 
 ## 13. Links (v0.2)

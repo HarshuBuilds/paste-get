@@ -17,6 +17,16 @@ sealed interface Route : NavKey {
     @Serializable
     data object Home : Route
 
+    /** The features' screens, above Home. */
+    @Serializable
+    data object Copies : Route
+
+    @Serializable
+    data object Screenshots : Route
+
+    @Serializable
+    data object Codes : Route
+
     @Serializable
     data object History : Route
 

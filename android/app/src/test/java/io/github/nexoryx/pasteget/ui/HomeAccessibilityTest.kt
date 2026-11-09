@@ -12,6 +12,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isHeading
 import androidx.compose.ui.test.isToggleable
@@ -49,19 +50,32 @@ class HomeAccessibilityTest {
         val changes = mutableListOf<Boolean>()
         show(
             AppFixtures.state(screenshots = ScreenshotSetting(wanted = true, access = PhotoAccess.FULL)),
-            AppActions(onScreenshotsChange = { changes += it }, autoCopy = AutoCopyActions(onChange = { changes += it })),
+            AppActions(onScreenshotsChange = { changes += it }, autoCopy = CopiesActions(onChange = { changes += it })),
         )
 
-        val screenshots = compose.onNode(hasText(app.getString(R.string.screenshots_title)) and isToggleable())
+        // "Send new screenshots, switch, on": the switch has the row's name.
+        val screenshots = compose.onNode(hasContentDescription(app.getString(R.string.screenshots_title)) and isToggleable())
         screenshots.performScrollTo().assert(isSwitch).assertIsOn()
-        val copies = compose.onNode(hasText(app.getString(R.string.copies_title)) and isToggleable())
+        val copies = compose.onNode(hasContentDescription(app.getString(R.string.copies_title)) and isToggleable())
         copies.performScrollTo().assert(isSwitch).assertIsOff()
-        compose.onNode(hasText(app.getString(R.string.codes_title)) and isToggleable()).performScrollTo().assert(isSwitch)
+        compose.onNode(hasContentDescription(app.getString(R.string.codes_title)) and isToggleable()).performScrollTo().assert(isSwitch)
 
-        // A tap anywhere on the row toggles it.
         screenshots.performClick()
         copies.performClick()
         assertEquals(listOf(false, true), changes)
+    }
+
+    @Test
+    fun theRestOfEachRowOpensItsScreen() {
+        val opened = mutableListOf<Route>()
+        compose.setContent { MaterialTheme { HomeScreen(AppFixtures.state(), AppActions(), onOpen = { opened += it }) } }
+
+        // Title and state read as one button.
+        compose.onNode(hasText(app.getString(R.string.codes_title)) and hasText(app.getString(R.string.feature_off)))
+            .performScrollTo()
+            .assertHasClickAction()
+            .performClick()
+        assertEquals(listOf<Route>(Route.Codes), opened)
     }
 
     @Test

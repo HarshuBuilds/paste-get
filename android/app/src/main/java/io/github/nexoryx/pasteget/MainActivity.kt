@@ -32,8 +32,8 @@ import com.journeyapps.barcodescanner.ScanOptions
 import io.github.nexoryx.pasteget.ui.AppActions
 import io.github.nexoryx.pasteget.ui.AppState
 import io.github.nexoryx.pasteget.ui.AppViewModel
-import io.github.nexoryx.pasteget.ui.AutoCopyActions
-import io.github.nexoryx.pasteget.ui.AutoCopyCardState
+import io.github.nexoryx.pasteget.ui.CopiesActions
+import io.github.nexoryx.pasteget.ui.CopiesState
 import io.github.nexoryx.pasteget.ui.CodesActions
 import io.github.nexoryx.pasteget.ui.CodesCardState
 import io.github.nexoryx.pasteget.ui.NativeComputers
@@ -92,10 +92,9 @@ class MainActivity : ComponentActivity() {
         val builtIn by pasteGet.autoCopy.builtIn.state.collectAsStateWithLifecycle()
         val shizuku by pasteGet.autoCopy.shizuku.state.collectAsStateWithLifecycle()
         val logs by pasteGet.autoCopy.logs.state.collectAsStateWithLifecycle()
-        val lastCopy by pasteGet.autoCopy.lastCopy.collectAsStateWithLifecycle()
         val lastCode by OneTimeCodes.last.collectAsStateWithLifecycle()
-        // The built-in mode grants the permission that lets the app hide the notices.
-        LaunchedEffect(builtIn.status) { model.refreshNotices() }
+        // Set up, and granting what hides the notices, as it changes.
+        LaunchedEffect(builtIn.status) { model.builtInChanged() }
 
         val computers = model.paired.orEmpty()
         val shellReady = shellReady(builtIn, shizuku)
@@ -122,15 +121,16 @@ class MainActivity : ComponentActivity() {
                 activity = activity,
                 screenshots = model.screenshots,
                 photoRequestDenied = model.photoRequestDenied,
-                autoCopy = AutoCopyCardState(
+                autoCopy = CopiesState(
                     model.copiesOn,
                     builtIn,
                     shizuku,
                     logs,
                     model.fallback,
                     model.notices,
-                    lastCopy,
-                    model.canNotify,
+                    lastCopy = activity.firstOrNull { it.sent && it.automatic && it.kind == ActivityKind.TEXT },
+                    canNotify = model.canNotify,
+                    setUp = model.builtInSetUp,
                 ),
                 codes = CodesCardState(model.codesOn, model.codeAccess, shellReady, lastCode),
                 thisPhone = model.thisPhone,
@@ -153,7 +153,7 @@ class MainActivity : ComponentActivity() {
         onMessageShown = model::messageShown,
         onScreenshotsChange = ::toggleScreenshots,
         onOpenAppSettings = ::openAppSettings,
-        autoCopy = AutoCopyActions(
+        autoCopy = CopiesActions(
             onChange = model::setSendCopies,
             onSetUpBuiltIn = ::setUpBuiltIn,
             onOpenWirelessDebugging = ::openWirelessDebugging,

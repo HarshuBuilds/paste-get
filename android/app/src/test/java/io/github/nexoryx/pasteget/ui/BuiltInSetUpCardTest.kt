@@ -18,7 +18,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
-/** Without notifications, the card says why set-up can't start and leads to the setting. */
+/** Without notifications, the Copies screen says why set-up can't start and leads to the setting. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class BuiltInSetUpCardTest {
@@ -28,13 +28,13 @@ class BuiltInSetUpCardTest {
     private val app: Application = RuntimeEnvironment.getApplication()
 
     private fun show(state: AppState, actions: AppActions) {
-        compose.setContent { MaterialTheme { HomeScreen(state, actions) } }
+        compose.setContent { MaterialTheme { CopiesScreen(state.autoCopy, actions.autoCopy, onBack = {}) } }
     }
 
     @Test
     fun withNotificationsTheSetUpIsOffered() {
         var setUps = 0
-        show(AppFixtures.state(copiesOn = true), AppActions(autoCopy = AutoCopyActions(onSetUpBuiltIn = { setUps++ })))
+        show(AppFixtures.state(copiesOn = true), AppActions(autoCopy = CopiesActions(onSetUpBuiltIn = { setUps++ })))
 
         compose.onNodeWithText(app.getString(R.string.builtin_set_up)).performScrollTo().performClick()
         assertEquals(1, setUps)
@@ -47,7 +47,7 @@ class BuiltInSetUpCardTest {
         var opened = 0
         show(
             AppFixtures.state(copiesOn = true, canNotify = false),
-            AppActions(autoCopy = AutoCopyActions(onSetUpBuiltIn = { setUps++ }, onOpenNotificationSettings = { opened++ })),
+            AppActions(autoCopy = CopiesActions(onSetUpBuiltIn = { setUps++ }, onOpenNotificationSettings = { opened++ })),
         )
 
         compose.onNodeWithText(app.getString(R.string.builtin_needs_notifications)).performScrollTo()

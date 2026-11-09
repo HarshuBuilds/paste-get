@@ -79,6 +79,10 @@ class AppViewModel(
     var canNotify by mutableStateOf(true)
         private set
 
+    /** The built-in mode is paired with wireless debugging. */
+    var builtInSetUp by mutableStateOf(false)
+        private set
+
     init {
         // Taken from the app as it arrives, so the next screen doesn't say it again.
         viewModelScope.launch {
@@ -100,6 +104,7 @@ class AppViewModel(
         codesOn = Preferences.sendCodes(app)
         codeAccess = OneTimeCodes.access(app)
         canNotify = BuiltInShell.canNotify(app)
+        builtInSetUp = app.pasteGet.autoCopy.builtIn.isSetUp
     }
 
     private fun refreshComputers() {
@@ -134,9 +139,10 @@ class AppViewModel(
         unpaired = null
     }
 
-    /** The built-in mode grants the permission that lets the app hide the notices. */
-    fun refreshNotices() {
+    /** The built-in mode changed: it may be set up now, and it grants what hides the notices. */
+    fun builtInChanged() {
         notices = AccessNotices.of(app)
+        builtInSetUp = app.pasteGet.autoCopy.builtIn.isSetUp
     }
 
     /**

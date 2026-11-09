@@ -19,22 +19,23 @@ import uniffi.pasteget_ffi.PairedComputer
 
 /**
  * "Is it working, and what went where?": the app's state, what it sends, and the last few clips.
- * [onSettings] and [onSeeAll] (the History tab) are the shell's.
+ * [onSettings], [onSeeAll] (the History tab) and [onOpen] (a feature's screen) are the shell's.
  */
 @Composable
-fun HomeScreen(state: AppState, actions: AppActions, onSettings: () -> Unit = {}, onSeeAll: () -> Unit = {}) {
+fun HomeScreen(
+    state: AppState,
+    actions: AppActions,
+    onSettings: () -> Unit = {},
+    onSeeAll: () -> Unit = {},
+    onOpen: (Route) -> Unit = {},
+) {
     ScreenScaffold(
         title = stringResource(R.string.app_name),
         actions = { SettingsButton(onSettings) },
     ) {
-        val copies = state.autoCopy
-        val copiesWork = copiesHealth(copies.on, copies.builtIn, copies.shizuku, copies.logs, copies.fallback, copies.canNotify)
-            .health == Health.WORKING
+        val copiesWork = state.autoCopy.health.health == Health.WORKING
         StatusHero(state.status, copiesWork, pairingBusy = state.pairing == PairingState.Busy, actions)
-
-        ScreenshotsCard(state.screenshots, state.photoRequestDenied, actions.onScreenshotsChange, actions.onOpenAppSettings)
-        AutoCopyCard(state.autoCopy, actions.autoCopy)
-        CodesCard(state.codes, actions.codes)
+        FeatureRows(state, actions, onOpen)
         Recent(state.activity, state.computers, onSeeAll)
     }
 }

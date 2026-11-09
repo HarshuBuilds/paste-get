@@ -92,7 +92,7 @@ class PairingSheetTest {
 
         compose.onNodeWithText(app.getString(R.string.pair_error_unreachable)).assertIsDisplayed()
         compose.onNodeWithText("192.168.1.20:47290 did not answer").assertDoesNotExist()
-        compose.onNodeWithText(app.getString(R.string.pair_details)).performClick()
+        compose.onNodeWithText(app.getString(R.string.details)).performClick()
         compose.onNodeWithText("192.168.1.20:47290 did not answer").assertIsDisplayed()
         compose.onNodeWithText(app.getString(R.string.close)).performClick()
         assertEquals(1, closed)

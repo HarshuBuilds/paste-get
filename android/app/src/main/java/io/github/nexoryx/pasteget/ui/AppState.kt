@@ -17,7 +17,7 @@ data class AppState(
     val activity: List<Activity>,
     val screenshots: ScreenshotSetting,
     val photoRequestDenied: Boolean,
-    val autoCopy: AutoCopyCardState,
+    val autoCopy: CopiesState,
     val codes: CodesCardState,
     /** `null` until read from the Rust client. */
     val thisPhone: ThisPhone? = null,
@@ -48,6 +48,6 @@ class AppActions(
     val onScreenshotsChange: (Boolean) -> Unit = {},
     /** paste-get's page in the system settings, where photo access is. */
     val onOpenAppSettings: () -> Unit = {},
-    val autoCopy: AutoCopyActions = AutoCopyActions(),
+    val autoCopy: CopiesActions = CopiesActions(),
     val codes: CodesActions = CodesActions(),
 )

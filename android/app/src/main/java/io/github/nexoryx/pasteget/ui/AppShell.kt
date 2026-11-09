@@ -57,8 +57,17 @@ private fun Shell(state: AppState, actions: AppActions, backStack: MutableList<N
             onBack = { back(backStack) },
             entryProvider = entryProvider {
                 entry<Route.Home> {
-                    HomeScreen(state, actions, onSettings = settings, onSeeAll = { selectTab(backStack, Tab.HISTORY) })
+                    HomeScreen(
+                        state,
+                        actions,
+                        onSettings = settings,
+                        onSeeAll = { selectTab(backStack, Tab.HISTORY) },
+                        onOpen = { open(backStack, it) },
+                    )
                 }
+                entry<Route.Copies> { CopiesScreen(state.autoCopy, actions.autoCopy, onBack = { back(backStack) }) }
+                entry<Route.Screenshots> { ScreenshotsScreen(state, actions, onBack = { back(backStack) }) }
+                entry<Route.Codes> { CodesScreen(state, actions, onBack = { back(backStack) }) }
                 entry<Route.History> { HistoryScreen(state.activity, state.computers, onSettings = settings) }
                 entry<Route.Devices> {
                     DevicesScreen(state, actions, onSettings = settings, onOpen = { open(backStack, Route.Device(it)) })

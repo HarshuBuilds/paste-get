@@ -8,8 +8,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
-import androidx.compose.ui.test.onAllNodesWithText
-import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -82,13 +80,12 @@ class HomeScreenTest {
         var setUps = 0
         show(
             AppFixtures.state(computers = listOf(AppFixtures.hp), connected = setOf("a1"), copiesOn = true),
-            AppActions(autoCopy = AutoCopyActions(onSetUpBuiltIn = { setUps++ })),
+            AppActions(autoCopy = CopiesActions(onSetUpBuiltIn = { setUps++ })),
         )
 
         compose.onNodeWithText(app.getString(R.string.hero_connected, "HP-AIO")).assertIsDisplayed()
         compose.onNodeWithText(app.getString(R.string.hero_step_copies)).assertIsDisplayed()
-        // The card's own button comes first.
-        compose.onAllNodesWithText(app.getString(R.string.builtin_set_up)).onFirst().performClick()
+        compose.onNodeWithText(app.getString(R.string.builtin_set_up)).performClick()
         assertEquals(1, setUps)
     }
 

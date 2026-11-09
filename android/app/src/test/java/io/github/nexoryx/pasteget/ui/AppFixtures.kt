@@ -31,6 +31,7 @@ object AppFixtures {
         canNotify: Boolean = true,
         activity: List<Activity> = emptyList(),
         unpaired: PairedComputer? = null,
+        copiesSetUp: Boolean = false,
     ): AppState {
         val builtIn = BuiltInState(builtInStatus)
         val shizuku = ShizukuState(if (copiesOn) ShizukuStatus.NOT_INSTALLED else ShizukuStatus.OFF)
@@ -56,7 +57,7 @@ object AppFixtures {
             activity = activity,
             screenshots = screenshots,
             photoRequestDenied = false,
-            autoCopy = AutoCopyCardState(
+            autoCopy = CopiesState(
                 copiesOn,
                 builtIn,
                 shizuku,
@@ -64,7 +65,8 @@ object AppFixtures {
                 fallback,
                 AccessNotices(supported = false, hidden = null, canChange = false),
                 lastCopy = null,
-                canNotify,
+                canNotify = canNotify,
+                setUp = copiesSetUp,
             ),
             codes = CodesCardState(codesOn, codeAccess, shellReady = false, last = null),
             thisPhone = phone,

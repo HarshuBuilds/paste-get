@@ -184,7 +184,7 @@ private fun PairingErrorCard(error: PairingError, onDismiss: () -> Unit) {
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = { showDetails = !showDetails }) {
-                    Text(stringResource(if (showDetails) R.string.pair_hide_details else R.string.pair_details))
+                    Text(stringResource(if (showDetails) R.string.hide_details else R.string.details))
                 }
                 TextButton(onClick = onDismiss) { Text(stringResource(R.string.close)) }
             }
