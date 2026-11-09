@@ -9,6 +9,9 @@
 //! The app finds computers on the local network itself (Android's `NsdManager`) and passes what
 //! it finds to [`PhoneClient::computer_found`].
 //!
+//! The clipboard history ([`History`], opened with [`PhoneClient::open_history`]) records what
+//! the client copies, sends and receives.
+//!
 //! Methods that touch the network block: call them off the main thread.
 
 // UniFFI's generated scaffolding is `extern "C"` glue that needs `unsafe`. Our own code here
@@ -26,6 +29,7 @@ use std::time::Duration;
 
 use pasteget_core::clip::{Clip, Kind, mime};
 use pasteget_core::echo::EchoGuard;
+use pasteget_core::history::{Context, Source};
 use pasteget_core::identity::{DeviceId, Identity};
 use pasteget_core::pairing::{self, Dial, PairingInvite, sanitize_device_name};
 use pasteget_core::proto::{AckStatus, Hello, PROTOCOL_VERSION, Platform};
@@ -37,8 +41,11 @@ use tokio::task::JoinHandle;
 
 uniffi::setup_scaffolding!();
 
+pub mod history;
 #[cfg(not(windows))]
 pub mod wireless_adb;
+
+pub use history::{History, HistorySettings};
 
 const IDENTITY_FILE: &str = "identity.key";
 const COMPUTERS_FILE: &str = "computers.json";
@@ -171,6 +178,8 @@ struct State {
     /// `last_received` describes the clip it is hearing of.
     reporting_clip: Mutex<()>,
     last_received: Mutex<Option<ReceivedClip>>,
+    /// Where clips are recorded, once the app opened it.
+    history: Mutex<Option<Arc<History>>>,
 }
 
 #[uniffi::export]
@@ -206,6 +215,7 @@ impl PhoneClient {
                 listener: Mutex::new(None),
                 reporting_clip: Mutex::new(()),
                 last_received: Mutex::new(None),
+                history: Mutex::new(None),
             }),
             dialers: Mutex::new(HashMap::new()),
             pair_on_loopback: AtomicBool::new(false),
@@ -375,14 +385,30 @@ impl PhoneClient {
 
     /// Sends text to every connected computer. Returns how many.
     pub fn send_text(&self, text: String) -> u32 {
-        self.send(mime::TEXT, text.into_bytes(), false)
+        self.send(
+            mime::TEXT,
+            text.into_bytes(),
+            Context::new(Source::SentByHand),
+        )
     }
 
     /// Sends a PNG or JPEG image, as it is, to every connected computer. Returns how many.
     /// Other formats must be converted to PNG first.
     pub fn send_image(&self, image: Vec<u8>) -> Result<u32, PastegetError> {
         let mime_type = mime::of_image(&image).ok_or(PastegetError::UnsupportedImage)?;
-        Ok(self.send(mime_type, image, false))
+        Ok(self.send(mime_type, image, Context::new(Source::SentByHand)))
+    }
+
+    /// Sends a screenshot taken on the phone, like [`PhoneClient::send_image`]. The history
+    /// keeps it as a reference to the gallery when `media_id` (its MediaStore `_ID`) is given,
+    /// instead of a copy.
+    pub fn send_screenshot(
+        &self,
+        image: Vec<u8>,
+        media_id: Option<i64>,
+    ) -> Result<u32, PastegetError> {
+        let mime_type = mime::of_image(&image).ok_or(PastegetError::UnsupportedImage)?;
+        Ok(self.send(mime_type, image, screenshot(media_id)))
     }
 
     /// Text the phone's clipboard now holds, seen by the automatic copy rather than shared by
@@ -397,7 +423,34 @@ impl PhoneClient {
         if !lock(&self.state.guard).should_send(mime::TEXT, &data) {
             return None;
         }
-        Some(self.broadcast(mime::TEXT, data, sensitive))
+        let clip = self.local_clip(mime::TEXT, data, sensitive);
+        self.state.keep(&clip, Context::new(Source::CopiedHere));
+        Some(self.broadcast_clip(&clip))
+    }
+
+    /// Like [`PhoneClient::copied_text`] while sending copies is off: kept in the history only,
+    /// never sent. Returns whether it was new.
+    pub fn record_copied_text(&self, text: String, sensitive: bool) -> bool {
+        let data = text.into_bytes();
+        if !lock(&self.state.guard).should_send(mime::TEXT, &data) {
+            return false;
+        }
+        let clip = self.local_clip(mime::TEXT, data, sensitive);
+        self.state.keep(&clip, Context::new(Source::CopiedHere));
+        true
+    }
+
+    /// Like [`PhoneClient::send_screenshot`] while sending screenshots is off: kept in the
+    /// history only, never sent.
+    pub fn record_screenshot(
+        &self,
+        image: Vec<u8>,
+        media_id: Option<i64>,
+    ) -> Result<(), PastegetError> {
+        let mime_type = mime::of_image(&image).ok_or(PastegetError::UnsupportedImage)?;
+        let clip = self.local_clip(mime_type, image, false);
+        self.state.keep(&clip, screenshot(media_id));
+        Ok(())
     }
 
     /// Sends a one-time code found in a notification of `app` (its name, e.g. "Messages") to
@@ -406,7 +459,55 @@ impl PhoneClient {
         let clip = Clip::one_time_code(code, &app, self.state.identity.device_id());
         // If the user also copies it, the automatic copy doesn't send it a second time.
         lock(&self.state.guard).should_send(&clip.mime_type, &clip.data);
+        // Never kept: the history remembers its digits for a while, to keep copies of it out.
+        self.state.keep(&clip, Context::new(Source::CopiedHere));
         self.broadcast_clip(&clip)
+    }
+
+    /// Opens the clipboard history kept in `dir` (a folder only the app reads, left out of
+    /// backups: Android's no-backup files folder), and records into it from now on what the
+    /// phone copies, sends and receives. If it is already open, applies `settings` and returns
+    /// it. A history that can't be opened is an error, and syncing goes on without one.
+    pub fn open_history(
+        &self,
+        dir: String,
+        settings: HistorySettings,
+    ) -> Result<Arc<History>, PastegetError> {
+        if let Some(history) = self.state.history() {
+            history.set_settings(settings)?;
+            return Ok(history);
+        }
+        // Not under the lock: sessions look for the history meanwhile.
+        let history = History::open(Path::new(&dir), self.state.identity.device_id(), &settings)?;
+        for computer in lock(&self.state.computers).iter() {
+            if let Ok(id) = computer.device_id.parse() {
+                let platform = platform_number(computer.platform.as_deref());
+                history.name_device(id, computer.name.clone(), platform);
+            }
+        }
+        let mut open = lock(&self.state.history);
+        Ok(Arc::clone(open.get_or_insert(history)))
+    }
+
+    /// Stops recording into the history ("Keep a history" off). The [`History`] the app holds
+    /// still lists and deletes, until it lets it go.
+    pub fn close_history(&self) {
+        *lock(&self.state.history) = None;
+    }
+
+    /// An item of the history to put back on the phone's clipboard: its whole text. When the
+    /// automatic copy then reports it, it isn't sent to the computers (the app may offer to,
+    /// with [`PhoneClient::send_text`]). `None` for an image ([`History::original_path`]), a
+    /// text too large to keep, or without a history.
+    pub fn copy_back(&self, id: i64) -> Result<Option<String>, PastegetError> {
+        let Some(history) = self.state.history() else {
+            return Ok(None);
+        };
+        let text = history.full_text(id)?;
+        if let Some(text) = &text {
+            lock(&self.state.guard).should_send(mime::TEXT, text.as_bytes());
+        }
+        Ok(text)
     }
 }
 
@@ -425,22 +526,24 @@ impl PhoneClient {
     }
 
     /// Sends what the user shared, even if it was sent before.
-    fn send(&self, mime_type: &str, data: Vec<u8>, sensitive: bool) -> u32 {
+    fn send(&self, mime_type: &str, data: Vec<u8>, context: Context) -> u32 {
         // Remember it, so the automatic copy doesn't send it a second time.
         lock(&self.state.guard).should_send(mime_type, &data);
-        self.broadcast(mime_type, data, sensitive)
+        let clip = self.local_clip(mime_type, data, false);
+        self.state.keep(&clip, context);
+        self.broadcast_clip(&clip)
     }
 
-    fn broadcast(&self, mime_type: &str, data: Vec<u8>, sensitive: bool) -> u32 {
-        let clip = Clip {
+    /// A clip copied on this phone.
+    fn local_clip(&self, mime_type: &str, data: Vec<u8>, sensitive: bool) -> Clip {
+        Clip {
             mime_type: mime_type.to_owned(),
             data,
             sensitive,
             origin: self.state.identity.device_id(),
             kind: Kind::Copy,
             origin_clip_id: None,
-        };
-        self.broadcast_clip(&clip)
+        }
     }
 
     fn broadcast_clip(&self, clip: &Clip) -> u32 {
@@ -489,6 +592,17 @@ impl State {
         lock(&self.listener).clone()
     }
 
+    fn history(&self) -> Option<Arc<History>> {
+        lock(&self.history).clone()
+    }
+
+    /// Records a clip in the history, if one is open. Never waits on the disk.
+    fn keep(&self, clip: &Clip, context: Context) {
+        if let Some(history) = self.history() {
+            history.record(clip.clone(), context);
+        }
+    }
+
     /// A connection with `peer` started, with its `hello`, or ended: remembers when, and what
     /// its Hello said (a new name means it was renamed there).
     fn seen(&self, peer: DeviceId, hello: Option<&Hello>) {
@@ -507,6 +621,27 @@ impl State {
         // connects.
         let _ = save_computers(&self.data_dir, &computers);
     }
+}
+
+/// How the history records a screenshot: as a reference to the gallery when it has its
+/// MediaStore `_ID`.
+fn screenshot(media_id: Option<i64>) -> Context {
+    Context {
+        media_id,
+        ..Context::new(Source::Screenshot)
+    }
+}
+
+/// The protocol's `Platform` number of a [`platform_name`].
+fn platform_number(name: Option<&str>) -> i32 {
+    let platform = match name {
+        Some("android") => Platform::Android,
+        Some("windows") => Platform::Windows,
+        Some("linux") => Platform::Linux,
+        Some("macos") => Platform::Macos,
+        _ => Platform::Unspecified,
+    };
+    platform.into()
 }
 
 /// The name of a `Hello.platform`, `None` when unspecified or unknown.
@@ -588,6 +723,10 @@ impl SessionEvents for State {
             return;
         }
         self.seen(peer, Some(hello));
+        if let Some(history) = self.history() {
+            let name = sanitize_device_name(&hello.device_name);
+            history.name_device(peer, name, hello.platform);
+        }
         if let Some(listener) = self.listener() {
             listener.on_connection_changed(peer.to_string(), true);
         }
@@ -623,6 +762,7 @@ impl SessionEvents for State {
             sensitive: clip.sensitive,
             received_at_ms: now_ms(),
         };
+        self.keep(&clip, Context::received_from(peer));
         let _one_at_a_time = lock(&self.reporting_clip);
         *lock(&self.last_received) = Some(received);
         if let Some(listener) = self.listener() {

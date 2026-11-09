@@ -188,6 +188,12 @@ History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart ac
     tells the app when to run retention); space goes back to the disk. Measured on 1,000
     texts: the trigram index is 3.2 times the text, 1.4 KB per item
   - [ ] Phone: recording through `ffi`, then the Android screens
+    - [x] `ffi`: a `History` object for the app (pages, search, item, pin, delete, clear,
+      stats, the "kept out" counter, settings, thumbnails) and a recording thread: what the
+      phone copies (also with sending off), sends and receives, with the computer it came
+      through and the device where it was copied. Sync never waits on it, and goes on if it
+      can't open; an item copied back isn't sent again (`ffi/tests/phone_and_pc.rs`)
+    - [ ] Android: turning it on, the screens
   - [ ] PC: history in the daemon, `pasteget history`, the tray's history window
 Desktop identity key in the OS keystore when one is available (M2 stores it in a user-only file,
 like SSH keys, because Hyprland setups often run no Secret Service).

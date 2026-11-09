@@ -74,7 +74,8 @@ running `adb`: that is how it starts its shell helper. Consequences:
 
 ## The clipboard history (being built, off by default)
 
-The history store is in the core (`core/src/history`) but no app turns it on yet. When one does:
+The history store is in the core (`core/src/history`), and the phone API can record into it
+(`ffi/src/history.rs`), but no app turns it on yet. When one does:
 - It stays on the device, in a folder only paste-get can open on the phone (one that is never
   backed up), and only your user account on a PC (mode 0700 on Linux and macOS, set when the
   history opens). It is never sent anywhere.

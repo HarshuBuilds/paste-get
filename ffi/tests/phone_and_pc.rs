@@ -17,7 +17,14 @@ use pasteget_desktop::clipboard::{Content, MemoryClipboard, Raw, RgbaImage};
 use pasteget_desktop::config::Profile;
 use pasteget_desktop::daemon::{Daemon, DaemonOptions};
 use pasteget_desktop::notify::{Notifier, Received};
-use pasteget_ffi::{ClipDelivery, PairedComputer, PastegetError, PhoneClient, PhoneListener};
+use pasteget_ffi::history::{
+    HistoryDevice, HistoryItem, HistoryKept, HistoryQuery, HistorySource, KeptOutCount,
+    KeptOutReason,
+};
+use pasteget_ffi::{
+    ClipDelivery, History, HistorySettings, PairedComputer, PastegetError, PhoneClient,
+    PhoneListener,
+};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 
@@ -1256,4 +1263,237 @@ fn bad_input_is_refused() {
         Err(PastegetError::UnsupportedImage)
     ));
     assert_eq!(phone.send_text("nobody listening".into()), 0);
+}
+
+// The phone's clipboard history (step 46).
+
+/// The phone's history, in its own folder.
+fn history_of(phone: &Phone) -> Arc<History> {
+    let dir = phone._dir.path().join("history");
+    let history = phone
+        .client
+        .open_history(dir.to_str().unwrap().into(), HistorySettings::default())
+        .unwrap();
+    // Opening it again gives the same one.
+    let again = phone
+        .client
+        .open_history(dir.to_str().unwrap().into(), HistorySettings::default())
+        .unwrap();
+    assert!(Arc::ptr_eq(&history, &again));
+    history
+}
+
+/// Every item, newest first, once what was queued is recorded.
+fn items(history: &History) -> Vec<HistoryItem> {
+    history.wait_for_recorder_for_tests();
+    history.page(HistoryQuery::default()).unwrap().items
+}
+
+fn pc_device(pc: &Pc) -> HistoryDevice {
+    HistoryDevice {
+        device_id: pc.daemon.device_id().to_string(),
+        name: pc.runtime.block_on(pc.daemon.status()).device_name,
+        platform: this_platform(),
+    }
+}
+
+#[test]
+fn the_history_keeps_what_the_phone_copies_sends_and_receives() {
+    let pc = start_pc();
+    let phone = connected_phone(&pc, "POCO");
+    let history = history_of(&phone);
+
+    assert_eq!(phone.client.copied_text("copié ici".into(), false), Some(1));
+    pc.daemon.send(Content {
+        mime_type: mime::TEXT.into(),
+        data: b"du PC".to_vec(),
+        sensitive: false,
+    });
+    phone.clip(1);
+    assert_eq!(phone.client.send_text("partagé".into()), 1);
+
+    let items = items(&history);
+    let summary: Vec<_> = items
+        .iter()
+        .map(|item| (item.preview.as_str(), item.source))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            ("partagé", HistorySource::SentByHand),
+            ("du PC", HistorySource::Received),
+            ("copié ici", HistorySource::CopiedHere),
+        ]
+    );
+    let pc = pc_device(&pc);
+    assert_eq!(items[1].origin.as_ref(), Some(&pc));
+    assert_eq!(items[1].via.as_ref(), Some(&pc));
+    assert_eq!((&items[2].origin, &items[2].via), (&None, &None));
+}
+
+/// Passwords from the PC or the phone and 2FA codes are counted, never kept.
+#[test]
+fn the_history_never_keeps_a_secret() {
+    let pc = start_pc();
+    let phone = connected_phone(&pc, "POCO");
+    let history = history_of(&phone);
+
+    pc.daemon.send(Content {
+        mime_type: mime::TEXT.into(),
+        data: b"hunter2 from KeePassXC".to_vec(),
+        sensitive: true,
+    });
+    phone.clip(1);
+    assert_eq!(
+        phone
+            .client
+            .copied_text("hunter2 from Bitwarden".into(), true),
+        Some(1)
+    );
+    phone
+        .client
+        .send_one_time_code("482913".into(), "Messages".into());
+    // Copied by hand right after: kept out too.
+    assert!(phone.client.record_copied_text("482 913".into(), false));
+
+    assert!(items(&history).is_empty());
+    assert_eq!(
+        history.kept_out(0).unwrap(),
+        [
+            KeptOutCount {
+                reason: KeptOutReason::Sensitive,
+                count: 2
+            },
+            KeptOutCount {
+                reason: KeptOutReason::OneTimeCode,
+                count: 2
+            },
+        ]
+    );
+}
+
+/// A clip the PC passed on from another phone says where it was copied first.
+#[test]
+fn a_clip_passed_on_keeps_its_first_origin() {
+    let pc = start_pc();
+    let first = connected_phone(&pc, "POCO");
+    let second = connected_phone(&pc, "Tablet");
+    let history = history_of(&second);
+
+    assert_eq!(first.client.copied_text("du POCO".into(), false), Some(1));
+    second.clip(1);
+
+    let items = items(&history);
+    assert_eq!(items.len(), 1);
+    let origin = items[0].origin.as_ref().unwrap();
+    // The tablet never paired with the POCO, so it doesn't know its name.
+    assert_eq!(
+        (origin.device_id.as_str(), origin.name.as_str()),
+        (first.client.device_id().as_str(), "")
+    );
+    assert_eq!(items[0].via, Some(pc_device(&pc)));
+}
+
+/// A history that can't open is an error the app shows; syncing goes on as before.
+#[test]
+fn syncing_goes_on_when_the_history_cant_open() {
+    let pc = start_pc();
+    let phone = connected_phone(&pc, "POCO");
+    let not_a_folder = phone._dir.path().join("history");
+    std::fs::write(&not_a_folder, b"").unwrap();
+
+    let error = phone
+        .client
+        .open_history(
+            not_a_folder.to_str().unwrap().into(),
+            HistorySettings::default(),
+        )
+        .unwrap_err();
+
+    assert!(matches!(error, PastegetError::Storage(_)), "{error:?}");
+    assert_eq!(
+        phone.client.copied_text("still syncing".into(), false),
+        Some(1)
+    );
+    wait_until("the copy on the PC", || {
+        pc.clipboard.get() == Some(Raw::Text("still syncing".into()))
+    });
+    pc.clipboard.set(Raw::Text("both ways".into()));
+    assert_eq!(
+        phone.clip(1),
+        (mime::TEXT.to_owned(), b"both ways".to_vec())
+    );
+}
+
+/// An item put back on the phone's clipboard isn't sent when the automatic copy reports it, and
+/// what's kept while sending is off never goes out.
+#[test]
+fn copying_an_item_back_does_not_send_it() {
+    let pc = start_pc();
+    let phone = connected_phone(&pc, "POCO");
+    let history = history_of(&phone);
+    assert_eq!(phone.client.copied_text("un".into(), false), Some(1));
+    wait_until("the copy on the PC", || {
+        pc.clipboard.get() == Some(Raw::Text("un".into()))
+    });
+    pc.clipboard.set(Raw::Text("deux".into()));
+    phone.clip(1);
+    let first = items(&history)
+        .into_iter()
+        .find(|item| item.preview == "un")
+        .unwrap();
+
+    assert_eq!(
+        phone.client.copy_back(first.id).unwrap().as_deref(),
+        Some("un")
+    );
+    // The phone's clipboard now holds it, and reports it.
+    assert_eq!(phone.client.copied_text("un".into(), false), None);
+    assert!(
+        phone
+            .client
+            .record_copied_text("seulement ici".into(), false)
+    );
+
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(pc.clipboard.get(), Some(Raw::Text("deux".into())));
+    let items = items(&history);
+    assert_eq!(items[0].preview, "seulement ici");
+    assert_eq!(items.len(), 3);
+    assert_eq!(phone.client.copy_back(i64::MAX).unwrap(), None);
+}
+
+/// A screenshot with its MediaStore ID is kept as a reference to the gallery, sent or not.
+#[test]
+fn screenshots_are_kept_as_gallery_references() {
+    let pc = start_pc();
+    let phone = connected_phone(&pc, "POCO");
+    let history = history_of(&phone);
+
+    assert_eq!(
+        phone.client.send_screenshot(jpeg(4, 3), Some(7)).unwrap(),
+        1
+    );
+    wait_until("the screenshot on the PC", || holds_image(&pc, (4, 3)));
+    phone.client.record_screenshot(jpeg(5, 3), Some(8)).unwrap();
+    assert!(matches!(
+        phone.client.send_screenshot(b"GIF89a".to_vec(), None),
+        Err(PastegetError::UnsupportedImage)
+    ));
+
+    let items = items(&history);
+    let summary: Vec<_> = items
+        .iter()
+        .map(|item| (item.source, item.kept, item.media_id))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            (HistorySource::Screenshot, HistoryKept::Gallery, Some(8)),
+            (HistorySource::Screenshot, HistoryKept::Gallery, Some(7)),
+        ]
+    );
+    // Only the first went out.
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(holds_image(&pc, (4, 3)));
 }
