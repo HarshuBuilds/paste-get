@@ -96,8 +96,12 @@ android {
 
 dependencies {
     implementation(libs.androidx.core.ktx)
+    // The same start screen on every Android version, in the dark theme too (Apache-2.0).
+    implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
+    // The home screen's state outlives a rotation.
+    implementation(libs.androidx.lifecycle.viewmodel)
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.material3)
     implementation(libs.compose.ui)
@@ -113,6 +117,11 @@ dependencies {
     testImplementation(libs.junit)
     // Android framework classes on the JVM, for tests of code that uses them (MIT).
     testImplementation(libs.robolectric)
+    // Compose UI tests, run by Robolectric with the unit tests. The manifest artifact adds the
+    // empty activity they render in, to debug builds only.
+    testImplementation(platform(libs.compose.bom))
+    testImplementation(libs.compose.ui.test.junit4)
+    debugImplementation(libs.compose.ui.test.manifest)
 }
 
 // --- Rust core -------------------------------------------------------------------------------

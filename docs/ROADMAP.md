@@ -112,6 +112,9 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
 - [x] PC side can revoke a paired phone: `pasteget forget <name>`, or the tray menu → the phone
   → *Forget this device*; its session ends at once. The phone is told (`Refusal`, `NOT_PAIRED`),
   forgets the PC too and shows "<PC> unpaired this phone"
+- [x] The phone asks before pairing: a scanned code or a `pasteget://` link (which any web page
+  or message can open) shows the name and addresses it gives and pairs only on *Pair*. Pairing
+  errors are explained in the phone's language, with the technical message under *Details*
 - [x] *Settings…* window in the tray: this computer's name, notifications, links, hotkeys and
   starting at login, checked before saving. Notifications and links apply at once
   (`pasteget` control request `reload_settings`); a new name or hotkeys restart the daemon the

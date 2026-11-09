@@ -39,6 +39,7 @@ The full protocol is in [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 | Someone on the network pretending to be your PC or phone | Their key isn't the pinned one: the handshake fails |
 | Pairing with the wrong PC | The QR code carries the PC's device ID; TLS fails for any other key |
 | A device pairing without seeing your screen | It needs the one-time secret from the QR code |
+| A web page or message opening a pairing link (`pasteget://pair?…`) on the phone | The phone never pairs on its own: it shows the name and addresses the link gives (unchecked, without characters that could disguise them) and pairs only when you tap *Pair* under "Only continue if this code is on your computer's screen right now" |
 | Another user of the same computer | The local control channel is a socket in a directory only you can open (Linux), or a named pipe that rejects remote clients and includes your user name (Windows) |
 | Passwords ending up in logs | Logs contain sizes, MIME types and hashes only, never clipboard contents |
 | Passwords lingering | Clips marked sensitive (password managers) skip clipboard history on Windows and the tray's *Recent* list |
@@ -47,7 +48,7 @@ The full protocol is in [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 | Clips leaving the local network through the OS | On Windows, received clips are marked so the cloud clipboard doesn't upload them to the Microsoft account (they stay in the local Win+V history unless sensitive) |
 | A copy kept for a device that is away | Only the last non-sensitive clip waits, in memory, never on disk; passwords and 2FA codes are never kept. Forgetting the device drops it |
 | Oversized or malformed input from a paired device | Frames are limited to 1 MiB, clips to 64 MiB, images are size-checked before decoding; the parsers are fuzzed |
-| A lost or stolen phone, once you unpair it | On the PC: tray menu → the phone → *Forget this device*, or `pasteget forget <name>`. Its connection ends at once and it can't connect again without a new pairing code; the phone is told and forgets the PC too. The phone can forget a PC the same way |
+| A lost or stolen phone, once you unpair it | On the PC: tray menu → the phone → *Forget this device*, or `pasteget forget <name>`. Its connection ends at once and it can't connect again without a new pairing code; the phone is told and forgets the PC too. The phone can forget a PC too (*Forget…*, which asks first), but that PC isn't told: forget the phone on it as well |
 
 ## The built-in mode (wireless debugging)
 

@@ -56,6 +56,9 @@ too: open the `android/` folder.
 Unit tests that need Android classes run on the JVM with [Robolectric](https://robolectric.org/),
 some on several Android versions. Their first run downloads those versions of Android
 (about 200 MB each) from Maven Central.
+The screens' Compose tests run there too: composables in `ui/` take a plain state and
+callbacks, so a test draws them from a state it builds (`HomeFixtures`), without the app's
+native library.
 
 ### Fuzzing
 

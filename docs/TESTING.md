@@ -135,17 +135,20 @@ The phone and the PC must be on the **same Wi-Fi**. On the PC, run `pasteget dae
 | # | Do this | Expected |
 |---|---|---|
 | P1 | Open paste-get, allow notifications | A persistent "paste-get" notification appears |
-| P2 | PC: `pasteget pair`. Phone: **Pair a computer**, scan the code | Phone: "Paired with …", then "Connected to 1 computer". PC: `✓ Paired with …` |
+| P2 | PC: `pasteget pair`. Phone: **Pair a computer**, scan the code | Phone: a sheet "Pair with this computer?" with the PC's name and address. Tap **Pair**: a progress bar (the button waits), then "Paired with …" and "Connected to 1 computer". PC: `✓ Paired with …` |
 | P3 | In any app, select text → **Share** → **Send to PC**, then `Ctrl+V` on the PC | The text is pasted |
 | P4 | Gallery → a screenshot → **Share** → **Send to PC**, then paste on the PC (Paint, GIMP, Discord) | The image is pasted |
 | P5 | Add the **Send clipboard** tile to Quick Settings. Copy text, pull down the shade, tap the tile | "Sent to 1 computer"; `Ctrl+V` on the PC pastes it |
 | P6 | PC: `pasteget send "depuis le PC"`, then long-press a text field on the phone → Paste | `depuis le PC` is pasted |
 | P7 | Lock the phone for 5 minutes, unlock, repeat P3 | Still works, without opening the app |
 | P8 | Restart the phone, wait a minute, repeat P3 | Still works (the app restarts on boot) |
-| P9 | Scan the PC's pairing QR code with the **normal camera app** (only if it offers to open the link; not every camera does) | paste-get opens and pairs |
+| P9 | Scan the PC's pairing QR code with the **normal camera app** (only if it offers to open the link; not every camera does) | paste-get opens and asks first, as in P2; it pairs only on **Pair**. Rotating the phone doesn't ask again |
 | P10 | On the phone only, forget the computer (the PC still lists it). PC: `pasteget pair`, scan the new code | Phone: "Paired with …", then "Connected to 1 computer". The PC lists the phone once |
 | P11 | Turn the phone's Wi-Fi off (mobile data on), scan a pairing code | Within about 10 s, an error that lists each address of the code with its reason, the PC's Wi-Fi or Ethernet address first |
 | P12 | Rename the phone (Settings → About phone → Device name), then force-stop paste-get and open it again | Within seconds `pasteget status` on the PC shows the new name, also after the PC restarts |
+| P13 | Turn on dark mode, close paste-get (swipe it away in recents), open it again | The start screen and the app are dark from the first frame, with no white flash |
+| P14 | PC: `pasteget pair`, then quit the daemon. Phone: scan the code, **Pair** | After a few seconds: "Pairing didn't work" and what to check (same Wi-Fi, paste-get open on the PC), in the phone's language. **Details** shows the technical error |
+| P15 | Last: under Paired computers, tap **Forget…** next to the PC, then **Cancel**; tap it again, then **Forget** | Cancel keeps the PC. Forget removes it from the list, and the phone stops connecting to it. The PC still lists the phone (forget it there too, or pair again) |
 
 Phone logs never contain clipboard contents either. To get them: `adb logcat -s paste-get`.
 
