@@ -59,7 +59,8 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
 - [x] Mode A: Shizuku user service listening as shell, with reflection fallbacks
 - [x] One-time grants through Shizuku (`READ_LOGS`, overlay)
 - [x] Mode B: `READ_LOGS` + overlay fallback
-- [x] Health screen (current mode, Shizuku state, last sync): a card on the home screen
+- [x] Health screen (current mode, Shizuku state, last sync): the home screen's status card and
+  the *Send what you copy* screen (how copies are read, next step, details)
 - [x] Verified on the POCO M8 5G (`TESTING.md`, section 8), with Windows 11, November 2026.
   HyperOS shows Android's "Shell pasted from your clipboard" notice on each copy. Which
   `IClipboard` signature it has is still to be read from the log
@@ -115,6 +116,13 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
 - [x] The phone asks before pairing: a scanned code or a `pasteget://` link (which any web page
   or message can open) shows the name and addresses it gives and pairs only on *Pair*. Pairing
   errors are explained in the phone's language, with the technical message under *Details*
+- [x] The phone's screens, redrawn: Home (a status card with one next step, what paste-get
+  sends, the last clips with their latency), History (what was sent and received since the app
+  started: kind, size, time, never contents, until the history store exists), Devices (each
+  computer's page, this phone's ID, pull to refresh), a screen per feature, Settings
+  (appearance, language, the tile, licences); the notification and the tile name the computers;
+  launcher shortcuts; 640 dp columns on wide screens (`TESTING.md`, P13–P18). Still to do: the
+  built-in mode's set-up wizard, the keep-alive checklist and onboarding
 - [x] *Settings…* window in the tray: this computer's name, notifications, links, hotkeys and
   starting at login, checked before saving. Notifications and links apply at once
   (`pasteget` control request `reload_settings`); a new name or hotkeys restart the daemon the
