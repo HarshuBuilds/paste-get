@@ -141,6 +141,9 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
   its processes if it's too old to know it: only those of its profile, the tray and `pasteget
   daemon` (`TESTING.md`, T22–T25, T27, T28). The uninstaller also removes *Start at login*,
   for every profile
+- [x] The phone API says which computer sent a clip, and where it was copied
+  (`PhoneClient::last_received`), and when each computer was last seen, its system and its
+  paste-get version (`PairedComputer`), for the new phone screens
 
 ## v0.2 — "smart"
 History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart actions.

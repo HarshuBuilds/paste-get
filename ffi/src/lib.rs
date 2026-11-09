@@ -79,6 +79,37 @@ pub struct PairedComputer {
     /// Socket addresses, e.g. `192.168.1.20:47290`: from the pairing code, then the last one
     /// that worked moves to the front.
     pub addresses: Vec<String>,
+    /// When its last connection started or ended (unix ms), whichever came last: while it is
+    /// connected, when it connected. `None` until it first connects.
+    #[serde(default)]
+    #[uniffi(default = None)]
+    pub last_seen_ms: Option<i64>,
+    /// The system it said it runs when it last connected: "windows", "linux", "macos" or
+    /// "android". `None` until it connects, or if it didn't say.
+    #[serde(default)]
+    #[uniffi(default = None)]
+    pub platform: Option<String>,
+    /// The paste-get version it said it runs when it last connected, e.g. "0.1.0".
+    #[serde(default)]
+    #[uniffi(default = None)]
+    pub app_version: Option<String>,
+}
+
+/// A clip a computer sent, without its contents: [`PhoneClient::last_received`].
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct ReceivedClip {
+    /// The computer it came from.
+    pub device_id: String,
+    /// Its name, as [`PhoneClient::paired_computers`] has it.
+    pub device_name: String,
+    /// The device where it was copied: that computer, or a device paired with it (another
+    /// phone, a computer linked with it) that it passed the clip on from.
+    pub origin_device_id: String,
+    pub mime_type: String,
+    pub size: u64,
+    pub sensitive: bool,
+    /// When it arrived (unix ms).
+    pub received_at_ms: i64,
 }
 
 /// A clip a computer acknowledged.
@@ -100,6 +131,7 @@ pub trait PhoneListener: Send + Sync {
     fn on_connection_changed(&self, device_id: String, connected: bool);
 
     /// A clip arrived from a computer. `sensitive` clips must stay out of history.
+    /// [`PhoneClient::last_received`], called from here, says which computer sent it.
     fn on_clip_received(&self, mime_type: String, data: Vec<u8>, sensitive: bool);
 
     /// A computer acknowledged a clip sent with `send_text` or `send_image`.
@@ -135,6 +167,10 @@ struct State {
     peers: Peers,
     guard: Mutex<EchoGuard>,
     listener: Mutex<Option<Arc<dyn PhoneListener>>>,
+    /// Held while the app hears of a received clip, so that it hears of them one at a time and
+    /// `last_received` describes the clip it is hearing of.
+    reporting_clip: Mutex<()>,
+    last_received: Mutex<Option<ReceivedClip>>,
 }
 
 #[uniffi::export]
@@ -168,6 +204,8 @@ impl PhoneClient {
                 computers: Mutex::new(computers),
                 peers,
                 listener: Mutex::new(None),
+                reporting_clip: Mutex::new(()),
+                last_received: Mutex::new(None),
             }),
             dialers: Mutex::new(HashMap::new()),
             pair_on_loopback: AtomicBool::new(false),
@@ -221,6 +259,9 @@ impl PhoneClient {
             .iter()
             .map(SocketAddr::to_string)
             .collect(),
+            last_seen_ms: None,
+            platform: None,
+            app_version: None,
         };
         {
             let mut computers = lock(&self.state.computers);
@@ -323,6 +364,13 @@ impl PhoneClient {
 
     pub fn connected_count(&self) -> u32 {
         u32::try_from(self.state.peers.connected().len()).unwrap_or(u32::MAX)
+    }
+
+    /// The last clip a computer sent, since the client was created. Called from
+    /// [`PhoneListener::on_clip_received`], it is the clip that call reports: the app hears of
+    /// received clips one at a time.
+    pub fn last_received(&self) -> Option<ReceivedClip> {
+        lock(&self.state.last_received).clone()
     }
 
     /// Sends text to every connected computer. Returns how many.
@@ -441,22 +489,55 @@ impl State {
         lock(&self.listener).clone()
     }
 
-    /// A computer connected with a new name: it was renamed there.
-    fn renamed(&self, peer: DeviceId, name: &str) {
+    /// A connection with `peer` started, with its `hello`, or ended: remembers when, and what
+    /// its Hello said (a new name means it was renamed there).
+    fn seen(&self, peer: DeviceId, hello: Option<&Hello>) {
         let id = peer.to_string();
-        let name = sanitize_device_name(name);
         let mut computers = lock(&self.computers);
         let Some(computer) = computers.iter_mut().find(|c| c.device_id == id) else {
             return;
         };
-        if computer.name == name {
-            return;
+        computer.last_seen_ms = Some(now_ms());
+        if let Some(hello) = hello {
+            computer.name = sanitize_device_name(&hello.device_name);
+            computer.platform = platform_name(hello.platform);
+            computer.app_version = clean_version(&hello.app_version);
         }
-        computer.name = name;
-        // Best effort: if saving fails, it shows the old name again after a restart, until it
+        // Best effort: if saving fails, it shows what it knew before after a restart, until it
         // connects.
         let _ = save_computers(&self.data_dir, &computers);
     }
+}
+
+/// The name of a `Hello.platform`, `None` when unspecified or unknown.
+fn platform_name(platform: i32) -> Option<String> {
+    let name = match Platform::try_from(platform).ok()? {
+        Platform::Unspecified => return None,
+        Platform::Android => "android",
+        Platform::Windows => "windows",
+        Platform::Linux => "linux",
+        Platform::Macos => "macos",
+    };
+    Some(name.to_owned())
+}
+
+/// A version a peer sent, without control characters and at most 32 characters long. `None`
+/// if it sent none.
+fn clean_version(version: &str) -> Option<String> {
+    let cleaned: String = version
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(32)
+        .collect();
+    Some(cleaned.trim().to_owned()).filter(|version| !version.is_empty())
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| {
+            i64::try_from(since.as_millis()).unwrap_or(i64::MAX)
+        })
 }
 
 impl SessionEvents for State {
@@ -506,19 +587,20 @@ impl SessionEvents for State {
             self.peers.unpair(&peer);
             return;
         }
-        self.renamed(peer, &hello.device_name);
+        self.seen(peer, Some(hello));
         if let Some(listener) = self.listener() {
             listener.on_connection_changed(peer.to_string(), true);
         }
     }
 
     fn disconnected(&self, peer: DeviceId) {
+        self.seen(peer, None);
         if let Some(listener) = self.listener() {
             listener.on_connection_changed(peer.to_string(), false);
         }
     }
 
-    fn clip_received(&self, _peer: DeviceId, clip: Clip) {
+    fn clip_received(&self, peer: DeviceId, clip: Clip) {
         {
             let mut guard = lock(&self.guard);
             if !guard.accepts_origin(&clip.origin) {
@@ -526,6 +608,23 @@ impl SessionEvents for State {
             }
             guard.applied_remote(&clip);
         }
+        let id = peer.to_string();
+        let device_name = lock(&self.computers)
+            .iter()
+            .find(|c| c.device_id == id)
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
+        let received = ReceivedClip {
+            device_id: id,
+            device_name,
+            origin_device_id: clip.origin.to_string(),
+            mime_type: clip.mime_type.clone(),
+            size: clip.data.len() as u64,
+            sensitive: clip.sensitive,
+            received_at_ms: now_ms(),
+        };
+        let _one_at_a_time = lock(&self.reporting_clip);
+        *lock(&self.last_received) = Some(received);
         if let Some(listener) = self.listener() {
             listener.on_clip_received(clip.mime_type, clip.data, clip.sensitive);
         }
@@ -692,6 +791,98 @@ mod tests {
         assert_eq!(*pc_events.0.lock().unwrap(), [state.identity.device_id()]);
         assert!(!connections.0.lock().unwrap().contains(&true));
         assert!(phone.paired_computers().is_empty());
+    }
+
+    /// Asks `last_received` from inside `on_clip_received`, after taking its time.
+    #[derive(Default)]
+    struct SlowAsker {
+        client: std::sync::OnceLock<std::sync::Weak<PhoneClient>>,
+        /// The size of each clip, and the size `last_received` gave meanwhile.
+        heard: Mutex<Vec<(usize, Option<u64>)>>,
+    }
+
+    impl PhoneListener for SlowAsker {
+        fn on_connection_changed(&self, _device_id: String, _connected: bool) {}
+
+        fn on_clip_received(&self, _mime_type: String, data: Vec<u8>, _sensitive: bool) {
+            if data.len() == 1 {
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            let client = self.client.get().and_then(|c| c.upgrade()).unwrap();
+            let said = client.last_received().map(|clip| clip.size);
+            self.heard.lock().unwrap().push((data.len(), said));
+        }
+
+        fn on_clip_delivered(&self, _delivery: ClipDelivery) {}
+
+        fn on_unpaired(&self, _computer: PairedComputer) {}
+    }
+
+    /// A clip arriving while the app handles another one waits: `last_received` still describes
+    /// the one being handled.
+    #[test]
+    fn last_received_waits_its_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let phone = PhoneClient::new(dir.path().to_str().unwrap().into(), "POCO".into()).unwrap();
+        let asker = Arc::new(SlowAsker::default());
+        asker.client.set(Arc::downgrade(&phone)).unwrap();
+        phone.start(asker.clone());
+        let (first, second) = (
+            Identity::generate().unwrap().device_id(),
+            Identity::generate().unwrap().device_id(),
+        );
+
+        std::thread::scope(|threads| {
+            let state = &phone.state;
+            threads.spawn(|| state.clip_received(first, Clip::text("1", first)));
+            std::thread::sleep(Duration::from_millis(50));
+            threads.spawn(|| state.clip_received(second, Clip::text("22", second)));
+        });
+
+        assert_eq!(*asker.heard.lock().unwrap(), [(1, Some(1)), (2, Some(2))]);
+        assert_eq!(phone.last_received().unwrap().device_id, second.to_string());
+    }
+
+    /// Saved before computers had a last-seen time, a platform and a version.
+    #[test]
+    fn computers_saved_by_an_older_version_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = Identity::generate().unwrap().device_id().to_string();
+        let old = format!(
+            r#"[{{"device_id": "{id}", "name": "HP-AIO", "addresses": ["192.168.1.20:47290"]}}]"#
+        );
+        fs::write(dir.path().join(COMPUTERS_FILE), old).unwrap();
+
+        let computers = load_computers(dir.path()).unwrap();
+
+        assert_eq!(
+            computers,
+            [PairedComputer {
+                device_id: id,
+                name: "HP-AIO".into(),
+                addresses: vec!["192.168.1.20:47290".into()],
+                last_seen_ms: None,
+                platform: None,
+                app_version: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn what_a_hello_says_is_cleaned() {
+        assert_eq!(
+            platform_name(Platform::Windows.into()).as_deref(),
+            Some("windows")
+        );
+        assert_eq!(
+            platform_name(Platform::Linux.into()).as_deref(),
+            Some("linux")
+        );
+        assert_eq!(platform_name(Platform::Unspecified.into()), None);
+        assert_eq!(platform_name(99), None);
+        assert_eq!(clean_version(" 0.1.0\n"), Some("0.1.0".into()));
+        assert_eq!(clean_version(""), None);
+        assert_eq!(clean_version(&"9".repeat(100)).unwrap().len(), 32);
     }
 
     #[test]

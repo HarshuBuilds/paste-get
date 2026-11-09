@@ -270,7 +270,144 @@ fn phone_pairs_then_shares_text_and_screenshots_with_the_pc() {
     drop(phone);
     let again = phone_client(&phone_dir, "POCO M8 5G");
     assert_eq!(again.device_id(), phone_id);
-    assert_eq!(again.paired_computers(), vec![computer]);
+    let saved = again.paired_computers();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(
+        (&saved[0].device_id, &saved[0].name, &saved[0].addresses),
+        (&computer.device_id, &computer.name, &computer.addresses)
+    );
+}
+
+/// The platform of this test's PC, as the phone names it.
+fn this_platform() -> Option<String> {
+    match std::env::consts::OS {
+        "windows" | "linux" | "macos" => Some(std::env::consts::OS.to_owned()),
+        _ => None,
+    }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
+
+/// Step 24: the phone knows when each computer was last there, what it runs, and which one sent
+/// a clip.
+#[test]
+fn the_phone_knows_each_computer_and_which_one_sent_a_clip() {
+    let pc = start_pc();
+    let before = now_ms();
+    let phone = connected_phone(&pc, "POCO");
+    let pc_id = pc.daemon.device_id().to_string();
+    let pc_name = pc.runtime.block_on(pc.daemon.status()).device_name;
+
+    let computer = phone.client.paired_computers()[0].clone();
+    assert_eq!(computer.platform, this_platform());
+    assert_eq!(
+        computer.app_version.as_deref(),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
+    let connected_at = computer.last_seen_ms.unwrap();
+    assert!((before..=now_ms()).contains(&connected_at));
+    assert_eq!(phone.client.last_received(), None);
+
+    pc.daemon.send(Content {
+        mime_type: mime::TEXT.into(),
+        data: b"from the PC".to_vec(),
+        sensitive: false,
+    });
+    phone.clip(1);
+    let received = phone.client.last_received().unwrap();
+    assert_eq!(received.device_id, pc_id);
+    assert_eq!(received.device_name, pc_name);
+    assert_eq!(received.origin_device_id, pc_id);
+    assert_eq!(received.mime_type, mime::TEXT);
+    assert_eq!(received.size, 11);
+    assert!(!received.sensitive);
+    assert!((connected_at..=now_ms()).contains(&received.received_at_ms));
+
+    // Leaving counts as being seen too, and it's all saved.
+    std::thread::sleep(Duration::from_millis(5));
+    phone.client.stop();
+    wait_until("the disconnection to be noted", || {
+        phone.client.paired_computers()[0].last_seen_ms > Some(connected_at)
+    });
+    let left = phone.client.paired_computers();
+    drop(phone.client);
+    let again = phone_client(&phone._dir, "POCO");
+    assert_eq!(again.paired_computers(), left);
+}
+
+/// Called from `on_clip_received`, `last_received` describes that clip, even while two computers
+/// send at once.
+#[test]
+fn last_received_describes_the_clip_being_reported() {
+    #[derive(Default)]
+    struct Asks {
+        client: std::sync::OnceLock<std::sync::Weak<PhoneClient>>,
+        /// The size of each clip, and what `last_received` said meanwhile.
+        heard: Mutex<Vec<(usize, Option<pasteget_ffi::ReceivedClip>)>>,
+    }
+
+    impl PhoneListener for Asks {
+        fn on_connection_changed(&self, _device_id: String, _connected: bool) {}
+
+        fn on_clip_received(&self, _mime_type: String, data: Vec<u8>, _sensitive: bool) {
+            // The first clip takes long to handle: the other computer's clips may arrive
+            // meanwhile, and wait for their turn (`last_received_waits_its_turn` makes sure).
+            if data.len() == 1 {
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            let said = self
+                .client
+                .get()
+                .and_then(|c| c.upgrade())
+                .unwrap()
+                .last_received();
+            self.heard.lock().unwrap().push((data.len(), said));
+        }
+
+        fn on_clip_delivered(&self, _delivery: ClipDelivery) {}
+
+        fn on_unpaired(&self, _computer: PairedComputer) {}
+    }
+
+    let (first, second) = (start_pc(), start_pc());
+    let dir = tempfile::tempdir().unwrap();
+    let client = phone_client(&dir, "POCO");
+    for pc in [&first, &second] {
+        let code = pc.runtime.block_on(pc.daemon.open_pairing()).unwrap();
+        client.pair(code.to_uri()).unwrap();
+    }
+    let asks = Arc::new(Asks::default());
+    asks.client.set(Arc::downgrade(&client)).unwrap();
+    client.start(asks.clone());
+    wait_until("both connections", || client.connected_count() == 2);
+
+    // Sizes 1 to 10 from the first computer, 101 to 110 from the second.
+    for n in 1..=10 {
+        for (pc, size) in [(&first, n), (&second, 100 + n)] {
+            pc.daemon.send(Content {
+                mime_type: mime::TEXT.into(),
+                data: vec![b'x'; size],
+                sensitive: false,
+            });
+        }
+    }
+    wait_until("every clip", || asks.heard.lock().unwrap().len() == 20);
+    let (first_id, second_id) = (
+        first.daemon.device_id().to_string(),
+        second.daemon.device_id().to_string(),
+    );
+    for (size, said) in asks.heard.lock().unwrap().iter() {
+        let said = said.as_ref().unwrap();
+        assert_eq!(said.size, *size as u64);
+        let from = if *size > 100 { &second_id } else { &first_id };
+        assert_eq!(&said.device_id, from);
+    }
+    client.stop();
 }
 
 #[test]
@@ -321,7 +458,9 @@ fn a_phone_that_forgot_the_pc_pairs_again() {
     let computer = phone.client.pair(qr_code).unwrap();
 
     assert_eq!(computer.device_id, pc_id);
-    assert_eq!(phone.client.paired_computers(), [computer]);
+    let paired = phone.client.paired_computers();
+    assert_eq!(paired.len(), 1);
+    assert_eq!(paired[0].device_id, pc_id);
     wait_until("the new connection", || phone.client.connected_count() == 1);
     let status = pc.runtime.block_on(pc.daemon.status());
     assert_eq!(status.devices.len(), 1);
@@ -888,6 +1027,10 @@ fn a_jpeg_from_one_phone_reaches_another_through_the_pc() {
     assert_eq!(first.client.send_image(photo.clone()).unwrap(), 1);
 
     assert_eq!(second.clip(1), (mime::JPEG.to_owned(), photo));
+    // Sent by the PC, copied on the first phone.
+    let received = second.client.last_received().unwrap();
+    assert_eq!(received.device_id, pc.daemon.device_id().to_string());
+    assert_eq!(received.origin_device_id, first.client.device_id());
     // Not back to the phone it came from.
     std::thread::sleep(Duration::from_millis(200));
     assert!(first.listener.clips.lock().unwrap().is_empty());
