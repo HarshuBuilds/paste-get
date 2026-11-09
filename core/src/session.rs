@@ -77,6 +77,10 @@ pub trait SessionEvents: Send + Sync {
     /// newer session with the same device already replaced this one.
     fn disconnected(&self, _peer: DeviceId) {}
 
+    /// `peer` speaks protocol `version`, not this one's, so their session ended after the Hello
+    /// exchange: one of them must be updated. Reported at each attempt.
+    fn version_mismatch(&self, _peer: DeviceId, _version: u32) {}
+
     /// A complete clip whose hash and type were verified.
     fn clip_received(&self, peer: DeviceId, clip: Clip);
 
@@ -311,7 +315,8 @@ where
 {
     let their_hello = timeout(HANDSHAKE_TIMEOUT, connection.exchange_hello(hello))
         .await
-        .map_err(|_| SessionError::Timeout("Hello exchange"))??;
+        .map_err(|_| SessionError::Timeout("Hello exchange"))?;
+    let their_hello = reported(their_hello, connection.peer(), events)?;
     run(connection, their_hello, peers, events).await
 }
 
@@ -334,8 +339,25 @@ where
     timeout(HANDSHAKE_TIMEOUT, connection.send(&ours))
         .await
         .map_err(|_| SessionError::Timeout("Hello exchange"))??;
-    let their_hello = transport::checked_hello(their_hello)?;
+    let their_hello = reported(
+        transport::checked_hello(their_hello),
+        connection.peer(),
+        events,
+    )?;
     run(connection, their_hello, peers, events).await
+}
+
+/// Reports a device that speaks another protocol version.
+fn reported(
+    hello: Result<Hello, TransportError>,
+    peer: DeviceId,
+    events: &dyn SessionEvents,
+) -> Result<Hello, TransportError> {
+    if let Err(TransportError::VersionMismatch(version)) = &hello {
+        tracing::warn!(%peer, version, "the device speaks another protocol version");
+        events.version_mismatch(peer, *version);
+    }
+    hello
 }
 
 /// A session once both Hellos went through.
@@ -721,9 +743,14 @@ mod tests {
         disconnected: Mutex<Vec<DeviceId>>,
         deliveries: Mutex<Vec<(DeviceId, Delivery)>>,
         unpaired_by: Mutex<Vec<DeviceId>>,
+        mismatches: Mutex<Vec<(DeviceId, u32)>>,
     }
 
     impl SessionEvents for Recorder {
+        fn version_mismatch(&self, peer: DeviceId, version: u32) {
+            self.mismatches.lock().unwrap().push((peer, version));
+        }
+
         fn unpaired_by(&self, peer: DeviceId) {
             self.unpaired_by.lock().unwrap().push(peer);
         }
@@ -1026,6 +1053,7 @@ mod tests {
         let mut newer = hello("phone");
         newer.protocol_version = PROTOCOL_VERSION + 1;
         let peers = Peers::new();
+        let events = Recorder::default();
 
         let (theirs, ended) = tokio::join!(client.exchange_hello(newer), async {
             let Ok(crate::pairing::Opening::Hello(connection, read_first)) =
@@ -1033,14 +1061,7 @@ mod tests {
             else {
                 panic!("expected a Hello");
             };
-            answer_session(
-                connection,
-                read_first,
-                hello("pc"),
-                &peers,
-                &Recorder::default(),
-            )
-            .await
+            answer_session(connection, read_first, hello("pc"), &peers, &events).await
         });
 
         // A newer device still learns this one's version, to talk down if it can.
@@ -1050,6 +1071,39 @@ mod tests {
             Err(SessionError::Transport(TransportError::VersionMismatch(v))) if v == PROTOCOL_VERSION + 1
         ));
         assert!(peers.connected().is_empty());
+        assert_eq!(
+            *events.mismatches.lock().unwrap(),
+            [(phone.device_id(), PROTOCOL_VERSION + 1)]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_dialing_side_reports_a_device_of_another_version() {
+        let (phone, pc) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (phone_io, pc_io) = duplex(64 * 1024);
+        let (client, server) = tokio::join!(
+            transport::connect(phone_io, &phone, pc.device_id()),
+            async { transport::accept(pc_io, &pc).await?.authorize(|_| true) }
+        );
+        let (client, mut server) = (client.unwrap(), server.unwrap());
+        let mut newer = hello("pc");
+        newer.protocol_version = PROTOCOL_VERSION + 1;
+        let (peers, events) = (Peers::new(), Recorder::default());
+
+        let (ended, _) = tokio::join!(
+            run_session(client, hello("phone"), &peers, &events),
+            server.exchange_hello(newer)
+        );
+
+        assert!(matches!(
+            ended,
+            Err(SessionError::Transport(TransportError::VersionMismatch(_)))
+        ));
+        assert_eq!(
+            *events.mismatches.lock().unwrap(),
+            [(pc.device_id(), PROTOCOL_VERSION + 1)]
+        );
+        assert!(events.connected.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

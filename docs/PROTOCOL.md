@@ -126,7 +126,9 @@ side reads it first (section 2.3), then answers with its own.
 
 If the versions differ, the side with the higher version decides whether it can talk down;
 otherwise it closes the connection. Version 0 implementations close on any mismatch, after
-sending their own `Hello`, so that the other side learns their version.
+sending their own `Hello`, so that the other side learns their version. The PC then tells the
+user, once per device while it runs: "<device> runs another version of paste-get: update
+both".
 
 `device_name` is untrusted: receivers sanitize it as in section 5.1. It is the name the device
 goes by now: a receiver that stored another name for it at pairing (or at an earlier `Hello`)

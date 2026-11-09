@@ -316,6 +316,7 @@ see its log). Keep the fake phone of section 2 running.
 | T23 | Run an older paste-get (a build from before this row existed, or with a lower `version` in `Cargo.toml`), then start this one | The older icon disappears and this one's shows, without the "already running" notice; the log says "an older paste-get runs for this profile: asking it to quit". With the same version, T19 instead |
 | T24 | Windows: with paste-get running (tray, and `pasteget daemon` in a terminal), run the installer of a newer version | No "paste-get is running" question: both are stopped before the files are copied. After *Finish*, one icon, and `pasteget status` shows the new version |
 | T25 | Windows: tick *Start at login*, then uninstall paste-get (Settings → Apps) | paste-get is no longer in Task Manager → *Startup apps*. Updating with the installer (T24) keeps it there |
+| T26 | Developers: build paste-get with another `PROTOCOL_VERSION` (`core/src/proto.rs`) for the phone or the PC, and let the phone connect | One notification on the PC: "<phone> runs another version of paste-get: update both", not repeated while the phone retries |
 | T13 | Last: menu → the phone → *Forget this device* | The phone disappears from the menu within 2 s and can't reconnect. Right away (or, if it was not connected, when it next connects) the real phone shows "<PC> unpaired this phone" and drops the computer from its list. Pair again to go on |
 
 If paste-get doesn't start at all, Windows shows a box saying why, and the log has the details.

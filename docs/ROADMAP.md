@@ -124,6 +124,8 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
   in the local `Win+V` history unless sensitive
 - [x] A PC that joined another finds it again by mDNS after its address changed, like the phone
   does, and remembers the address that worked (`TESTING.md`, section 3, row 12)
+- [x] A device that speaks another protocol version gets a notification on the PC, once:
+  "<device> runs another version of paste-get: update both" (`TESTING.md`, T26)
 - [x] Updates replace the running version: the installer stops paste-get first, and a newer
   tray asks an older running one to quit (control request `quit`, `pasteget quit`), or ends
   its processes if it's too old to know it (`TESTING.md`, T22–T25). The uninstaller also removes

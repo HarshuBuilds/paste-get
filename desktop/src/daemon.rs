@@ -12,7 +12,7 @@
 //! code (`pasteget join`) are dialed out and redialed after disconnects, also at the addresses
 //! mDNS finds them at, since their address may change.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -137,6 +137,8 @@ struct Shared {
     tasks: Mutex<JoinSet<()>>,
     /// The redial loops of devices we joined, to stop when one is unpaired.
     dialers: Mutex<HashMap<DeviceId, Dialer>>,
+    /// Devices the user was told run another protocol version, once each while this runs.
+    told_other_version: Mutex<HashSet<DeviceId>>,
 }
 
 /// Keeps a session with a device we joined.
@@ -190,6 +192,7 @@ impl Daemon {
             events,
             tasks: Mutex::new(JoinSet::new()),
             dialers: Mutex::new(HashMap::new()),
+            told_other_version: Mutex::new(HashSet::new()),
         });
 
         shared.spawn(accept_loop(Arc::clone(&shared), listener));
@@ -689,6 +692,22 @@ impl SessionEvents for Shared {
 
     fn disconnected(&self, peer: DeviceId) {
         tracing::info!(id = %peer, "disconnected");
+    }
+
+    /// Says so once per device: it retries every few seconds, and nothing changes until one of
+    /// them is updated.
+    fn version_mismatch(&self, peer: DeviceId, _version: u32) {
+        if !lock(&self.told_other_version).insert(peer) {
+            return;
+        }
+        let name = self.name_of(&peer);
+        if let Some(notifier) = &self.notifier {
+            notifier.notice(if french() {
+                format!("{name} utilise une autre version de paste-get : mettez les deux à jour")
+            } else {
+                format!("{name} runs another version of paste-get: update both")
+            });
+        }
     }
 
     /// A device unpaired this computer: forget it too. A phone or a computer that joined this one
@@ -1398,6 +1417,46 @@ mod tests {
         );
         let saved = pc.daemon.shared.profile.known_devices().unwrap();
         assert_eq!(saved.get(&phone.device_id()).unwrap().name, "Mon téléphone");
+    }
+
+    #[tokio::test]
+    async fn a_device_of_another_protocol_version_is_shown_once() {
+        let pc = start("pc").await;
+        let phone = Identity::generate().unwrap();
+        let invite = pc.daemon.open_pairing().await.unwrap();
+        pair_as(&pc.daemon, &phone, &invite, "POCO").await.unwrap();
+
+        // It retries, as phones do.
+        for _ in 0..3 {
+            let socket = TcpStream::connect(pc.daemon.local_addr()).await.unwrap();
+            let mut connection = transport::connect(socket, &phone, pc.daemon.device_id())
+                .await
+                .unwrap();
+            let newer = Hello {
+                protocol_version: PROTOCOL_VERSION + 1,
+                device_name: "POCO".into(),
+                ..Hello::default()
+            };
+            let theirs = connection.exchange_hello(newer).await.unwrap();
+            assert_eq!(theirs.protocol_version, PROTOCOL_VERSION);
+            // The PC closes the connection.
+            assert!(
+                timeout(Duration::from_secs(5), connection.recv())
+                    .await
+                    .is_ok()
+            );
+        }
+
+        assert!(
+            wait_for(|| !pc.notifications.1.lock().unwrap().is_empty()).await,
+            "no notice"
+        );
+        sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            *pc.notifications.1.lock().unwrap(),
+            ["POCO runs another version of paste-get: update both"]
+        );
+        assert!(!connected(&pc.daemon).await);
     }
 
     #[tokio::test]
