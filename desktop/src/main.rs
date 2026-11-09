@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anstream::{eprintln, println};
 use anyhow::{Context, Result, bail};
@@ -13,12 +14,13 @@ use data_encoding::BASE64;
 use pasteget_core::clip::{DEFAULT_MAX_CLIP_LEN, mime};
 use pasteget_desktop::clipboard::{MemoryClipboard, SystemClipboard};
 use pasteget_desktop::config::{DEFAULT_PROFILE, Profile};
-use pasteget_desktop::control::{self, Endpoint, Request, Response};
+use pasteget_desktop::control::{self, Endpoint, Request, Response, StatusReply};
 use pasteget_desktop::daemon::{Daemon, DaemonOptions};
 use pasteget_desktop::notify::DesktopNotifier;
 use pasteget_desktop::recent;
 use qrcode::QrCode;
 use qrcode::render::unicode::Dense1x2;
+use serde_json::json;
 
 #[derive(Parser)]
 #[command(
@@ -68,7 +70,12 @@ enum Command {
         clipboard: bool,
     },
     /// Show this device and its paired devices.
-    Status,
+    Status {
+        /// Print one line of JSON instead, for scripts and status bars such as Waybar (see
+        /// docs/TESTING.md, section 9). Also when paste-get isn't running: "running": false.
+        #[arg(long)]
+        json: bool,
+    },
     /// Stop sending copies and receiving clips until `pasteget resume`.
     /// `pasteget send` still works while paused.
     Pause {
@@ -115,7 +122,8 @@ async fn run(cli: Cli) -> Result<()> {
             clipboard: true, ..
         } => send_request(&endpoint, &Request::SendClipboard).await,
         Command::Send { text, file, .. } => send(&endpoint, text, file).await,
-        Command::Status => status(&endpoint).await,
+        Command::Status { json: false } => status(&endpoint).await,
+        Command::Status { json: true } => status_json(&endpoint).await,
         Command::Pause { toggle } => pause(&endpoint, if toggle { None } else { Some(true) }).await,
         Command::Resume => pause(&endpoint, Some(false)).await,
         Command::Recent => recent(&endpoint).await,
@@ -330,6 +338,80 @@ async fn status(endpoint: &Endpoint) -> Result<()> {
     .await
 }
 
+/// `pasteget status --json`: one line, even when no daemon answers, so that a bar polling it
+/// shows that too.
+async fn status_json(endpoint: &Endpoint) -> Result<()> {
+    let mut status = None;
+    let call = control::call(endpoint, &Request::Status, |response| {
+        if let Response::Status(reply) = response {
+            status = Some(reply);
+        }
+    });
+    // A bar asks every few seconds: don't wait as long as the other commands.
+    let _ = tokio::time::timeout(Duration::from_secs(5), call).await;
+    println!("{}", status_value(status.as_ref()));
+    Ok(())
+}
+
+/// What `pasteget status --json` prints. The daemon's facts, plus `text`, `alt`, `class` and
+/// `tooltip` for a Waybar `custom` module (`return-type: json`): the number of devices
+/// connected, and one of `stopped`, `paused`, `connected`, `away` (none connected) or
+/// `unpaired`. Waybar reads `text` and `tooltip` as Pango markup: names are escaped there.
+fn status_value(status: Option<&StatusReply>) -> serde_json::Value {
+    let Some(status) = status else {
+        return json!({
+            "running": false,
+            "text": "0",
+            "alt": "stopped",
+            "class": "stopped",
+            "tooltip": "paste-get is not running",
+        });
+    };
+    let connected: Vec<&str> = status
+        .devices
+        .iter()
+        .filter(|device| device.connected)
+        .map(|device| device.name.as_str())
+        .collect();
+    let (state, tooltip) = if status.paused {
+        ("paused", "paste-get: paused".to_owned())
+    } else if !connected.is_empty() {
+        (
+            "connected",
+            format!("paste-get: connected to {}", markup(&connected.join(", "))),
+        )
+    } else if !status.devices.is_empty() {
+        ("away", "paste-get: no device connected".to_owned())
+    } else {
+        ("unpaired", "paste-get: no paired device yet".to_owned())
+    };
+    json!({
+        "running": true,
+        "name": status.device_name,
+        "id": status.device_id,
+        "version": status.app_version,
+        "paused": status.paused,
+        "pairing": status.pairing_open,
+        "devices": status.devices.iter().map(|device| json!({
+            "id": device.id,
+            "name": device.name,
+            "connected": device.connected,
+        })).collect::<Vec<_>>(),
+        "connected": connected.len(),
+        "text": connected.len().to_string(),
+        "alt": state,
+        "class": state,
+        "tooltip": tooltip,
+    })
+}
+
+/// `text` as plain text in Pango markup.
+fn markup(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 async fn pause(endpoint: &Endpoint, paused: Option<bool>) -> Result<()> {
     expect_one(
         endpoint,
@@ -408,4 +490,71 @@ fn print_qr(text: &str) -> Result<()> {
         println!("\x1b[30;47m{line}\x1b[0m");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pasteget_desktop::control::DeviceStatusReply;
+
+    fn status(paused: bool, devices: &[(&str, bool)]) -> StatusReply {
+        StatusReply {
+            device_id: "PCID".into(),
+            device_name: "HP-AIO".into(),
+            listening_on: "0.0.0.0:47290".into(),
+            pairing_open: false,
+            paused,
+            devices: devices
+                .iter()
+                .map(|(name, connected)| DeviceStatusReply {
+                    id: format!("id-{name}"),
+                    name: (*name).into(),
+                    connected: *connected,
+                })
+                .collect(),
+            app_version: Some("0.1.0".into()),
+            control_version: Some(1),
+            pid: Some(42),
+        }
+    }
+
+    #[test]
+    fn status_json_is_one_line_for_scripts_and_waybar() {
+        let value = status_value(Some(&status(
+            false,
+            &[("POCO <M8>", true), ("Laptop", false)],
+        )));
+
+        assert_eq!(
+            value.to_string(),
+            r#"{"alt":"connected","class":"connected","connected":1,"devices":[{"connected":true,"id":"id-POCO <M8>","name":"POCO <M8>"},{"connected":false,"id":"id-Laptop","name":"Laptop"}],"id":"PCID","name":"HP-AIO","pairing":false,"paused":false,"running":true,"text":"1","tooltip":"paste-get: connected to POCO &lt;M8&gt;","version":"0.1.0"}"#
+        );
+        assert!(!value.to_string().contains('\n'));
+    }
+
+    #[test]
+    fn status_json_names_each_state() {
+        let state = |status: Option<&StatusReply>| {
+            let value = status_value(status);
+            (
+                value["class"].clone(),
+                value["text"].clone(),
+                value["running"].clone(),
+            )
+        };
+
+        assert_eq!(state(None), (json!("stopped"), json!("0"), json!(false)));
+        assert_eq!(
+            state(Some(&status(true, &[("POCO", true)]))),
+            (json!("paused"), json!("1"), json!(true))
+        );
+        assert_eq!(
+            state(Some(&status(false, &[("POCO", false)]))),
+            (json!("away"), json!("0"), json!(true))
+        );
+        assert_eq!(
+            state(Some(&status(false, &[]))),
+            (json!("unpaired"), json!("0"), json!(true))
+        );
+    }
 }

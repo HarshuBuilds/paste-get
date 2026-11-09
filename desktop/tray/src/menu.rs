@@ -186,6 +186,18 @@ fn daemon_entries(state: &State) -> Vec<Entry> {
     }
 }
 
+/// The notice when the daemon can't start: "paste-get could not start: Port 47290 is taken…".
+pub fn start_failed(reason: &str) -> String {
+    format!(
+        "{} {}",
+        tr(
+            "paste-get could not start:",
+            "paste-get n'a pas pu démarrer :"
+        ),
+        down_reason(reason)
+    )
+}
+
 /// Why the daemon couldn't start or be reached, in the user's language for the reasons the tray
 /// knows. Others (the system's words) are shown as they are, for a report; the log has them all.
 fn down_reason(reason: &str) -> String {
@@ -416,6 +428,10 @@ mod tests {
             "It doesn't answer: quit paste-get and start it again."
         );
         assert_eq!(down_reason("no D-Bus session"), "no D-Bus session");
+        assert_eq!(
+            start_failed("could not listen on 0.0.0.0:47290: in use"),
+            "paste-get could not start: Port 47290 is taken: is another paste-get running?"
+        );
         assert_eq!(
             labels(&entries(&State::Starting, None))[0],
             "paste-get is starting…"

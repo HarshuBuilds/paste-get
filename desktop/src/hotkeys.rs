@@ -6,16 +6,21 @@
 //! - KDE Plasma (and other desktops with the `GlobalShortcuts` portal): the portal. Plasma asks
 //!   the user to confirm them once, and lists them in System Settings → Shortcuts.
 //! - Hyprland: nothing here. Hyprland's own `bind` runs the command instead, for instance
-//!   `bind = CTRL ALT SHIFT, V, exec, pasteget send --clipboard` (see `docs/TESTING.md`).
+//!   `bind = CTRL ALT SHIFT, V, exec, /usr/bin/pasteget send --clipboard`: [`hyprland_lines`]
+//!   writes them, with the real path, for the log and the tray's Settings window.
 //!
 //! The keys are set in `settings.toml`, `[hotkeys]` table; an empty string turns one off.
 
 use std::fmt;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
+
+use crate::autostart::Launch;
+use crate::config::DEFAULT_PROFILE;
 
 /// What a hotkey does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,6 +51,12 @@ impl Action {
             Self::TogglePause => "pasteget pause --toggle",
             Self::SendClipboard => "pasteget send --clipboard",
         }
+    }
+
+    /// [`Action::command`] without the program: `pause --toggle`.
+    fn cli_args(self) -> &'static str {
+        let command = self.command();
+        command.strip_prefix("pasteget ").unwrap_or(command)
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
@@ -242,16 +253,120 @@ impl Hotkey {
     }
 }
 
+/// What runs paste-get's actions from a desktop's own key bindings (Hyprland).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Runner {
+    /// The `pasteget` command, at this path: `pasteget pause --toggle`.
+    Cli(PathBuf),
+    /// An AppImage, which only starts the tray; the tray does an action given with `--action`.
+    AppImage(PathBuf),
+}
+
+impl Runner {
+    /// For this program: the AppImage it runs from, or the `pasteget` command next to it (the
+    /// packages and `cargo build` put them side by side), or else the one on the `PATH`.
+    pub fn of_this_program() -> Self {
+        if let Some(appimage) = std::env::var_os("APPIMAGE") {
+            return Self::AppImage(appimage.into());
+        }
+        let cli = if cfg!(windows) {
+            "pasteget.exe"
+        } else {
+            "pasteget"
+        };
+        match std::env::current_exe() {
+            Ok(exe) if exe.with_file_name(cli).is_file() => Self::Cli(exe.with_file_name(cli)),
+            _ => Self::Cli(PathBuf::from(cli)),
+        }
+    }
+
+    /// The shell command that does `action` for `profile`.
+    pub fn command(&self, action: Action, profile: &str) -> String {
+        let profile = if profile == DEFAULT_PROFILE {
+            String::new()
+        } else {
+            format!(" --profile {}", shell_word(profile))
+        };
+        match self {
+            Self::Cli(path) => format!(
+                "{}{profile} {}",
+                shell_word(&path.to_string_lossy()),
+                action.cli_args()
+            ),
+            Self::AppImage(path) => format!(
+                "{}{profile} --action {}",
+                shell_word(&path.to_string_lossy()),
+                action.id()
+            ),
+        }
+    }
+}
+
+/// The lines to add to `hyprland.conf`, which Hyprland runs with `sh -c`: `exec-once` for the
+/// tray when `tray` says how to start it, then a `bind` per hotkey. Hyprland reads `#` as a
+/// comment unless doubled.
+pub fn hyprland_lines(
+    tray: Option<&Launch>,
+    profile: &str,
+    bindings: &[Binding],
+    runner: &Runner,
+) -> Vec<String> {
+    let exec_once = tray.map(|launch| {
+        let program = launch.program.to_string_lossy();
+        let words: Vec<String> = std::iter::once(program.as_ref())
+            .chain(launch.args.iter().map(String::as_str))
+            .map(shell_word)
+            .collect();
+        format!("exec-once = {}", words.join(" "))
+    });
+    let binds = bindings.iter().map(|binding| {
+        format!(
+            "bind = {}, {}, exec, {}",
+            binding.hotkey.hyprland_mods(),
+            binding.hotkey.key_name(),
+            runner.command(binding.action, profile)
+        )
+    });
+    exec_once
+        .into_iter()
+        .chain(binds)
+        .map(|line| line.replace('#', "##"))
+        .collect()
+}
+
+/// `word` for a POSIX shell: as it is when nothing in it is special, else in single quotes.
+fn shell_word(word: &str) -> String {
+    let plain = !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._-+=:@%,".contains(c));
+    if plain {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', r"'\''"))
+    }
+}
+
 /// Keeps the hotkeys registered. Dropping it unregisters them.
 pub struct Hotkeys {
     _listener: platform::Listener,
 }
 
-/// Registers `bindings` and sends each press on `pressed`. Returns `None` where this desktop
-/// binds hotkeys itself (Hyprland), or has no way for an app to register them; the log says
-/// what to do instead.
-pub fn start(bindings: &[Binding], pressed: mpsc::Sender<Action>) -> Option<Hotkeys> {
+/// Registers `bindings` for the daemon of `profile` and sends each press on `pressed`. Returns
+/// `None` where this desktop binds hotkeys itself (Hyprland), or has no way for an app to
+/// register them; the log says what to do instead.
+pub fn start(
+    bindings: &[Binding],
+    profile: &str,
+    pressed: mpsc::Sender<Action>,
+) -> Option<Hotkeys> {
     if bindings.is_empty() {
+        return None;
+    }
+    if is_hyprland() {
+        for line in hyprland_lines(None, profile, bindings, &Runner::of_this_program()) {
+            tracing::info!("Hyprland: add to hyprland.conf (also in the tray's Settings): {line}");
+        }
         return None;
     }
     match platform::Listener::start(bindings, pressed) {
@@ -265,6 +380,12 @@ pub fn start(bindings: &[Binding], pressed: mpsc::Sender<Action>) -> Option<Hotk
             None
         }
     }
+}
+
+/// Hyprland binds keys in its own configuration: apps can't register any.
+pub fn is_hyprland() -> bool {
+    cfg!(all(unix, not(target_os = "macos")))
+        && std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some()
 }
 
 /// Tells how to bind the hotkeys in the desktop's own settings instead.
@@ -448,17 +569,6 @@ mod platform {
 
     impl Listener {
         pub fn start(bindings: &[Binding], pressed: mpsc::Sender<Action>) -> Result<Option<Self>> {
-            if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
-                for binding in bindings {
-                    tracing::info!(
-                        "Hyprland: add to hyprland.conf: bind = {}, {}, exec, {}",
-                        binding.hotkey.hyprland_mods(),
-                        binding.hotkey.key_name(),
-                        binding.action.command()
-                    );
-                }
-                return Ok(None);
-            }
             let bindings = bindings.to_vec();
             // Binding waits for the user to confirm on some desktops: don't hold up the daemon.
             let task = tokio::spawn(async move {
@@ -738,6 +848,66 @@ mod tests {
             send_clipboard: "not a hotkey".into(),
         };
         assert!(settings.bindings().is_empty());
+    }
+
+    #[test]
+    fn hyprland_lines_use_the_real_programs() {
+        let bindings = HotkeySettings::default().bindings();
+        let tray = Launch {
+            program: PathBuf::from("/usr/bin/pasteget-tray"),
+            args: vec!["--profile".into(), "default".into(), "--at-login".into()],
+        };
+        let cli = Runner::Cli(PathBuf::from("/usr/bin/pasteget"));
+
+        assert_eq!(
+            hyprland_lines(Some(&tray), DEFAULT_PROFILE, &bindings, &cli),
+            [
+                "exec-once = /usr/bin/pasteget-tray --profile default --at-login",
+                "bind = CTRL ALT SHIFT, P, exec, /usr/bin/pasteget pause --toggle",
+                "bind = CTRL ALT SHIFT, V, exec, /usr/bin/pasteget send --clipboard",
+            ]
+        );
+        // An AppImage only starts the tray: the tray does the action.
+        let appimage = Runner::AppImage(PathBuf::from(
+            "/home/me/Apps/paste-get_0.1.0_amd64.AppImage",
+        ));
+        assert_eq!(
+            hyprland_lines(None, "work", &bindings[1..], &appimage),
+            [
+                "bind = CTRL ALT SHIFT, V, exec, /home/me/Apps/paste-get_0.1.0_amd64.AppImage --profile work --action send-clipboard"
+            ]
+        );
+    }
+
+    #[test]
+    fn odd_paths_are_quoted_for_the_shell_and_hyprland() {
+        let bindings = [Binding {
+            action: Action::TogglePause,
+            hotkey: parse("F9").unwrap(),
+        }];
+        let runner = Runner::Cli(PathBuf::from("/home/me/My #1 apps/it's/pasteget"));
+
+        assert_eq!(
+            hyprland_lines(None, DEFAULT_PROFILE, &bindings, &runner),
+            [r"bind = , F9, exec, '/home/me/My ##1 apps/it'\''s/pasteget' pause --toggle"]
+        );
+        assert_eq!(
+            shell_word("plain-path/x_1.AppImage"),
+            "plain-path/x_1.AppImage"
+        );
+        assert_eq!(shell_word(""), "''");
+        assert_eq!(shell_word("$HOME"), "'$HOME'");
+    }
+
+    #[test]
+    fn this_program_finds_a_command_to_bind() {
+        let runner = Runner::of_this_program();
+        assert!(matches!(&runner, Runner::Cli(_) | Runner::AppImage(_)));
+        assert!(
+            runner
+                .command(Action::SendClipboard, "work")
+                .contains("--profile work")
+        );
     }
 
     #[test]

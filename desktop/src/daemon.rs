@@ -262,7 +262,7 @@ impl Daemon {
         let hotkeys = if options.hotkeys {
             let (pressed, presses) = mpsc::channel(4);
             shared.spawn(hotkey_loop(Arc::clone(&shared), presses));
-            hotkeys::start(&settings.hotkeys.bindings(), pressed)
+            hotkeys::start(&settings.hotkeys.bindings(), shared.profile.name(), pressed)
         } else {
             None
         };

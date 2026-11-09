@@ -350,7 +350,39 @@ see its log). Keep the fake phone of section 2 running.
 | T29 | Menu → *About paste-get 0.1.0* (the version of this build) | A small window with the version, the licence (GPL-3.0-or-later) and the source address. **Copy** puts the address on the clipboard; nothing opens a browser or goes online. In French: *À propos de paste-get* |
 | T13 | Last: menu → the phone → *Forget this device* | The phone disappears from the menu within 2 s and can't reconnect. Right away (or, if it was not connected, when it next connects) the real phone shows "<PC> unpaired this phone" and drops the computer from its list. Pair again to go on |
 
-If paste-get doesn't start at all, Windows shows a box saying why, and the log has the details.
+| T33 | Take paste-get's port first (`python3 -m http.server 47290`, or `pasteget --profile other daemon --memory-clipboard --port 47290` with another profile), then start the tray | A notification: "paste-get could not start: Port 47290 is taken: is another paste-get running?", once (not every 15 s while it retries); the menu says the same. Free the port: within 15 s the tray runs |
+| T34 | Linux: start the tray with a profile folder it can't create, from a terminal: `PASTEGET_HOME=/proc/nowhere pasteget-tray` | A notification that stays until closed: "paste-get could not start." with the error and the log's path (also printed in the terminal) |
+
+If paste-get doesn't start at all, Windows shows a box saying why, Linux a notification that
+stays until closed, and the log has the details.
+
+### A Waybar module (Hyprland)
+
+`pasteget status --json` prints one line of JSON, also when paste-get isn't running
+(`"running": false`), so a status bar can poll it. Besides the facts (`name`, `paused`,
+`devices`…), it has the four fields of a Waybar `custom` module: `text` (how many devices are
+connected), `alt` and `class` (`stopped`, `paused`, `connected`, `away` or `unpaired`) and
+`tooltip`. In `~/.config/waybar/config.jsonc`, add `"custom/paste-get"` to a `modules-…` list,
+and:
+```jsonc
+"custom/paste-get": {
+  "exec": "pasteget status --json",
+  "return-type": "json",
+  "interval": 5,
+  "format": "{icon} {}",
+  "format-icons": {
+    "connected": "●", "away": "○", "paused": "⏸", "unpaired": "+", "stopped": "✕"
+  },
+  "on-click": "pasteget pause --toggle"
+}
+```
+Style it in `style.css` with `#custom-paste-get.paused { opacity: 0.5; }` and the like. The
+AppImage has no `pasteget` command: use the .deb, .rpm or AUR package for this.
+
+| # | Do this | Expected |
+|---|---|---|
+| B1 | `pasteget status --json`, with paste-get running, then after `pasteget quit` | One line each: `"running":true` with the devices, then `{"alt":"stopped",…,"running":false,…}`, exit code 0 both times |
+| B2 | Add the module above, restart Waybar (`killall -SIGUSR2 waybar`), pair or stop the phone, pause | The module shows ● 1, then ○ 0 when the phone is away, ⏸ when paused, ✕ when paste-get quits; the tooltip names the phone; a click pauses or resumes |
 
 Report which rows passed on Windows 11, KDE Plasma and Hyprland, and anything that looks wrong
 in the menu (cut-off text, missing ticks, a menu that closes by itself).
@@ -362,10 +394,11 @@ The tray's *Start at login* checkbox adds paste-get to the programs started when
   "paste-get". Disabling it there wins over the checkbox, which then still shows ticked.
 - **KDE Plasma:** `~/.config/autostart/io.github.nexoryx.pasteget.desktop`, listed in System
   Settings → *Autostart*.
-- **Hyprland** doesn't read `~/.config/autostart`. Add this line to `~/.config/hypr/hyprland.conf`
-  instead (with the full path if `pasteget-tray` isn't on your `PATH`), and leave the checkbox off:
+- **Hyprland** doesn't read `~/.config/autostart`. Add an `exec-once` line to
+  `~/.config/hypr/hyprland.conf` instead, and leave the checkbox off. The tray's *Settings…*
+  shows it, with the real path (the AppImage's, when it runs from one), ready to copy:
   ```
-  exec-once = pasteget-tray
+  exec-once = /usr/bin/pasteget-tray --profile default --at-login
   ```
 
 It starts the program the checkbox was ticked from, so tick it again after moving the program.
@@ -375,7 +408,7 @@ It starts the program the checkbox was ticked from, so tick it again after movin
 | L1 | Tick *Start at login* | Windows: "paste-get" appears in Task Manager → *Startup apps*. KDE: the file above exists and System Settings → *Autostart* lists paste-get |
 | L2 | Log out and back in (or restart) | The tray icon comes back by itself; `pasteget status` answers |
 | L3 | Untick it, log out and in | No paste-get icon; the entry is gone |
-| L4 | Hyprland: add the `exec-once` line, log out and in | The icon is in Waybar's tray |
+| L4 | Hyprland: copy the lines from *Settings…* (section 11, H6) into `hyprland.conf`, log out and in | The icon is in Waybar's tray, with no "paste-get is running" notice |
 
 ## 11. Hotkeys (M7)
 
@@ -408,13 +441,17 @@ How each desktop gets them:
   installed with a desktop file to list it by name.)* If the log says `hotkeys not available`
   instead, add them as custom shortcuts in System Settings → *Shortcuts* → *Add New* → *Command*,
   with the commands above.
-- **Hyprland:** paste-get doesn't register anything; the log prints the lines to add to
-  `~/.config/hypr/hyprland.conf`:
+- **Hyprland:** paste-get doesn't register anything. The tray's *Settings…* has a *Hyprland*
+  part with the lines to add to `~/.config/hypr/hyprland.conf`, and **Copy**; the log prints
+  them too. They use the real path of `pasteget`, and the hotkeys saved in *Settings…*:
   ```
-  bind = CTRL ALT SHIFT, P, exec, pasteget pause --toggle
-  bind = CTRL ALT SHIFT, V, exec, pasteget send --clipboard
+  exec-once = /usr/bin/pasteget-tray --profile default --at-login
+  bind = CTRL ALT SHIFT, P, exec, /usr/bin/pasteget pause --toggle
+  bind = CTRL ALT SHIFT, V, exec, /usr/bin/pasteget send --clipboard
   ```
-  (with the full path of `pasteget` if it isn't on your `PATH`).
+  The AppImage has no `pasteget` command: there the lines run the AppImage itself, which does
+  the action and exits (`paste-get_0.1.0_amd64.AppImage --action toggle-pause`, or
+  `--action send-clipboard`). Run `hyprctl reload` after editing the file.
 
 | # | Do this | Expected |
 |---|---|---|
@@ -423,6 +460,8 @@ How each desktop gets them:
 | H3 | Copy some text, then press `Ctrl+Alt+Shift+V` | "Clipboard sent to 1 device"; the fake phone logs `clip received` |
 | H4 | Press `Ctrl+Alt+Shift+P` again | "Syncing resumed" |
 | H5 | On a layout with `AltGr` (Albanian, German, Polish…), type `@` in a text editor | It types normally |
+| H6 | Hyprland: tray → *Settings…* | A *Hyprland* part with an `exec-once` line and two `bind` lines, with full paths (the AppImage's path when started from it). **Copy**, paste them into `hyprland.conf`, `hyprctl reload`: H2–H4 work. Change a hotkey, **Save**: the lines follow. Not shown on KDE Plasma or Windows |
+| H7 | Hyprland, AppImage: in a terminal, `./paste-get_*.AppImage --action toggle-pause` twice | The tray's icon turns grey, then back; the command exits at once each time. `--action nonsense` says which actions exist |
 
 ## 12. Copy on the phone without Shizuku (built-in mode, prototype)
 

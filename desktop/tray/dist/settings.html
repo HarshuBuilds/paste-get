@@ -6,6 +6,7 @@
   <title>Settings · paste-get</title>
   <link rel="stylesheet" href="settings.css">
   <script src="i18n.js"></script>
+  <script src="copy.js"></script>
   <script src="settings.js" defer></script>
 </head>
 <body>
@@ -37,6 +38,15 @@
       <label for="send_clipboard" data-i18n="sendLabel">Send the clipboard now</label>
       <input id="send_clipboard" class="hotkey" placeholder="None" data-i18n-placeholder="hotkeyNone" autocomplete="off" spellcheck="false">
       <p class="hint" data-i18n="hotkeysHint">Click a field and press the keys, such as Ctrl+Alt+Shift+P. Backspace turns it off.</p>
+    </section>
+
+    <section id="hyprland_section" hidden>
+      <h2 data-i18n="hyprlandTitle">Hyprland</h2>
+      <p class="hint" data-i18n="hyprlandHint">Hyprland starts paste-get at login and runs its hotkeys from its own configuration. Add these lines to ~/.config/hypr/hyprland.conf, then run hyprctl reload. Copy them again after changing a hotkey.</p>
+      <textarea id="hyprland_lines" class="lines" rows="3" readonly spellcheck="false" wrap="off" aria-label="Lines for hyprland.conf" data-i18n-label="hyprlandLabel"></textarea>
+      <div class="buttons">
+        <button type="button" id="copy_hyprland" data-i18n="copy">Copy</button>
+      </div>
     </section>
 
     <section id="login_section" hidden>

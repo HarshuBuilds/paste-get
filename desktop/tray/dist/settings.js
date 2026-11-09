@@ -33,6 +33,16 @@ function show(form) {
   $("start_at_login").checked = !!login;
 }
 
+// On Hyprland, the lines for hyprland.conf, with the saved hotkeys.
+function showHyprland() {
+  invoke("hyprland_lines")
+    .then((lines) => {
+      $("hyprland_section").hidden = !lines;
+      if (lines) $("hyprland_lines").value = lines;
+    })
+    .catch(() => {});
+}
+
 function read() {
   const notify = notifyChoices.find((choice) => choice.checked);
   return {
@@ -92,6 +102,7 @@ function captureHotkeys(input) {
 document.addEventListener("DOMContentLoaded", () => {
   notifyChoices = Array.from(document.querySelectorAll('input[name="notify"]'));
   document.querySelectorAll(".hotkey").forEach(captureHotkeys);
+  window.pastegetCopyable($("hyprland_lines"), $("copy_hyprland"));
 
   $("close").addEventListener("click", () => invoke("close_window").catch(() => {}));
   $("settings").addEventListener("submit", async (event) => {
@@ -100,6 +111,7 @@ document.addEventListener("DOMContentLoaded", () => {
     say(window.pastegetText("saving", "Saving…"));
     try {
       say(await invoke("save_settings", { form: read() }), "ok");
+      showHyprland();
     } catch (error) {
       say(String(error), "bad");
     } finally {
@@ -110,4 +122,5 @@ document.addEventListener("DOMContentLoaded", () => {
   invoke("load_settings")
     .then(show)
     .catch((error) => say(String(error), "bad"));
+  showHyprland();
 });

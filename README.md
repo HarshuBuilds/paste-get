@@ -45,7 +45,9 @@ source) asks the older one to quit and takes its place.
 - No Flatpak: its sandbox hides the clipboard from apps in the background on KDE Plasma and
   Hyprland ([why](docs/RELEASING.md#why-there-is-no-flatpak-yet)).
 - The tray icon needs a tray: KDE Plasma has one; on Hyprland, use a bar with a tray (Waybar's
-  `tray` module).
+  `tray` module). Hyprland also needs a few lines in `hyprland.conf` to start paste-get and run
+  its hotkeys: the tray's *Settings…* shows them, ready to copy. A Waybar module is in
+  [`docs/TESTING.md`](docs/TESTING.md#a-waybar-module-hyprland).
 - GNOME (best effort): the icon needs the "AppIndicator and KStatusNotifierItem Support"
   extension. Ubuntu has it already; on Fedora or Arch, install
   `gnome-shell-extension-appindicator`, then turn it on in the *Extensions* app. paste-get tells

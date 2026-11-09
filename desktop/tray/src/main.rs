@@ -34,6 +34,7 @@ use pasteget_desktop::clipboard::SystemClipboard;
 use pasteget_desktop::config::{DEFAULT_PROFILE, Profile};
 use pasteget_desktop::control::{self, Endpoint, Request, Response};
 use pasteget_desktop::daemon::{Daemon, DaemonOptions};
+use pasteget_desktop::hotkeys::{self, Action, Runner};
 use pasteget_desktop::notify::{DesktopNotifier, Notifier};
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
@@ -67,6 +68,11 @@ struct Cli {
     /// Started at login rather than by the user: no notice saying it runs.
     #[arg(long, hide = true)]
     at_login: bool,
+    /// Do what a hotkey does in the running paste-get, then exit: `toggle-pause` or
+    /// `send-clipboard`. For desktops that bind keys to commands (Hyprland), with the AppImage,
+    /// which has no `pasteget` command.
+    #[arg(long, value_name = "ACTION")]
+    action: Option<String>,
 }
 
 /// Shared by the menu handler and the refresh loop.
@@ -99,6 +105,15 @@ struct Hosted {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Some(action) = &cli.action {
+        return match run_action(&cli.profile, action) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e:#}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let log = startup::init_logs(&cli.profile);
     tracing::info!(version = env!("CARGO_PKG_VERSION"), profile = %cli.profile, "tray starting");
     match run(&cli) {
@@ -109,6 +124,19 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `--action`: what `pasteget pause --toggle` or `pasteget send --clipboard` would do.
+fn run_action(profile: &str, action: &str) -> Result<()> {
+    let action = Action::from_id(action)
+        .ok_or_else(|| anyhow!("unknown action {action:?}: toggle-pause or send-clipboard"))?;
+    let request = match action {
+        Action::TogglePause => Request::Pause { paused: None },
+        Action::SendClipboard => Request::SendClipboard,
+    };
+    let endpoint = Endpoint::for_profile(&Profile::open(profile)?);
+    tauri::async_runtime::block_on(ask(&endpoint, &request))?;
+    Ok(())
 }
 
 fn run(cli: &Cli) -> Result<()> {
@@ -154,7 +182,8 @@ fn run(cli: &Cli) -> Result<()> {
             load_settings,
             save_settings,
             close_window,
-            app_info
+            app_info,
+            hyprland_lines
         ])
         .setup(move |app| {
             // A tray app: no Dock icon on macOS.
@@ -278,6 +307,9 @@ async fn refresh_loop<R: Runtime>(app: AppHandle<R>, tray: Arc<Tray>) {
     let mut next_start = Instant::now();
     // The first time paste-get runs, nothing is paired yet: show the code right away.
     let mut offered_pairing = false;
+    // Said once, until the daemon runs: the menu says it too, but not every desktop shows the
+    // icon (a bar without a tray).
+    let mut told_down = false;
     loop {
         let mut state = fetch(&tray.endpoint).await;
         if matches!(state, State::Down(_)) && !tray.is_hosting() && Instant::now() >= next_start {
@@ -294,8 +326,15 @@ async fn refresh_loop<R: Runtime>(app: AppHandle<R>, tray: Arc<Tray>) {
                     tracing::warn!(error = %format!("{e:#}"), "could not start the daemon");
                     state = State::Down(format!("{e:#}"));
                     next_start = Instant::now() + RESTART_EVERY;
+                    if !told_down {
+                        told_down = true;
+                        DesktopNotifier::start().notice(menu::start_failed(&format!("{e:#}")));
+                    }
                 }
             }
+        }
+        if matches!(state, State::Running { .. }) {
+            told_down = false;
         }
 
         if !offered_pairing && let State::Running { status, .. } = &state {
@@ -496,6 +535,25 @@ fn close_window(window: tauri::WebviewWindow) {
 #[tauri::command]
 fn app_info() -> about::Info {
     about::Info::of_this_build()
+}
+
+/// On Hyprland, which reads neither login entries nor hotkeys from apps, the lines to add to
+/// `hyprland.conf`, for the settings window; `None` elsewhere.
+#[tauri::command]
+fn hyprland_lines(tray: tauri::State<'_, Arc<Tray>>) -> Result<Option<String>, String> {
+    if !hotkeys::is_hyprland() {
+        return Ok(None);
+    }
+    let text = |e: anyhow::Error| format!("{e:#}");
+    let settings = tray.profile.settings().map_err(text)?;
+    let launch = login_launch(tray.profile.name()).map_err(text)?;
+    let lines = hotkeys::hyprland_lines(
+        Some(&launch),
+        tray.profile.name(),
+        &settings.hotkeys.bindings(),
+        &Runner::of_this_program(),
+    );
+    Ok(Some(lines.join("\n")))
 }
 
 /// The settings window asks for the current values.

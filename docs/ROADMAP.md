@@ -96,6 +96,12 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
 - [x] Linux: when no tray can show the icon (GNOME without the AppIndicator extension, a bar
   without a tray), the tray says so once per start in a notification and in its log
   (`desktop/tray/src/linux_tray.rs`). GNOME stays tier 2 (`TESTING.md`, section 16)
+- [x] Linux: an error that stops the tray from starting is shown in a notification that stays
+  (Windows: a message box), not only in a terminal; a daemon that can't start (its port taken)
+  says so once in a notification too (`TESTING.md`, T33, T34)
+- [x] Hyprland: the tray's *Settings…* shows the `exec-once` and `bind` lines with the real
+  paths, ready to copy (the AppImage's own `--action` when there is no `pasteget` command);
+  `pasteget status --json` and a Waybar module in `TESTING.md` (section 9, B1–B2; H6–H7)
 - [ ] Verified on Windows 11, KDE Plasma 6 Wayland and Hyprland (`TESTING.md`, sections 9–11)
 
 ### M8 — Release 0.1

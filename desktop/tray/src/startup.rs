@@ -514,26 +514,34 @@ pub fn notify_once(summary: String) {
     });
 }
 
-/// The tray couldn't start: say so where the user sees it, not only in the log.
+/// The tray couldn't start: say so where the user sees it, not only in the log. Windows: a
+/// message box. Linux: a notification that stays, as well as the terminal, if any.
 pub fn show_fatal(error: &str, log: Option<&Path>) {
-    let mut text = format!(
-        "{}\n\n{error}",
-        tr(
-            "paste-get could not start.",
-            "paste-get n'a pas pu démarrer."
-        )
+    let (summary, details) = fatal_text(error, log);
+    let text = format!("{summary}\n\n{details}");
+    #[cfg(windows)]
+    message_box(&text);
+    #[cfg(not(windows))]
+    eprintln!("{text}");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    crate::linux_tray::show_error(summary, &details);
+}
+
+/// What [`show_fatal`] says: a summary, and the error with where the log is.
+fn fatal_text(error: &str, log: Option<&Path>) -> (&'static str, String) {
+    let summary = tr(
+        "paste-get could not start.",
+        "paste-get n'a pas pu démarrer.",
     );
+    let mut details = error.to_owned();
     if let Some(log) = log {
-        text.push_str(&format!(
+        details.push_str(&format!(
             "\n\n{} {}",
             tr("Details:", "Détails :"),
             log.display()
         ));
     }
-    #[cfg(windows)]
-    message_box(&text);
-    #[cfg(not(windows))]
-    eprintln!("{text}");
+    (summary, details)
 }
 
 #[cfg(windows)]
@@ -557,6 +565,22 @@ fn message_box(text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_start_says_why_and_where_the_log_is() {
+        pasteget_desktop::i18n::force(pasteget_desktop::i18n::Lang::En);
+        let log = Path::new("/home/me/.local/share/paste-get/logs/pasteget-tray.log");
+
+        let (summary, details) = fatal_text("could not start the tray: no display", Some(log));
+
+        assert_eq!(summary, "paste-get could not start.");
+        assert_eq!(
+            details,
+            "could not start the tray: no display\n\nDetails: \
+             /home/me/.local/share/paste-get/logs/pasteget-tray.log"
+        );
+        assert_eq!(fatal_text("no log", None).1, "no log");
+    }
 
     #[test]
     fn a_second_tray_for_a_profile_is_turned_away() {
