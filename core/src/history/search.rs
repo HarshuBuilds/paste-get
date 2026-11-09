@@ -22,7 +22,7 @@ pub const MAX_PAGE_SIZE: u32 = 200;
 pub const SHORT_SEARCH_ITEMS: u32 = 5000;
 
 /// What the chips of the history screen narrow it to. Every field set must match.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct Filter {
     pub category: Option<Category>,
     pub format: Option<Format>,
@@ -39,6 +39,23 @@ pub struct Filter {
     /// Last copied in this time span (unix ms, end excluded).
     pub since_ms: Option<i64>,
     pub until_ms: Option<i64>,
+}
+
+/// Never prints the site of a link.
+impl std::fmt::Debug for Filter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Filter")
+            .field("category", &self.category)
+            .field("format", &self.format)
+            .field("source", &self.source)
+            .field("device", &self.device)
+            .field("pinned", &self.pinned)
+            .field("has_host", &self.host.is_some())
+            .field("min_times", &self.min_times)
+            .field("since_ms", &self.since_ms)
+            .field("until_ms", &self.until_ms)
+            .finish()
+    }
 }
 
 /// Where the next page starts: just after this item.

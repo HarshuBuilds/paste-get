@@ -636,7 +636,17 @@ fn empty_clips_and_unknown_types_are_ignored() {
 fn debug_output_hides_contents() {
     let mut test = Test::new();
     let id = test.added("https://secret.example/hunter2");
-    let shown = format!("{:?} {:?}", test.item(id), test.store);
+    let filter = Filter {
+        host: Some("secret.example".into()),
+        category: Some(Category::Link),
+        ..Filter::default()
+    };
+    let query = Query {
+        text: "hunter2".into(),
+        filter: filter.clone(),
+        ..Query::default()
+    };
+    let shown = format!("{:?} {:?} {filter:?} {query:?}", test.item(id), test.store);
     assert!(!shown.contains("hunter2"), "{shown}");
     assert!(!shown.contains("secret.example"), "{shown}");
     assert!(shown.contains("Link"));
