@@ -50,6 +50,8 @@ windows-sys = { version = "0.61", features = [
 windows-registry = "0.6"
 # Toasts that call back when clicked (a link to open). notify-rust uses it underneath.
 tauri-winrt-notification = "0.8"
+# Reading the formats password managers mark copies with. arboard uses it underneath.
+clipboard-win = { version = "5.4", features = ["std"] }
 
 # Notifications: Windows toasts and macOS through notify-rust, the freedesktop D-Bus service
 # elsewhere (KDE Plasma, mako, dunst, swaync…).
@@ -60,3 +62,8 @@ notify-rust = { version = "4", default-features = false }
 zbus = { version = "6", default-features = false, features = ["tokio", "proxy"] }
 # Reading D-Bus signal streams (the hotkey portal).
 futures-util = { version = "0.3", default-features = false }
+
+# Clipboard change events on Wayland (ext-data-control and wlr-data-control). arboard already
+# uses it underneath to read and write the clipboard there.
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))))'.dependencies]
+wl-clipboard-rs = "0.9.5"

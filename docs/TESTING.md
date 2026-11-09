@@ -4,7 +4,8 @@ Automated tests use in-memory clipboards. Only real machines can show whether th
 clipboard** works. Sections 1–4 test the desktop daemon on its own; section 5 adds the phone,
 section 6 automatic screenshots, section 7 the way back, from the PC to the phone, section 8
 the automatic copy on the phone, section 9 the tray app, section 10 starting at login and
-section 11 the hotkeys, and section 12 the copy on the phone without Shizuku.
+section 11 the hotkeys, and section 12 the copy on the phone without Shizuku. Section 16 is
+GNOME, which is tier 2.
 
 The trick: on one computer, run the real daemon (system clipboard) **and** a second "fake phone"
 daemon with a private in-memory clipboard. Whatever reaches the fake phone came out of your real
@@ -65,6 +66,10 @@ pasteget --profile phone daemon --memory-clipboard --port 47291
 ```
 
 Windows asks whether to allow `pasteget.exe` on the network: allow **private networks**.
+
+On KDE Plasma and Hyprland, terminal 1 logs `watching Wayland clipboard change events` when it
+starts. Without that line it reads the clipboard at every poll: normal on X11, and on GNOME,
+which logs `no Wayland clipboard change events` with the reason.
 
 ```sh
 # Terminal 3: pair them
@@ -211,6 +216,9 @@ on the phone. Update both sides first, as in section 6.
 | C4 | PC: take a screenshot to the clipboard (as in section 3). Phone: in Telegram, WhatsApp or Google Messages, long-press the message field → **Paste** | The screenshot is attached, ready to send |
 | C5 | PC: in a browser, right-click an image → **Copy image**. Phone: paste it as in C4 | The image is attached |
 | C6 | If you use Gboard: after C4, open its clipboard (the clipboard icon above the keys) | The screenshot is there; tapping it inserts it in apps that take images (Discord, for example) |
+| C7 | PC: copy a password from a password manager (KeePassXC on KDE Plasma or Hyprland; KeePass, KeePassXC, Bitwarden or 1Password on Windows). Phone: paste it | Pasted. The tray's *Recent* menu doesn't list it, and Android's clipboard preview hides it. `pasteget daemon` in a terminal logs `local copy` with `sensitive=true` |
+| C8 | Windows: send text from the phone to the PC (section 8). In the tray's *Settings…*, rename this computer and **Save** (paste-get restarts). Then press `Ctrl+Alt+Shift+V` (section 11) | It goes out as an ordinary clip: the tray's *Recent*, emptied by the restart, lists it as from this computer, and the tray's log (T21) says `clipboard sent` with `sensitive=false` |
+| C9 | Windows, with a clipboard manager running (Ditto, for example): repeat C7 five times | Each time `sensitive=true` |
 
 `adb logcat -s paste-get` shows "clip received: …, … bytes" for each clip. Images, and texts over
 256 KB (C2), go on the clipboard as a link to a file, since Android can't pass that much in one
@@ -494,6 +502,35 @@ land over it.
 | Q8 | With both connected, copy a line on the PC; once it's on the phone, turn the phone's Wi-Fi off and on | The line is not sent a second time when the phone reconnects |
 | Q9 | Turn the phone's Wi-Fi off. Right away copy a line on the PC, then a few seconds later another line on the phone, and turn Wi-Fi back on | Once the phone reconnects, both paste the phone's line: the PC's log says "clip received", the phone keeps its own |
 | Q10 | Same as Q9, but copy on the phone first, then on the PC | Both paste the PC's line; the PC's log says "clip dropped: a newer copy from here is on its way to the device" |
+| Q11 | Phone's Wi-Fi off, copy a password on the PC as in C7, turn Wi-Fi back on | Nothing arrives |
+
+## 16. GNOME (tier 2)
+
+GNOME (the default desktop of Ubuntu and Fedora) is best effort: it lacks the two things paste-get
+relies on elsewhere on Linux.
+
+- **No tray area.** The icon needs the "AppIndicator and KStatusNotifierItem Support" extension.
+  Ubuntu ships it on by default ("Ubuntu AppIndicators"); on Fedora and Arch, install
+  `gnome-shell-extension-appindicator`, log out and back in, and turn it on in the *Extensions*
+  app. Without it, paste-get runs with no icon, and about 15 s after starting says so in a
+  notification ("paste-get is running, but its icon can't be shown"); the log says
+  `no system tray (StatusNotifierItem host) on the session bus`.
+- **No clipboard-control protocol.** Mutter, GNOME's compositor, has no data-control protocol,
+  so on Wayland paste-get uses the X11 clipboard through XWayland (the log says
+  `no Wayland clipboard change events`, section 2). What that sees of copies made in Wayland
+  apps, and whether received clips paste in them, is what this section finds out *(verify)*.
+  With XWayland turned off, paste-get has no clipboard at all. Every poll reads the clipboard,
+  and password managers' marks aren't seen (Known limitations).
+- **Hotkeys:** if the log says `hotkeys not available`, add them in *Settings* → *Keyboard* →
+  *Custom Shortcuts*, with the commands of section 11.
+
+| # | Do this | Expected |
+|---|---|---|
+| G1 | Without the extension, start `pasteget-tray` from a terminal | No icon. Within about 15 s, the notification above, and the log line |
+| G2 | Turn the extension on, quit (`pkill pasteget-tray`) and start it again | The icon is in the top bar; no such notification |
+| G3 | Rows 1–5 of section 3, copying and pasting in a Wayland app (GNOME Text Editor), then in an X11 app (`xterm`) | Report which rows pass in each |
+| G4 | Section 9, T1–T8 | The menu opens from the top-bar icon |
+| G5 | *Start at login*, log out and in | The icon comes back (`~/.config/autostart` works on GNOME) |
 
 ## Known limitations
 
@@ -514,8 +551,15 @@ land over it.
 - Only text copied on the phone is sent automatically, not images or files: share those.
 - Mode B takes focus for a moment on each copy, which may close the keyboard. On Android 13+, it
   needs paste-get opened once (and log access allowed) after each restart of the phone.
-- Changes on the PC are detected by polling every 0.5 s. On Linux this re-reads images while one sits on
-  the clipboard (row 6 measures the cost). Native change events are planned.
+- Changes on the PC are detected by polling every 0.5 s, so a copy can take that long to leave.
+  Each poll is cheap on Windows (a sequence number) and on KDE Plasma and Hyprland (Wayland change
+  events): the clipboard is only read after a change. On X11 and GNOME every poll reads it, images
+  included (row 6 measures the cost).
+- A password copied on the PC goes out as sensitive only if the password manager marks it, and
+  the PC sees the mark only on Windows and on KDE Plasma and Hyprland (through Wayland's
+  data-control protocol, which the change events of section 2 also use). On X11 and GNOME it goes
+  out as an ordinary clip. A copy the PC can't check (another app holds the clipboard) goes out
+  as sensitive.
 - IPv4 only.
 - The identity key is a file readable only by your user, not yet in the OS keystore.
 - The tray's *Recent* list is in memory only, holds the last 10 clips, and forgets them when the

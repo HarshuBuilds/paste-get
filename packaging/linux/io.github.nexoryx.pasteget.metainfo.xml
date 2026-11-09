@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!-- What software centres (KDE Discover, GNOME Software) show about paste-get. AppStream asks
+     for a permissive licence on this file, hence CC0. Add a <release> for each version before
+     tagging it (docs/RELEASING.md). -->
+<component type="desktop-application">
+  <id>io.github.nexoryx.pasteget</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>paste-get</name>
+  <summary>Copy on your phone, paste on your PC</summary>
+  <summary xml:lang="fr">Copie sur le téléphone, colle sur le PC</summary>
+
+  <description>
+    <p>
+      paste-get keeps the clipboard of an Android phone and this computer in sync over your own
+      Wi-Fi. Copy a line on the phone, press Ctrl+V on the PC, and it is there. A screenshot
+      taken on the phone is in the PC's clipboard less than a second later.
+    </p>
+    <p xml:lang="fr">
+      paste-get synchronise le presse-papiers d'un téléphone Android et de cet ordinateur sur
+      ton propre Wi-Fi. Copie une ligne sur le téléphone, appuie sur Ctrl+V sur le PC, et elle est
+      là. Une capture d'écran prise sur le téléphone est dans le presse-papiers du PC moins
+      d'une seconde plus tard.
+    </p>
+    <!-- Only list items are translated, each next to its English one: AppStream ignores
+         xml:lang on <ul> and refuses it since 1.0.3. -->
+    <ul>
+      <li>Phone to PC, automatically, without root</li>
+      <li xml:lang="fr">Du téléphone au PC, automatiquement, sans root</li>
+      <li>Screenshots, full size</li>
+      <li xml:lang="fr">Captures d'écran, en taille réelle</li>
+      <li>PC to phone: text and images</li>
+      <li xml:lang="fr">Du PC au téléphone : texte et images</li>
+      <li>2FA codes from the phone's notifications, ready to paste (off by default)</li>
+      <li xml:lang="fr">Codes 2FA des notifications du téléphone, prêts à coller (désactivé par défaut)</li>
+      <li>A link copied on the phone can be opened on the PC</li>
+      <li xml:lang="fr">Un lien copié sur le téléphone peut s'ouvrir sur le PC</li>
+    </ul>
+    <p>
+      There is no server and no account. Devices talk directly over the local network, end-to-end
+      encrypted with TLS 1.3, each one pinned to the other's key when they are paired. It needs
+      the paste-get app on the phone, and a system tray on the PC.
+    </p>
+    <p xml:lang="fr">
+      Il n'y a ni serveur ni compte. Les appareils se parlent directement sur le réseau local,
+      chiffrés de bout en bout en TLS 1.3, chacun lié à la clé de l'autre lors de l'appairage. Il
+      faut l'application paste-get sur le téléphone, et une zone de notification sur le PC.
+    </p>
+  </description>
+
+  <developer id="io.github.nexoryx">
+    <name>paste-get contributors</name>
+  </developer>
+
+  <launchable type="desktop-id">paste-get.desktop</launchable>
+  <provides>
+    <binary>pasteget</binary>
+    <binary>pasteget-tray</binary>
+  </provides>
+
+  <url type="homepage">https://github.com/Nexoryx-business/paste-get</url>
+  <url type="bugtracker">https://github.com/Nexoryx-business/paste-get/issues</url>
+  <url type="vcs-browser">https://github.com/Nexoryx-business/paste-get</url>
+
+  <categories>
+    <category>Utility</category>
+  </categories>
+  <keywords>
+    <keyword>clipboard</keyword>
+    <keyword>phone</keyword>
+    <keyword>android</keyword>
+    <keyword>sync</keyword>
+    <keyword>screenshot</keyword>
+    <keyword xml:lang="fr">presse-papiers</keyword>
+    <keyword xml:lang="fr">téléphone</keyword>
+    <keyword xml:lang="fr">synchronisation</keyword>
+    <keyword xml:lang="fr">capture d'écran</keyword>
+  </keywords>
+
+  <!-- Nothing the content rating asks about: no chat, no purchases, nothing shared with third
+       parties. -->
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.1.0" date="2026-11-09">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

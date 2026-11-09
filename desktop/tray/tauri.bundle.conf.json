@@ -17,6 +17,28 @@
         "startMenuFolder": "paste-get",
         "installerHooks": "./installer-hooks.nsh"
       }
+    },
+    "linux": {
+      "deb": {
+        "section": "utils",
+        "desktopTemplate": "../../packaging/linux/paste-get.desktop",
+        "files": {
+          "/usr/share/metainfo/io.github.nexoryx.pasteget.metainfo.xml": "../../packaging/linux/io.github.nexoryx.pasteget.metainfo.xml",
+          "/usr/lib/firewalld/services/paste-get.xml": "../../packaging/linux/firewalld/paste-get.xml"
+        }
+      },
+      "rpm": {
+        "desktopTemplate": "../../packaging/linux/paste-get.desktop",
+        "files": {
+          "/usr/share/metainfo/io.github.nexoryx.pasteget.metainfo.xml": "../../packaging/linux/io.github.nexoryx.pasteget.metainfo.xml",
+          "/usr/lib/firewalld/services/paste-get.xml": "../../packaging/linux/firewalld/paste-get.xml"
+        }
+      },
+      "appimage": {
+        "files": {
+          "/usr/share/metainfo/io.github.nexoryx.pasteget.metainfo.xml": "../../packaging/linux/io.github.nexoryx.pasteget.metainfo.xml"
+        }
+      }
     }
   }
 }

@@ -92,6 +92,9 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
   `exec-once` on Hyprland, which ignores XDG autostart)
 - [x] Hotkeys: `RegisterHotKey` (Windows), GlobalShortcuts portal (KDE), `bind … exec pasteget …` (Hyprland).
   Pause/resume and "send the clipboard now" (`pasteget send --clipboard`), set in `settings.toml`
+- [x] Linux: when no tray can show the icon (GNOME without the AppIndicator extension, a bar
+  without a tray), the tray says so once per start in a notification and in its log
+  (`desktop/tray/src/linux_tray.rs`). GNOME stays tier 2 (`TESTING.md`, section 16)
 - [ ] Verified on Windows 11, KDE Plasma 6 Wayland and Hyprland (`TESTING.md`, sections 9–11)
 
 ### M8 — Release 0.1
@@ -99,8 +102,17 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
   the Release workflow; the APK is signed once the release key is in the secrets)
   - [x] Windows installer (NSIS, per user) and AppImage, with `pasteget` inside: `release.yml`,
     a draft release for each `v*` tag (`RELEASING.md`)
-  - [x] AUR `paste-get-git` PKGBUILD, built with `makepkg` in an Arch container by CI (publishing
-    it on the AUR needs a maintainer account)
+  - [x] AUR `paste-get-git` PKGBUILD, built, installed and started with `makepkg` in an Arch
+    container by CI (publishing it on the AUR needs a maintainer account)
+  - [x] AUR `paste-get-bin` PKGBUILD from the release's .deb, built and installed by CI the same
+    way; `update.sh` points it at each new release. Publishing both: `RELEASING.md`, steps 1–11
+  - [x] `.deb` and `.rpm`, built with the AppImage. The Release workflow checks their files and
+    dependencies, then installs them on Debian 12 and the latest Fedora (checked locally; its
+    first CI run is still to see)
+  - [x] AppStream metainfo (`packaging/linux/io.github.nexoryx.pasteget.metainfo.xml`) in every
+    Linux package, for KDE Discover and GNOME Software; validated by CI
+  - [x] A firewalld service (TCP 47290, UDP 5353) in the .deb, .rpm and `paste-get-git`, and a
+    README section for when the phone doesn't find the PC (Wi-Fi, Windows and Linux firewalls)
   - [x] Release APK, signed in CI with a key kept in repository secrets (creating the key and
     the secrets is a one-time step for the maintainer, `RELEASING.md`)
 - [x] `SECURITY.md` draft: threat model, known gaps, private reporting
@@ -148,6 +160,13 @@ History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart ac
   when the connection died without closing: a copy waits until the device acknowledges it.
   Copies made on both sides meanwhile cross on reconnection, and both keep the newer one (each
   offer says how old its clip is, `ClipOffer.age_ms`)
+- [x] Wayland clipboard change events: on KDE Plasma 6 and Hyprland the PC reads the clipboard
+  only after the compositor reports a change (ext-data-control or wlr-data-control), not at
+  every 0.5 s poll. X11 and GNOME still read at every poll (`TESTING.md`, section 2)
+- [x] Passwords copied on the PC go out sensitive when the password manager marks them:
+  `x-kde-passwordManagerHint` on Wayland (KeePassXC, KDE), the formats KeePass, KeePassXC,
+  Bitwarden and 1Password set on Windows. Out of the phone's clipboard preview, the tray's
+  *Recent* list, and never kept for a device that is away (`TESTING.md`, C7 and Q11)
 - [ ] Clipboard history, on the phone first, then on each PC. Off by default; passwords, codes,
   keys and card numbers never reach the disk. The store is in the core, so both sides share it:
   - [x] Shelves and secrets: `detect::category` (link, email, phone number, colour, code,

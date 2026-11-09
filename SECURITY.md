@@ -42,7 +42,7 @@ The full protocol is in [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 | A web page or message opening a pairing link (`pasteget://pair?…`) on the phone | The phone never pairs on its own: it shows the name and addresses the link gives (unchecked, without characters that could disguise them) and pairs only when you tap *Pair* under "Only continue if this code is on your computer's screen right now" |
 | Another user of the same computer | The local control channel is a socket in a directory only you can open (Linux), or a named pipe that rejects remote clients and includes your user name (Windows) |
 | Passwords ending up in logs | Logs contain sizes, MIME types and hashes only, never clipboard contents |
-| Passwords lingering | Clips marked sensitive (password managers) skip clipboard history on Windows and the tray's *Recent* list |
+| Passwords lingering | A copy that a password manager marks as secret is sent marked sensitive. On the PC that is `x-kde-passwordManagerHint` on Wayland (KeePassXC, KDE apps) and the formats KeePass, KeePassXC, Bitwarden and 1Password set on Windows; on the phone, Android's `IS_SENSITIVE` flag. When the PC can't check a copy for the mark (another app holds the clipboard, or the copy changed meanwhile), it checks again and, failing that, sends it as sensitive. Sensitive clips stay out of the tray's *Recent* list and never wait for a device that is away. Where they arrive, they skip Windows' clipboard history and Klipper on the PC, and are flagged sensitive on the phone's clipboard, which hides Android's preview |
 | 2FA codes leaking | Opt-in. The phone reads notifications on the phone only; just the code's digits go to paired computers, as a secret (out of history and *Recent*). The PC's notification names the app, never the code. Neither the code nor the message is logged |
 | A link from a paired device opening by itself | Nothing opens without a click on its notification. Only `http`/`https` links that are the whole clip; the site is shown first; links with a `user@` part (which hide the real site) and non-ASCII hosts are refused |
 | Clips leaving the local network through the OS | On Windows, received clips are marked so the cloud clipboard doesn't upload them to the Microsoft account (they stay in the local Win+V history unless sensitive) |
@@ -101,6 +101,10 @@ The history store is in the core (`core/src/history`) but no app turns it on yet
   copy goes to them.
 - **Malware running as you on the PC or phone.** It can read the clipboard anyway, and the
   identity key is a file readable by your user (not yet in the OS keystore).
+- **Passwords that aren't marked.** paste-get only knows a copy is a password when the app
+  marks it (above). On X11 and GNOME the PC can't see the mark, and some apps never set it: such
+  a password goes out as an ordinary clip, shows in the tray's *Recent* list and waits for a
+  device that is away.
 - **Network metadata.** mDNS announces that paste-get runs on this computer, with its device
   name. Traffic sizes and timing are visible on the network.
 - **Unsigned packages.** Windows builds aren't code-signed yet; check downloads against the

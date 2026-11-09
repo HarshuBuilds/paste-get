@@ -3071,6 +3071,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "clap",
+ "clipboard-win",
  "data-encoding",
  "dirs",
  "futures-util",
@@ -3091,6 +3092,7 @@ dependencies = [
  "tracing-subscriber",
  "windows-registry",
  "windows-sys 0.61.2",
+ "wl-clipboard-rs",
  "zbus",
 ]
 
@@ -3122,6 +3124,7 @@ dependencies = [
  "anyhow",
  "clap",
  "dirs",
+ "futures-util",
  "pasteget-desktop",
  "qrcode",
  "semver",
@@ -3134,6 +3137,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "windows-sys 0.61.2",
+ "zbus",
 ]
 
 [[package]]

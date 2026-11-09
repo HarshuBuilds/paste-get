@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- A firewalld service for paste-get, installed by the .deb and .rpm. It only defines the ports:
+     nothing is opened until the user adds the service to a zone (README, Troubleshooting). -->
+<service>
+  <short>paste-get</short>
+  <description>paste-get clipboard sync: paired phones and computers connect to this one on TCP 47290 (TLS), and find it with mDNS on UDP 5353.</description>
+  <port protocol="tcp" port="47290"/>
+  <port protocol="udp" port="5353"/>
+</service>

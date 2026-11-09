@@ -33,6 +33,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
 
+# Asking the session bus whether a tray can show the icon (`linux_tray.rs`). The daemon already
+# uses it for notifications.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+zbus = { version = "6", default-features = false, features = ["tokio"] }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dev-dependencies]
+futures-util = { version = "0.3", default-features = false }
+
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["io-util", "net", "rt"] }

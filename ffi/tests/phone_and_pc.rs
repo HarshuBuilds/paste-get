@@ -814,6 +814,20 @@ fn a_sensitive_clip_from_the_pc_stays_sensitive() {
     assert_eq!(*phone.listener.sensitive.lock().unwrap(), [true]);
 }
 
+/// A password copied on the PC from a password manager goes out sensitive, and isn't kept in
+/// the tray's Recent list.
+#[test]
+fn a_password_copied_on_the_pc_arrives_sensitive() {
+    let pc = start_pc();
+    let phone = connected_phone(&pc, "POCO");
+
+    pc.clipboard.set_sensitive(Raw::Text("hunter2".into()));
+
+    assert_eq!(phone.clip(1), (mime::TEXT.to_owned(), b"hunter2".to_vec()));
+    assert_eq!(*phone.listener.sensitive.lock().unwrap(), [true]);
+    assert!(pc.daemon.recent().is_empty());
+}
+
 /// Roadmap M6, done when: a full-HD screenshot copied on the PC reaches the phone as a PNG
 /// with the same pixels.
 #[test]

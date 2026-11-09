@@ -3,14 +3,14 @@
 #
 # Builds the desktop packages: the tray app with the `pasteget` command inside.
 #
-#   packaging/build-desktop.sh nsis        # Windows installer (run on Windows, in Git Bash)
-#   packaging/build-desktop.sh appimage    # Linux AppImage
+#   packaging/build-desktop.sh nsis                 # Windows installer (on Windows, in Git Bash)
+#   packaging/build-desktop.sh appimage,deb,rpm     # Linux AppImage, .deb and .rpm
 #
 # Needs tauri-cli (`cargo install tauri-cli --version =2.12.4 --locked`). Packages land in
 # target/release/bundle/<kind>/. See docs/RELEASING.md.
 set -euo pipefail
 
-bundles="${1:?usage: build-desktop.sh <nsis|appimage>}"
+bundles="${1:?usage: build-desktop.sh <nsis|appimage|deb|rpm, comma-separated>}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 

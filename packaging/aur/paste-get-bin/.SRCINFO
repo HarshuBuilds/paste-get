@@ -1,0 +1,20 @@
+pkgbase = paste-get-bin
+	pkgdesc = Copy on your phone, paste on your PC: clipboard sync with Android over the local network
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/Nexoryx-business/paste-get
+	arch = x86_64
+	license = GPL-3.0-or-later
+	depends = gcc-libs
+	depends = glibc
+	depends = gtk3
+	depends = webkit2gtk-4.1
+	depends = libayatana-appindicator
+	depends = hicolor-icon-theme
+	provides = paste-get
+	conflicts = paste-get
+	options = !debug
+	source = https://github.com/Nexoryx-business/paste-get/releases/download/v0.1.0/paste-get_0.1.0_amd64.deb
+	sha256sums = SKIP
+
+pkgname = paste-get-bin

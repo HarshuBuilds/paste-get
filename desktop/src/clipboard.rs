@@ -3,15 +3,16 @@
 //! The local clipboard: a [`ClipboardBackend`] owned by a dedicated thread that polls for changes
 //! and applies clips received from peers.
 //!
-//! Change detection is polling for now. Windows has a cheap sequence number to skip unchanged
-//! polls; native change events for Wayland, X11 and macOS are on the roadmap.
+//! Each poll first asks the backend whether anything may have changed, which is cheap: Windows
+//! has a sequence number, Wayland compositors with data-control send change events
+//! ([`events`]). Elsewhere (X11, GNOME, macOS) every poll reads the clipboard.
 
 use std::borrow::Cow;
 use std::fmt;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Cursor;
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -23,6 +24,15 @@ use image::{
 };
 use pasteget_core::clip::mime;
 use tokio::sync::mpsc as async_mpsc;
+
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+    )
+))]
+mod events;
 
 /// Widest or tallest image accepted from a peer, in pixels.
 pub const MAX_IMAGE_DIMENSION: u32 = 16_384;
@@ -175,6 +185,35 @@ pub trait ClipboardBackend: Send + 'static {
     fn may_have_changed(&mut self) -> bool {
         true
     }
+
+    /// Whether the app that made the copy the last read returned marked it as a secret, as
+    /// password managers do. `None` when that can't be told: the check failed, or the clipboard
+    /// may have changed since the read.
+    fn marked_sensitive(&mut self) -> Option<bool> {
+        Some(false)
+    }
+}
+
+/// On Linux, KeePassXC and KDE apps add this type to a secret, with "secret" as its data.
+/// Klipper, KDE's clipboard history, leaves such copies out.
+const KDE_PASSWORD_HINT: &str = "x-kde-passwordManagerHint";
+/// Windows formats that keep a copy out of clipboard history and viewers, set by KeePass,
+/// KeePassXC, Bitwarden and 1Password. The first two count whatever their data.
+const WINDOWS_EXCLUDE: &str = "ExcludeClipboardContentFromMonitorProcessing";
+const WINDOWS_VIEWER_IGNORE: &str = "Clipboard Viewer Ignore";
+/// Holds a DWORD: 0 means "not in the history". Its sibling CanUploadToCloudClipboard = 0 is not a
+/// mark: paste-get puts it on every clip it receives, and the password managers that set it also
+/// set one of these.
+const WINDOWS_HISTORY: &str = "CanIncludeInClipboardHistory";
+
+/// Whether a copy's formats, each with its data, mark it as a secret.
+fn marks_sensitive(formats: &[(&str, Vec<u8>)]) -> bool {
+    formats.iter().any(|(name, data)| match *name {
+        KDE_PASSWORD_HINT => data.trim_ascii() == b"secret",
+        WINDOWS_EXCLUDE | WINDOWS_VIEWER_IGNORE => true,
+        WINDOWS_HISTORY => data.starts_with(&[0; 4]),
+        _ => false,
+    })
 }
 
 /// The OS clipboard.
@@ -182,6 +221,28 @@ pub struct SystemClipboard {
     inner: arboard::Clipboard,
     #[cfg(windows)]
     last_sequence: u32,
+    /// The sequence number when the last read began.
+    #[cfg(windows)]
+    read_sequence: u32,
+    /// Whether arboard reads through Wayland's data-control protocol, the only way to see a
+    /// password manager's mark there.
+    #[cfg(all(
+        unix,
+        not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+    ))]
+    data_control: bool,
+    /// The fingerprint of the text the last read returned, if it was text.
+    #[cfg(all(
+        unix,
+        not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+    ))]
+    read_text: Option<u64>,
+    /// Wayland change events, when the compositor has them.
+    #[cfg(all(
+        unix,
+        not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+    ))]
+    events: Option<events::ChangeEvents>,
 }
 
 impl SystemClipboard {
@@ -190,12 +251,27 @@ impl SystemClipboard {
             inner: arboard::Clipboard::new().context("could not open the clipboard")?,
             #[cfg(windows)]
             last_sequence: 0,
+            #[cfg(windows)]
+            read_sequence: 0,
+            #[cfg(all(
+                unix,
+                not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+            ))]
+            data_control: wayland_data_control(),
+            #[cfg(all(
+                unix,
+                not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+            ))]
+            read_text: None,
+            #[cfg(all(
+                unix,
+                not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+            ))]
+            events: wayland_change_events(),
         })
     }
-}
 
-impl ClipboardBackend for SystemClipboard {
-    fn read(&mut self) -> Result<Option<Raw>> {
+    fn read_content(&mut self) -> Result<Option<Raw>> {
         // Text first: it's cheap, and apps that copy images rarely offer text alongside.
         match self.inner.get_text() {
             Ok(text) => return Ok(Some(Raw::Text(text))),
@@ -211,6 +287,130 @@ impl ClipboardBackend for SystemClipboard {
             Err(arboard::Error::ContentNotAvailable) => Ok(None),
             Err(e) => Err(e).context("could not read an image from the clipboard"),
         }
+    }
+}
+
+/// Whether arboard uses Wayland's data-control protocol, by the same test as its own. Otherwise it
+/// uses X11 (XWayland on GNOME).
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+))]
+fn wayland_data_control() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some()
+        && wl_clipboard_rs::utils::is_primary_selection_supported().is_ok()
+}
+
+/// Whether the current Wayland copy carries the KDE password hint. `None` if that can't be told,
+/// or the copy is gone.
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+))]
+fn wayland_marked() -> Option<bool> {
+    use std::io::Read;
+    use wl_clipboard_rs::paste::{self, ClipboardType, MimeType, Seat};
+
+    let pipe = match paste::get_contents(
+        ClipboardType::Regular,
+        Seat::Unspecified,
+        MimeType::Specific(KDE_PASSWORD_HINT),
+    ) {
+        Ok((pipe, _)) => pipe,
+        Err(paste::Error::NoMimeType) => return Some(false),
+        Err(e) => {
+            // ClipboardEmpty included: the copy that was just read has gone.
+            tracing::debug!(error = %e, "could not check the copy for a password manager's mark");
+            return None;
+        }
+    };
+    let mut data = Vec::new();
+    // One short word is expected.
+    if let Err(e) = pipe.take(64).read_to_end(&mut data) {
+        // Offered but unreadable: it counts.
+        tracing::debug!(error = %e, "could not read a password manager's mark: counting it");
+        return Some(true);
+    }
+    Some(marks_sensitive(&[(KDE_PASSWORD_HINT, data)]))
+}
+
+/// The formats password managers use that the current Windows copy has, with their data. `None`
+/// if the clipboard can't be opened.
+#[cfg(windows)]
+fn windows_markers() -> Option<Vec<(&'static str, Vec<u8>)>> {
+    let Ok(_open) = clipboard_win::Clipboard::new_attempts(10) else {
+        tracing::debug!("could not open the clipboard to check for a password manager's mark");
+        return None;
+    };
+    let markers = [WINDOWS_EXCLUDE, WINDOWS_VIEWER_IGNORE, WINDOWS_HISTORY]
+        .into_iter()
+        .filter_map(|name| {
+            let format = clipboard_win::register_format(name)?.get();
+            if !clipboard_win::is_format_avail(format) {
+                return None;
+            }
+            let mut data = Vec::new();
+            // Some apps put no data in the first two: being there is what counts. Data that is
+            // there but can't be read counts as 0.
+            if clipboard_win::raw::get_vec(format, &mut data).is_err() {
+                data = vec![0; 4];
+            }
+            Some((name, data))
+        })
+        .collect();
+    Some(markers)
+}
+
+/// Starts watching Wayland's clipboard change events. `None` on X11, or when the compositor
+/// lacks the data-control protocols (GNOME): every poll then reads the clipboard.
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+))]
+fn wayland_change_events() -> Option<events::ChangeEvents> {
+    use wl_clipboard_rs::{paste::Seat, watch};
+
+    // The same test as arboard's: without it, arboard uses X11.
+    std::env::var_os("WAYLAND_DISPLAY")?;
+    let started = events::ChangeEvents::start(|| {
+        let mut watcher = watch::Watcher::new(watch::ClipboardType::Regular, Seat::Unspecified)
+            .context("could not watch the Wayland clipboard")?;
+        let cancel = watcher.cancel_handle();
+        // Only the fact that something changed: the clipboard thread reads the content.
+        let next_change: events::NextChange = Box::new(move || Ok(watcher.next_event()?.is_some()));
+        let stop: events::Stop = Box::new(move || cancel.cancel());
+        Ok((next_change, stop))
+    });
+    match started {
+        Ok(events) => {
+            tracing::info!("watching Wayland clipboard change events");
+            Some(events)
+        }
+        Err(e) => {
+            tracing::info!(error = %format!("{e:#}"), "no Wayland clipboard change events: checking the clipboard at every poll");
+            None
+        }
+    }
+}
+
+impl ClipboardBackend for SystemClipboard {
+    fn read(&mut self) -> Result<Option<Raw>> {
+        #[cfg(windows)]
+        {
+            self.read_sequence = windows_clipboard_sequence();
+        }
+        let raw = self.read_content();
+        #[cfg(all(
+            unix,
+            not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+        ))]
+        {
+            self.read_text = match &raw {
+                Ok(Some(text @ Raw::Text(_))) => Some(text.fingerprint()),
+                _ => None,
+            };
+        }
+        raw
     }
 
     fn write(&mut self, raw: &Raw, sensitive: bool) -> Result<()> {
@@ -242,6 +442,58 @@ impl ClipboardBackend for SystemClipboard {
         let changed = sequence != self.last_sequence;
         self.last_sequence = sequence;
         changed
+    }
+
+    #[cfg(all(
+        unix,
+        not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+    ))]
+    fn may_have_changed(&mut self) -> bool {
+        self.events
+            .as_ref()
+            .is_none_or(events::ChangeEvents::take_change)
+    }
+
+    fn marked_sensitive(&mut self) -> Option<bool> {
+        #[cfg(windows)]
+        {
+            let markers = windows_markers()?;
+            // Nothing was copied since the read began: the marks are the read copy's.
+            (windows_clipboard_sequence() == self.read_sequence).then(|| marks_sensitive(&markers))
+        }
+        #[cfg(all(
+            unix,
+            not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+        ))]
+        {
+            if !self.data_control {
+                return Some(false);
+            }
+            let marked = wayland_marked()?;
+            // The mark was checked on what is on the clipboard now. Unmarked, it must still be the
+            // text that was read: a password replaced by something else would look unmarked.
+            if !marked && let Some(read) = self.read_text {
+                let now = self
+                    .inner
+                    .get_text()
+                    .ok()
+                    .map(|text| Raw::Text(text).fingerprint());
+                if now != Some(read) {
+                    return None;
+                }
+            }
+            Some(marked)
+        }
+        #[cfg(not(any(
+            windows,
+            all(
+                unix,
+                not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+            )
+        )))]
+        {
+            Some(false)
+        }
     }
 }
 
@@ -292,21 +544,28 @@ fn windows_clipboard_sequence() -> u32 {
     unsafe { windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber() }
 }
 
-/// An in-memory clipboard, shared between clones. For tests and for running two daemons on one
-/// machine without them fighting over the real clipboard.
+/// An in-memory clipboard, shared between clones, that remembers whether its content is marked
+/// sensitive. For tests and for running two daemons on one machine without them fighting over
+/// the real clipboard.
 #[derive(Clone, Default)]
-pub struct MemoryClipboard(Arc<Mutex<Option<Raw>>>);
+pub struct MemoryClipboard(Arc<Mutex<Option<(Raw, bool)>>>);
 
 impl MemoryClipboard {
     pub fn get(&self) -> Option<Raw> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.lock().as_ref().map(|(raw, _)| raw.clone())
     }
 
     pub fn set(&self, raw: Raw) {
-        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(raw);
+        *self.lock() = Some((raw, false));
+    }
+
+    /// Copies `raw` the way a password manager does: marked sensitive.
+    pub fn set_sensitive(&self, raw: Raw) {
+        *self.lock() = Some((raw, true));
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Option<(Raw, bool)>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -315,16 +574,25 @@ impl ClipboardBackend for MemoryClipboard {
         Ok(self.get())
     }
 
-    fn write(&mut self, raw: &Raw, _sensitive: bool) -> Result<()> {
-        self.set(raw.clone());
+    fn write(&mut self, raw: &Raw, sensitive: bool) -> Result<()> {
+        *self.lock() = Some((raw.clone(), sensitive));
         Ok(())
+    }
+
+    fn marked_sensitive(&mut self) -> Option<bool> {
+        Some(
+            self.lock()
+                .as_ref()
+                .is_some_and(|(_, sensitive)| *sensitive),
+        )
     }
 }
 
 /// Owns the clipboard on its own thread: reports local changes, applies remote clips.
 ///
 /// Content it wrote itself is never reported as a change. What was on the clipboard when the
-/// daemon started isn't reported either: only new copies are sent.
+/// daemon started isn't reported either: only new copies are sent. Copies a password manager
+/// marked as secret are reported as sensitive.
 #[derive(Debug)]
 pub struct ClipboardWatcher {
     requests: mpsc::Sender<Request>,
@@ -386,6 +654,10 @@ impl ClipboardWatcher {
     }
 }
 
+/// How many times in a row the backend may fail to tell whether a new copy is marked as a secret
+/// before it is sent as one.
+const MARK_CHECKS: u32 = 3;
+
 fn watch(
     mut backend: impl ClipboardBackend,
     poll_interval: Duration,
@@ -393,19 +665,30 @@ fn watch(
     changes: &async_mpsc::Sender<Content>,
 ) {
     let mut last_seen = backend.read().ok().flatten().map(|raw| raw.fingerprint());
+    // What this thread put on the clipboard last, and whether it was sensitive, until something
+    // else is copied. Where marks can't be read (X11, GNOME, macOS), a sensitive clip from a peer
+    // would otherwise read back as an ordinary one.
+    let mut ours: Option<(u64, bool)> = None;
+    // Polls in a row that read a new copy without being able to tell whether it is marked. While
+    // there are some, the next poll reads again even if the backend saw no change.
+    let mut unsure = 0;
 
     loop {
         match requests.recv_timeout(poll_interval) {
             Ok(Request::Read(reply)) => {
-                let content = match backend.read() {
-                    Ok(Some(raw)) => {
-                        // Sent by whoever asked: the next poll needn't report it too.
-                        last_seen = Some(raw.fingerprint());
-                        Content::from_raw(raw).map(Some)
-                    }
-                    Ok(None) => Ok(None),
-                    Err(e) => Err(e),
-                };
+                let content = read_now(&mut backend, ours).and_then(|read| {
+                    let Some((raw, sensitive)) = read else {
+                        return Ok(None);
+                    };
+                    // Sent by whoever asked: the next poll needn't report it too.
+                    last_seen = Some(raw.fingerprint());
+                    Content::from_raw(raw).map(|content| {
+                        Some(Content {
+                            sensitive,
+                            ..content
+                        })
+                    })
+                });
                 let _ = reply.send(content);
             }
             Ok(Request::Write(WriteRequest { content, applied })) => {
@@ -419,19 +702,24 @@ fn watch(
                 };
                 match backend.write(&raw, content.sensitive) {
                     Ok(()) => {
-                        last_seen = Some(raw.fingerprint());
+                        let fingerprint = raw.fingerprint();
+                        last_seen = Some(fingerprint);
+                        ours = Some((fingerprint, content.sensitive));
                         applied(started.elapsed());
                     }
                     Err(e) => tracing::warn!(error = %e, "could not write to the clipboard"),
                 }
             }
             Err(RecvTimeoutError::Timeout) => {
-                if !backend.may_have_changed() {
+                if !backend.may_have_changed() && unsure == 0 {
                     continue;
                 }
                 let raw = match backend.read() {
                     Ok(Some(raw)) => raw,
-                    Ok(None) => continue,
+                    Ok(None) => {
+                        unsure = 0;
+                        continue;
+                    }
                     Err(e) => {
                         tracing::debug!(error = %e, "could not read the clipboard");
                         continue;
@@ -439,12 +727,37 @@ fn watch(
                 };
                 let fingerprint = raw.fingerprint();
                 if last_seen == Some(fingerprint) {
+                    unsure = 0;
                     continue;
                 }
+                let sensitive = match backend.marked_sensitive() {
+                    Some(sensitive) => sensitive,
+                    None if unsure + 1 < MARK_CHECKS => {
+                        unsure += 1;
+                        tracing::debug!(
+                            "could not tell whether the copy is marked as a secret: reading it again"
+                        );
+                        continue;
+                    }
+                    None => {
+                        tracing::info!(
+                            "could not tell whether the copy is marked as a secret: sending it as one"
+                        );
+                        true
+                    }
+                };
+                unsure = 0;
                 last_seen = Some(fingerprint);
+                ours = None;
                 match Content::from_raw(raw) {
                     Ok(content) => {
-                        if changes.blocking_send(content).is_err() {
+                        if changes
+                            .blocking_send(Content {
+                                sensitive,
+                                ..content
+                            })
+                            .is_err()
+                        {
                             return;
                         }
                     }
@@ -452,6 +765,37 @@ fn watch(
                 }
             }
             Err(RecvTimeoutError::Disconnected) => return,
+        }
+    }
+}
+
+/// Reads the clipboard for a "send the clipboard" command, with whether it is sensitive. `ours`
+/// is what the clipboard thread wrote last.
+fn read_now(
+    backend: &mut impl ClipboardBackend,
+    ours: Option<(u64, bool)>,
+) -> Result<Option<(Raw, bool)>> {
+    let mut checks = 0;
+    loop {
+        let Some(raw) = backend.read()? else {
+            return Ok(None);
+        };
+        let sensitive = match ours {
+            Some((written, sensitive)) if written == raw.fingerprint() => Some(sensitive),
+            _ => backend.marked_sensitive(),
+        };
+        checks += 1;
+        match sensitive {
+            Some(sensitive) => return Ok(Some((raw, sensitive))),
+            None if checks < MARK_CHECKS => tracing::debug!(
+                "could not tell whether the clipboard is marked as a secret: reading it again"
+            ),
+            None => {
+                tracing::info!(
+                    "could not tell whether the clipboard is marked as a secret: sending it as one"
+                );
+                return Ok(Some((raw, true)));
+            }
         }
     }
 }
@@ -565,6 +909,147 @@ mod tests {
         assert!(!shown.contains("hunter2"));
     }
 
+    const WINDOWS_CLOUD: &str = "CanUploadToCloudClipboard";
+
+    fn dword(value: u32) -> Vec<u8> {
+        value.to_le_bytes().to_vec()
+    }
+
+    #[test]
+    fn password_manager_marks_make_a_copy_sensitive() {
+        // KeePassXC on Wayland.
+        assert!(marks_sensitive(&[
+            ("text/plain;charset=utf-8", b"hunter2".to_vec()),
+            (KDE_PASSWORD_HINT, b"secret".to_vec()),
+        ]));
+        assert!(marks_sensitive(&[(
+            KDE_PASSWORD_HINT,
+            b"secret\n".to_vec()
+        )]));
+        // KeePass on Windows.
+        assert!(marks_sensitive(&[
+            ("CF_UNICODETEXT", b"h\0u\0".to_vec()),
+            (WINDOWS_VIEWER_IGNORE, Vec::new()),
+            (WINDOWS_EXCLUDE, Vec::new()),
+        ]));
+        // KeePassXC, Bitwarden, 1Password on Windows: any one of them is enough.
+        assert!(marks_sensitive(&[(WINDOWS_EXCLUDE, dword(0))]));
+        assert!(marks_sensitive(&[(WINDOWS_HISTORY, dword(0))]));
+        // Bitwarden on Windows.
+        assert!(marks_sensitive(&[
+            (WINDOWS_HISTORY, dword(0)),
+            (WINDOWS_CLOUD, dword(0)),
+        ]));
+    }
+
+    #[test]
+    fn ordinary_copies_are_not_sensitive() {
+        assert!(!marks_sensitive(&[]));
+        assert!(!marks_sensitive(&[
+            ("text/plain;charset=utf-8", b"secret".to_vec()),
+            ("UTF8_STRING", b"secret".to_vec()),
+        ]));
+        assert!(!marks_sensitive(&[(KDE_PASSWORD_HINT, b"public".to_vec())]));
+        assert!(!marks_sensitive(&[(KDE_PASSWORD_HINT, Vec::new())]));
+        // 1 allows the history and the cloud explicitly.
+        assert!(!marks_sensitive(&[
+            (WINDOWS_HISTORY, dword(1)),
+            (WINDOWS_CLOUD, dword(1)),
+        ]));
+        assert!(!marks_sensitive(&[(WINDOWS_HISTORY, Vec::new())]));
+        // What paste-get puts on every clip it receives on Windows.
+        assert!(!marks_sensitive(&[(WINDOWS_CLOUD, dword(0))]));
+    }
+
+    #[tokio::test]
+    async fn copies_a_password_manager_marked_are_sensitive() {
+        let clipboard = MemoryClipboard::default();
+        let (tx, mut changes) = async_mpsc::channel(8);
+        let watcher = ClipboardWatcher::spawn(clipboard.clone(), POLL, tx).unwrap();
+        assert!(watcher.read().await.unwrap().is_none());
+
+        clipboard.set_sensitive(Raw::Text("hunter2".into()));
+        assert!(next_change(&mut changes).await.unwrap().sensitive);
+
+        clipboard.set(Raw::Text("hello".into()));
+        assert!(!next_change(&mut changes).await.unwrap().sensitive);
+
+        clipboard.set_sensitive(Raw::Text("hunter3".into()));
+        assert!(watcher.read().await.unwrap().unwrap().sensitive);
+    }
+
+    /// Sees no marks, as on X11 or macOS.
+    struct MarksUnseen(MemoryClipboard);
+
+    impl ClipboardBackend for MarksUnseen {
+        fn read(&mut self) -> Result<Option<Raw>> {
+            self.0.read()
+        }
+
+        fn write(&mut self, raw: &Raw, sensitive: bool) -> Result<()> {
+            self.0.write(raw, sensitive)
+        }
+    }
+
+    fn sensitive_text(text: &str) -> Content {
+        Content {
+            sensitive: true,
+            ..Content::from_raw(Raw::Text(text.into())).unwrap()
+        }
+    }
+
+    /// Writes `content` through `watcher` and waits until it is on the clipboard.
+    fn write_now(watcher: &ClipboardWatcher, content: Content) {
+        let (applied_tx, applied) = mpsc::channel();
+        watcher
+            .write(content, move |_| applied_tx.send(()).unwrap())
+            .unwrap();
+        applied.recv_timeout(Duration::from_secs(2)).unwrap();
+    }
+
+    #[tokio::test]
+    async fn what_it_wrote_reads_back_as_written() {
+        let clipboard = MemoryClipboard::default();
+        let (tx, _changes) = async_mpsc::channel(8);
+        let backend = MarksUnseen(clipboard.clone());
+        let watcher = ClipboardWatcher::spawn(backend, POLL, tx).unwrap();
+
+        watcher.write(sensitive_text("2FA code"), |_| {}).unwrap();
+        assert!(watcher.read().await.unwrap().unwrap().sensitive);
+
+        let received = Content::from_raw(Raw::Text("from the phone".into())).unwrap();
+        watcher.write(received, |_| {}).unwrap();
+        assert!(!watcher.read().await.unwrap().unwrap().sensitive);
+    }
+
+    #[tokio::test]
+    async fn what_it_wrote_is_forgotten_once_something_else_is_copied() {
+        let clipboard = MemoryClipboard::default();
+        let (tx, mut changes) = async_mpsc::channel(8);
+        let backend = MarksUnseen(clipboard.clone());
+        let watcher = ClipboardWatcher::spawn(backend, POLL, tx).unwrap();
+        write_now(&watcher, sensitive_text("2FA code"));
+
+        clipboard.set(Raw::Text("copied here".into()));
+        assert!(next_change(&mut changes).await.is_some());
+        // The same text again, copied in another app this time.
+        clipboard.set(Raw::Text("2FA code".into()));
+        assert!(next_change(&mut changes).await.is_some());
+
+        assert!(!watcher.read().await.unwrap().unwrap().sensitive);
+    }
+
+    #[tokio::test]
+    async fn a_sensitive_clip_it_wrote_reads_back_sensitive() {
+        let clipboard = MemoryClipboard::default();
+        let (tx, _changes) = async_mpsc::channel(8);
+        let watcher = ClipboardWatcher::spawn(clipboard, POLL, tx).unwrap();
+
+        watcher.write(sensitive_text("2FA code"), |_| {}).unwrap();
+
+        assert!(watcher.read().await.unwrap().unwrap().sensitive);
+    }
+
     #[tokio::test]
     async fn reports_new_copies_but_not_what_was_there_at_start() {
         let clipboard = MemoryClipboard::default();
@@ -577,6 +1062,134 @@ mod tests {
         clipboard.set(Raw::Text("new".into()));
         let change = next_change(&mut changes).await.unwrap();
         assert_eq!(change.data, b"new");
+    }
+
+    /// A clipboard that says when it may have changed, as change events do.
+    struct Evented {
+        clipboard: MemoryClipboard,
+        changed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl ClipboardBackend for Evented {
+        fn read(&mut self) -> Result<Option<Raw>> {
+            self.clipboard.read()
+        }
+
+        fn write(&mut self, raw: &Raw, sensitive: bool) -> Result<()> {
+            self.clipboard.write(raw, sensitive)
+        }
+
+        fn may_have_changed(&mut self) -> bool {
+            self.changed
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[tokio::test]
+    async fn polls_only_read_after_a_change_event() {
+        let clipboard = MemoryClipboard::default();
+        let changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let backend = Evented {
+            clipboard: clipboard.clone(),
+            changed: Arc::clone(&changed),
+        };
+        let (tx, mut changes) = async_mpsc::channel(8);
+        let _watcher = ClipboardWatcher::spawn(backend, POLL, tx).unwrap();
+        assert!(next_change(&mut changes).await.is_none());
+
+        clipboard.set(Raw::Text("new".into()));
+        assert!(
+            next_change(&mut changes).await.is_none(),
+            "read without an event"
+        );
+
+        changed.store(true, std::sync::atomic::Ordering::SeqCst);
+        let change = next_change(&mut changes).await.unwrap();
+        assert_eq!(change.data, b"new");
+    }
+
+    /// Reports changes like [`Evented`], and can't tell whether a copy is marked the first
+    /// `unsure` times it is asked, as when another app holds the clipboard.
+    struct Unsure {
+        evented: Evented,
+        unsure: u32,
+    }
+
+    impl ClipboardBackend for Unsure {
+        fn read(&mut self) -> Result<Option<Raw>> {
+            self.evented.read()
+        }
+
+        fn write(&mut self, raw: &Raw, sensitive: bool) -> Result<()> {
+            self.evented.write(raw, sensitive)
+        }
+
+        fn may_have_changed(&mut self) -> bool {
+            self.evented.may_have_changed()
+        }
+
+        fn marked_sensitive(&mut self) -> Option<bool> {
+            if self.unsure > 0 {
+                self.unsure -= 1;
+                return None;
+            }
+            self.evented.clipboard.marked_sensitive()
+        }
+    }
+
+    fn unsure(unsure: u32) -> (Unsure, MemoryClipboard, Arc<std::sync::atomic::AtomicBool>) {
+        let clipboard = MemoryClipboard::default();
+        let changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let backend = Unsure {
+            evented: Evented {
+                clipboard: clipboard.clone(),
+                changed: Arc::clone(&changed),
+            },
+            unsure,
+        };
+        (backend, clipboard, changed)
+    }
+
+    #[tokio::test]
+    async fn a_copy_that_cant_be_checked_is_read_again() {
+        let (backend, clipboard, changed) = unsure(1);
+        let (tx, mut changes) = async_mpsc::channel(8);
+        let _watcher = ClipboardWatcher::spawn(backend, POLL, tx).unwrap();
+        assert!(next_change(&mut changes).await.is_none());
+
+        // One change event only: the poll that can't check the mark must read again by itself.
+        clipboard.set_sensitive(Raw::Text("hunter2".into()));
+        changed.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let change = next_change(&mut changes).await.unwrap();
+        assert_eq!(change.data, b"hunter2");
+        assert!(change.sensitive);
+    }
+
+    #[tokio::test]
+    async fn a_copy_that_can_never_be_checked_goes_out_sensitive() {
+        let (backend, clipboard, changed) = unsure(u32::MAX);
+        let (tx, mut changes) = async_mpsc::channel(8);
+        let watcher = ClipboardWatcher::spawn(backend, POLL, tx).unwrap();
+        assert!(next_change(&mut changes).await.is_none());
+
+        clipboard.set(Raw::Text("maybe a password".into()));
+        changed.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(next_change(&mut changes).await.unwrap().sensitive);
+
+        clipboard.set(Raw::Text("maybe another".into()));
+        assert!(watcher.read().await.unwrap().unwrap().sensitive);
+    }
+
+    #[tokio::test]
+    async fn sending_the_clipboard_checks_it_again() {
+        let (backend, clipboard, _changed) = unsure(MARK_CHECKS - 1);
+        let (tx, _changes) = async_mpsc::channel(8);
+        let watcher = ClipboardWatcher::spawn(backend, POLL, tx).unwrap();
+
+        clipboard.set(Raw::Text("hello".into()));
+
+        assert!(!watcher.read().await.unwrap().unwrap().sensitive);
     }
 
     #[tokio::test]
