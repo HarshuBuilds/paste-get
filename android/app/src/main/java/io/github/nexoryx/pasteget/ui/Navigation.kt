@@ -21,6 +21,10 @@ sealed interface Route : NavKey {
     @Serializable
     data object Copies : Route
 
+    /** The built-in mode's set-up, from the Copies screen or the status card. */
+    @Serializable
+    data object CopiesSetUp : Route
+
     @Serializable
     data object Screenshots : Route
 

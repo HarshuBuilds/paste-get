@@ -34,7 +34,7 @@ import io.github.nexoryx.pasteget.ui.theme.groupedShape
 /**
  * "What paste-get sends": one row per feature, with its state in a few words. The row opens the
  * feature's screen, where the explanations are; its switch turns it on or off. Turning copies on
- * before the built-in mode is set up also opens their screen, where the set-up is.
+ * before the built-in mode is set up also opens its set-up (Back leads to the copies' screen).
  */
 @Composable
 fun FeatureRows(state: AppState, actions: AppActions, onOpen: (Route) -> Unit) {
@@ -47,7 +47,10 @@ fun FeatureRows(state: AppState, actions: AppActions, onOpen: (Route) -> Unit) {
             checked = copies.on,
             onCheckedChange = { on ->
                 actions.autoCopy.onChange(on)
-                if (on && !copies.setUp) onOpen(Route.Copies)
+                if (on && !copies.setUp) {
+                    onOpen(Route.Copies)
+                    onOpen(Route.CopiesSetUp)
+                }
             },
             onClick = { onOpen(Route.Copies) },
         ),

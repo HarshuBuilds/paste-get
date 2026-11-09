@@ -45,9 +45,9 @@ because the 2FA feature reads notifications: Play Store → your profile picture
 1. Start paste-get on the PC. The first time, it shows a QR code.
 2. On the phone, tap **Scan the code** (later: Devices → **Pair a computer**), then tap **Pair**
    if the code is the one on your PC's screen. Both must be on the same Wi-Fi.
-3. To send copies automatically, turn on **Send what you copy**, then **Set up without
-   Shizuku** and follow the steps (it needs Developer options and paste-get's notifications,
-   once).
+3. To send copies automatically, turn on **Send what you copy** and follow the set-up's four
+   steps, once: each one ticks itself as you do it in Android's settings (Wi-Fi, Developer
+   options, Wireless debugging, then a pairing code).
 4. Optional: **Send new screenshots**, **Send 2FA codes**.
 
 On the PC, the tray menu has **Settings…** for the computer's name, notifications and hotkeys.

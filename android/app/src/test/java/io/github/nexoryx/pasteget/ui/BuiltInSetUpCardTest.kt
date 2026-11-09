@@ -4,12 +4,15 @@ package io.github.nexoryx.pasteget.ui
 
 import android.app.Application
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import io.github.nexoryx.pasteget.BuiltInStatus
 import io.github.nexoryx.pasteget.R
+import io.github.nexoryx.pasteget.ShizukuState
+import io.github.nexoryx.pasteget.ShizukuStatus
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -18,7 +21,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
-/** Without notifications, the Copies screen says why set-up can't start and leads to the setting. */
+/** The Copies screen leads to the built-in mode's set-up, one button at a time. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class BuiltInSetUpCardTest {
@@ -27,44 +30,47 @@ class BuiltInSetUpCardTest {
 
     private val app: Application = RuntimeEnvironment.getApplication()
 
-    private fun show(state: AppState, actions: AppActions) {
-        compose.setContent { MaterialTheme { CopiesScreen(state.autoCopy, actions.autoCopy, onBack = {}) } }
+    private fun show(state: CopiesState, actions: CopiesActions = CopiesActions(), onOpenSetUp: () -> Unit = {}) {
+        compose.setContent { MaterialTheme { CopiesScreen(state, actions, onBack = {}, onOpenSetUp = onOpenSetUp) } }
     }
 
     @Test
-    fun withNotificationsTheSetUpIsOffered() {
-        var setUps = 0
-        show(AppFixtures.state(copiesOn = true), AppActions(autoCopy = CopiesActions(onSetUpBuiltIn = { setUps++ })))
-
-        compose.onNodeWithText(app.getString(R.string.builtin_set_up)).performScrollTo().performClick()
-        assertEquals(1, setUps)
-        compose.onNodeWithText(app.getString(R.string.builtin_needs_notifications)).assertDoesNotExist()
-    }
-
-    @Test
-    fun withoutThemItSaysWhyAndOpensTheirSettings() {
-        var setUps = 0
+    fun beforeSetUpItOffersTheSetUpAlone() {
         var opened = 0
-        show(
-            AppFixtures.state(copiesOn = true, canNotify = false),
-            AppActions(autoCopy = CopiesActions(onSetUpBuiltIn = { setUps++ }, onOpenNotificationSettings = { opened++ })),
-        )
+        show(AppFixtures.state(copiesOn = true).autoCopy, onOpenSetUp = { opened++ })
 
-        compose.onNodeWithText(app.getString(R.string.builtin_needs_notifications)).performScrollTo()
-        compose.onNodeWithText(app.getString(R.string.builtin_set_up)).assertDoesNotExist()
-        compose.onNodeWithText(app.getString(R.string.builtin_allow_notifications)).performScrollTo().performClick()
-        assertEquals(0 to 1, setUps to opened)
+        compose.onNodeWithText(app.getString(R.string.builtin_offer)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(app.getString(R.string.setup_start)).performScrollTo().performClick()
+        assertEquals(1, opened)
+        // Shizuku isn't installed: it waits behind the set-up's link, not here.
+        compose.onNodeWithText(app.getString(R.string.shizuku_get)).assertDoesNotExist()
     }
 
     @Test
-    fun alsoWhileWaitingForTheCode() {
+    fun anInstalledShizukuStillGetsItsStep() {
+        var allowed = 0
         show(
-            AppFixtures.state(copiesOn = true, builtInStatus = BuiltInStatus.PAIRING, canNotify = false),
-            AppActions(),
+            AppFixtures.state(copiesOn = true).autoCopy.copy(shizuku = ShizukuState(ShizukuStatus.NO_PERMISSION)),
+            CopiesActions(onAllowShizuku = { allowed++ }),
         )
 
-        compose.onNodeWithText(app.getString(R.string.builtin_needs_notifications)).performScrollTo()
-        compose.onNodeWithText(app.getString(R.string.builtin_pairing_steps)).assertDoesNotExist()
-        compose.onNodeWithText(app.getString(R.string.builtin_cancel)).performScrollTo()
+        compose.onNodeWithText(app.getString(R.string.shizuku_allow)).performScrollTo().performClick()
+        assertEquals(1, allowed)
+    }
+
+    @Test
+    fun whileWaitingForTheCodeTheSetUpCanGoOnOrStop() {
+        var opened = 0
+        var cancelled = 0
+        show(
+            AppFixtures.state(copiesOn = true, builtInStatus = BuiltInStatus.PAIRING).autoCopy,
+            CopiesActions(onResetBuiltIn = { cancelled++ }),
+            onOpenSetUp = { opened++ },
+        )
+
+        compose.onNodeWithText(app.getString(R.string.builtin_pairing)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(app.getString(R.string.setup_continue)).performScrollTo().performClick()
+        compose.onNodeWithText(app.getString(R.string.builtin_cancel)).performScrollTo().performClick()
+        assertEquals(1 to 1, opened to cancelled)
     }
 }

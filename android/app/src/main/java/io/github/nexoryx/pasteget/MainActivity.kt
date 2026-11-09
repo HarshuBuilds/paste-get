@@ -10,11 +10,18 @@ import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.database.ContentObserver
 import android.graphics.Color
 import android.graphics.drawable.Icon
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -71,6 +78,28 @@ class MainActivity : ComponentActivity() {
     /** A tab a launcher shortcut asked for, until shown. */
     private var openTab by mutableStateOf<Tab?>(null)
 
+    /** paste-get shares the screen with another app: Settings can open beside it. */
+    private var splitScreen by mutableStateOf(false)
+
+    /**
+     * Developer options and Wireless debugging, turned on in Settings: in split screen paste-get
+     * stays in front meanwhile, so [onResume] doesn't tell.
+     */
+    private val settingsChanged = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) = model.refreshChecks()
+    }
+
+    /** Wi-Fi coming and going, for the set-up's first step. On a system thread. */
+    private val networkChanged = object : ConnectivityManager.NetworkCallback() {
+        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+            runOnUiThread { model.refreshChecks() }
+        }
+
+        override fun onLost(network: Network) {
+            runOnUiThread { model.refreshChecks() }
+        }
+    }
+
     private val photoPermission =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
             model.photoAccessAnswered()
@@ -110,6 +139,26 @@ class MainActivity : ComponentActivity() {
         startSyncService()
         // Not again when the activity is recreated (a rotation): its intent is still the link.
         if (savedInstanceState == null) handleIntent(intent)
+        splitScreen = isInMultiWindowMode
+    }
+
+    override fun onMultiWindowModeChanged(isInMultiWindowMode: Boolean, newConfig: Configuration) {
+        super.onMultiWindowModeChanged(isInMultiWindowMode, newConfig)
+        splitScreen = isInMultiWindowMode
+    }
+
+    override fun onStart() {
+        super.onStart()
+        for (setting in listOf(SetUpChecks.ADB_WIFI_ENABLED, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED)) {
+            contentResolver.registerContentObserver(Settings.Global.getUriFor(setting), false, settingsChanged)
+        }
+        getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(networkChanged)
+    }
+
+    override fun onStop() {
+        contentResolver.unregisterContentObserver(settingsChanged)
+        getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(networkChanged)
+        super.onStop()
     }
 
     @Composable
@@ -161,6 +210,9 @@ class MainActivity : ComponentActivity() {
                     lastCopy = activity.firstOrNull { it.sent && it.automatic && it.kind == ActivityKind.TEXT },
                     canNotify = model.canNotify,
                     setUp = model.builtInSetUp,
+                    checks = model.setUpChecks,
+                    vendor = VENDOR,
+                    splitScreen = splitScreen,
                 ),
                 codes = CodesState(
                     model.codesOn,
@@ -193,7 +245,9 @@ class MainActivity : ComponentActivity() {
         autoCopy = CopiesActions(
             onChange = model::setSendCopies,
             onSetUpBuiltIn = ::setUpBuiltIn,
-            onOpenWirelessDebugging = ::openWirelessDebugging,
+            onOpenWirelessDebugging = { openWirelessDebugging() },
+            onOpenAboutPhone = { openAboutPhone() },
+            onSubmitCode = pasteGet.autoCopy.builtIn::submitCode,
             onRetryBuiltIn = pasteGet.autoCopy.builtIn::retry,
             onResetBuiltIn = pasteGet.autoCopy.builtIn::reset,
             onAllowShizuku = pasteGet.autoCopy.shizuku::requestPermission,
@@ -328,10 +382,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Shows the code notification, then Settings, where the user asks for a pairing code. */
+    /**
+     * Shows the code notification, then Settings, where the user asks for a pairing code. In
+     * split screen, Settings opens in the other half and the code can be typed in paste-get.
+     */
     private fun setUpBuiltIn() {
-        // The code is typed into the notification: without it, set-up could only fail.
-        if (!BuiltInShell.canNotify(this)) return openNotificationSettings()
         pasteGet.autoCopy.builtIn.beginPairing()
         openWirelessDebugging()
     }
@@ -355,17 +410,26 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun openWirelessDebugging() {
+    /** [beside]: in the other half of the screen, as it is in split screen. */
+    private fun openWirelessDebugging(beside: Boolean = isInMultiWindowMode) {
         val developerOptions = Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
             // Scrolls to "Wireless debugging" on Pixel-like settings, ignored elsewhere.
             .putExtra(":settings:fragment_args_key", "toggle_adb_wireless")
         try {
-            startActivity(developerOptions)
+            startActivity(besideIf(beside, developerOptions))
         } catch (e: ActivityNotFoundException) {
             // Developer options are off: "About phone" is where they're turned on.
-            startActivity(Intent(Settings.ACTION_DEVICE_INFO_SETTINGS))
+            openAboutPhone(beside)
         }
     }
+
+    private fun openAboutPhone(beside: Boolean = isInMultiWindowMode) {
+        startActivity(besideIf(beside, Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)))
+    }
+
+    /** Settings in its own task, in the other half of the screen. */
+    private fun besideIf(beside: Boolean, intent: Intent): Intent =
+        if (beside) intent.addFlags(Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT or Intent.FLAG_ACTIVITY_NEW_TASK) else intent
 
     private fun openShizuku() {
         packageManager.getLaunchIntentForPackage(SHIZUKU_PACKAGE)?.let(::startActivity)
@@ -424,6 +488,9 @@ class MainActivity : ComponentActivity() {
         const val ACTION_PAIR = "io.github.nexoryx.pasteget.action.PAIR"
         const val ACTION_HISTORY = "io.github.nexoryx.pasteget.action.HISTORY"
         const val SHIZUKU_DOWNLOAD = "https://shizuku.rikka.app/download/"
+
+        /** Whose words the set-up uses: it doesn't change while the app runs. */
+        val VENDOR = Vendor.current()
 
         // The navigation bar's scrims enableEdgeToEdge uses by default, for 3-button navigation.
         val LIGHT_SCRIM = Color.argb(0xe6, 0xFF, 0xFF, 0xFF)

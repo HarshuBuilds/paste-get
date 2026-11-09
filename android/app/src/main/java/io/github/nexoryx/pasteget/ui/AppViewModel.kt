@@ -20,6 +20,7 @@ import io.github.nexoryx.pasteget.PhotoAccess
 import io.github.nexoryx.pasteget.Preferences
 import io.github.nexoryx.pasteget.R
 import io.github.nexoryx.pasteget.Sender
+import io.github.nexoryx.pasteget.SetUpChecks
 import io.github.nexoryx.pasteget.SyncService
 import io.github.nexoryx.pasteget.pasteGet
 import kotlinx.coroutines.CancellationException
@@ -84,6 +85,10 @@ class AppViewModel(
     var builtInSetUp by mutableStateOf(false)
         private set
 
+    /** What the built-in mode's set-up needs from the phone. */
+    var setUpChecks by mutableStateOf(SetUpChecks())
+        private set
+
     /** Read once: only Settings changes them. */
     var appearance by mutableStateOf(Preferences.appearance(app))
         private set
@@ -112,6 +117,15 @@ class AppViewModel(
         codeAccess = OneTimeCodes.access(app)
         canNotify = BuiltInShell.canNotify(app)
         builtInSetUp = app.pasteGet.autoCopy.builtIn.isSetUp
+        refreshChecks()
+    }
+
+    /**
+     * Wi-Fi, Developer options or Wireless debugging changed: also while paste-get shares the
+     * screen with Settings, where it doesn't come back to the front.
+     */
+    fun refreshChecks() {
+        setUpChecks = SetUpChecks.of(app)
     }
 
     private fun refreshComputers() {

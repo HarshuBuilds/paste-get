@@ -48,10 +48,11 @@ import kotlinx.coroutines.delay
 /**
  * The home screen's first card: how the app is doing, why, and the one thing to do next. Its
  * colors follow [AppStatus]; TalkBack reads it out when it changes. [copiesWork]: what's copied
- * goes out by itself, so the card says "copy anything" rather than how to send by hand.
+ * goes out by itself, so the card says "copy anything" rather than how to send by hand. [onOpen]
+ * opens the screen a step needs (the built-in mode's set-up).
  */
 @Composable
-fun StatusHero(status: AppStatus, copiesWork: Boolean, pairingBusy: Boolean, actions: AppActions) {
+fun StatusHero(status: AppStatus, copiesWork: Boolean, pairingBusy: Boolean, actions: AppActions, onOpen: (Route) -> Unit = {}) {
     AnimatedContent(
         targetState = status,
         // A new look for a new kind of state; within one, the text just changes.
@@ -87,7 +88,7 @@ fun StatusHero(status: AppStatus, copiesWork: Boolean, pairingBusy: Boolean, act
                 text = stringResource(needsStepText(shown.feature)),
                 offline = shown.offline,
             ) {
-                Button(onClick = { runStep(shown.step, actions) }) { Text(stringResource(stepLabel(shown.step))) }
+                Button(onClick = { runStep(shown.step, actions, onOpen) }) { Text(stringResource(stepLabel(shown.step))) }
                 OutlinedButton(onClick = actions.onSendClipboard) { Text(stringResource(R.string.send_clipboard_button)) }
             }
             is AppStatus.Working -> HeroCard(

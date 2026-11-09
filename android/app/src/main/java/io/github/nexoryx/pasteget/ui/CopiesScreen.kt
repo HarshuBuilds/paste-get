@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -41,8 +42,10 @@ import io.github.nexoryx.pasteget.CopyMode
 import io.github.nexoryx.pasteget.FallbackAccess
 import io.github.nexoryx.pasteget.LogStatus
 import io.github.nexoryx.pasteget.R
+import io.github.nexoryx.pasteget.SetUpChecks
 import io.github.nexoryx.pasteget.ShizukuState
 import io.github.nexoryx.pasteget.ShizukuStatus
+import io.github.nexoryx.pasteget.Vendor
 import java.util.Date
 
 /** What the Copies screen shows. */
@@ -59,6 +62,12 @@ data class CopiesState(
     val canNotify: Boolean,
     /** The built-in mode is paired with wireless debugging: turning copies on just works. */
     val setUp: Boolean = false,
+    /** What the built-in mode's set-up needs from the phone, read live. */
+    val checks: SetUpChecks = SetUpChecks(),
+    /** Whose words the set-up uses for Developer options and notifications. */
+    val vendor: Vendor = Vendor.OTHER,
+    /** paste-get shares the screen with another app: the pairing code can be typed here. */
+    val splitScreen: Boolean = false,
 ) {
     val health: FeatureHealth get() = copiesHealth(on, builtIn, shizuku, logs, fallback, canNotify)
 }
@@ -66,8 +75,14 @@ data class CopiesState(
 /** The Copies screen's buttons. Each does nothing unless given, for tests. */
 class CopiesActions(
     val onChange: (Boolean) -> Unit = {},
+    /** Shows the pairing code notification, then Developer options (beside the app in split screen). */
     val onSetUpBuiltIn: () -> Unit = {},
+    /** Developer options, or About phone while they're off. */
     val onOpenWirelessDebugging: () -> Unit = {},
+    /** About phone, where Developer options are turned on. */
+    val onOpenAboutPhone: () -> Unit = {},
+    /** A pairing code typed in the app. */
+    val onSubmitCode: (String) -> Unit = {},
     val onRetryBuiltIn: () -> Unit = {},
     val onResetBuiltIn: () -> Unit = {},
     val onAllowShizuku: () -> Unit = {},
@@ -87,9 +102,10 @@ class CopiesActions(
 /**
  * Send what you copy: on or off, how copies are read now, what to do if they aren't, and the
  * technical details for a bug report. Everything the home screen's row leaves out.
+ * [onOpenSetUp] opens the built-in mode's set-up.
  */
 @Composable
-fun CopiesScreen(state: CopiesState, actions: CopiesActions, onBack: () -> Unit) {
+fun CopiesScreen(state: CopiesState, actions: CopiesActions, onBack: () -> Unit, onOpenSetUp: () -> Unit = {}) {
     val health = state.health
     ScreenScaffold(title = stringResource(R.string.copies_title), onBack = onBack) {
         Card(modifier = Modifier.fillMaxWidth()) {
@@ -114,8 +130,10 @@ fun CopiesScreen(state: CopiesState, actions: CopiesActions, onBack: () -> Unit)
             val builtInSetUp = state.builtIn.status != BuiltInStatus.NOT_SET_UP &&
                 state.builtIn.status != BuiltInStatus.PAIRING && state.builtIn.status != BuiltInStatus.OFF
             if (state.builtIn.status != BuiltInStatus.WATCHING) {
-                BuiltInLine(state.builtIn, state.canNotify, actions)
-                if (!builtInSetUp && state.shizuku.status != ShizukuStatus.WATCHING) ShizukuLine(state.shizuku, actions)
+                BuiltInLine(state.builtIn, actions, onOpenSetUp)
+                // Not installed: the set-up mentions it, the built-in mode needs no other app.
+                val shizukuInUse = state.shizuku.status != ShizukuStatus.WATCHING && state.shizuku.status != ShizukuStatus.NOT_INSTALLED
+                if (!builtInSetUp && shizukuInUse) ShizukuLine(state.shizuku, actions)
                 if (state.shizuku.status != ShizukuStatus.WATCHING) LogLine(state.logs, actions)
             }
             if (!builtInSetUp) FallbackLine(state.shizuku, state.fallback, actions)
@@ -205,31 +223,20 @@ private fun Details(state: CopiesState) {
     }
 }
 
-/** The built-in mode: set it up, or what keeps it from running. */
+/** The built-in mode: its set-up, or what keeps it from running. */
 @Composable
-private fun BuiltInLine(builtIn: BuiltInState, canNotify: Boolean, actions: CopiesActions) {
+private fun BuiltInLine(builtIn: BuiltInState, actions: CopiesActions, onOpenSetUp: () -> Unit) {
     val detail = builtIn.detail.orEmpty()
     when (builtIn.status) {
         BuiltInStatus.OFF, BuiltInStatus.WATCHING -> {}
         BuiltInStatus.NOT_SET_UP -> {
             Body(stringResource(R.string.builtin_offer))
-            if (canNotify) {
-                TextButton(onClick = actions.onSetUpBuiltIn) { Text(stringResource(R.string.builtin_set_up)) }
-            } else {
-                NeedsNotificationsLine(actions)
-            }
+            Button(onClick = onOpenSetUp) { Text(stringResource(R.string.setup_start)) }
         }
         BuiltInStatus.PAIRING -> {
-            if (canNotify) {
-                Body(stringResource(R.string.builtin_pairing_steps))
-                if (detail.isNotEmpty()) Body(detail)
-            } else {
-                NeedsNotificationsLine(actions)
-            }
-            Row {
-                if (canNotify) {
-                    TextButton(onClick = actions.onOpenWirelessDebugging) { Text(stringResource(R.string.builtin_open_settings)) }
-                }
+            Body(stringResource(R.string.builtin_pairing))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onOpenSetUp) { Text(stringResource(R.string.setup_continue)) }
                 TextButton(onClick = actions.onResetBuiltIn) { Text(stringResource(R.string.builtin_cancel)) }
             }
         }
@@ -248,15 +255,9 @@ private fun BuiltInLine(builtIn: BuiltInState, canNotify: Boolean, actions: Copi
     }
 }
 
-/** The code is typed into a notification: without notifications, set-up can't be done. */
+/** Shizuku's state, and the one thing to do about it. Also in the set-up, for those who use it. */
 @Composable
-private fun NeedsNotificationsLine(actions: CopiesActions) {
-    Body(stringResource(R.string.builtin_needs_notifications))
-    TextButton(onClick = actions.onOpenNotificationSettings) { Text(stringResource(R.string.builtin_allow_notifications)) }
-}
-
-@Composable
-private fun ShizukuLine(shizuku: ShizukuState, actions: CopiesActions) {
+fun ShizukuLine(shizuku: ShizukuState, actions: CopiesActions) {
     val text = when (shizuku.status) {
         ShizukuStatus.OFF, ShizukuStatus.CONNECTING -> stringResource(R.string.shizuku_connecting)
         ShizukuStatus.NOT_INSTALLED -> stringResource(R.string.shizuku_not_installed)

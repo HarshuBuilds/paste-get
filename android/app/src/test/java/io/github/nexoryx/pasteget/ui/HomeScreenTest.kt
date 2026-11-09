@@ -77,16 +77,22 @@ class HomeScreenTest {
 
     @Test
     fun aBlockedFeatureGetsItsNextStep() {
-        var setUps = 0
-        show(
-            AppFixtures.state(computers = listOf(AppFixtures.hp), connected = setOf("a1"), copiesOn = true),
-            AppActions(autoCopy = CopiesActions(onSetUpBuiltIn = { setUps++ })),
-        )
+        val opened = mutableListOf<Route>()
+        compose.setContent {
+            MaterialTheme {
+                HomeScreen(
+                    AppFixtures.state(computers = listOf(AppFixtures.hp), connected = setOf("a1"), copiesOn = true),
+                    AppActions(),
+                    onOpen = { opened += it },
+                )
+            }
+        }
 
         compose.onNodeWithText(app.getString(R.string.hero_connected, "HP-AIO")).assertIsDisplayed()
         compose.onNodeWithText(app.getString(R.string.hero_step_copies)).assertIsDisplayed()
-        compose.onNodeWithText(app.getString(R.string.builtin_set_up)).performClick()
-        assertEquals(1, setUps)
+        // The set-up has its own screen.
+        compose.onNodeWithText(app.getString(R.string.setup_start)).performClick()
+        assertEquals(listOf<Route>(Route.CopiesSetUp), opened)
     }
 
     @Test

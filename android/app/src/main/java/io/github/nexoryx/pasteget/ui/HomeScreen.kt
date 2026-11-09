@@ -34,7 +34,7 @@ fun HomeScreen(
         actions = { SettingsButton(onSettings) },
     ) {
         val copiesWork = state.autoCopy.health.health == Health.WORKING
-        StatusHero(state.status, copiesWork, pairingBusy = state.pairing == PairingState.Busy, actions)
+        StatusHero(state.status, copiesWork, pairingBusy = state.pairing == PairingState.Busy, actions, onOpen)
         FeatureRows(state, actions, onOpen)
         Recent(state.activity, state.computers, onSeeAll)
     }

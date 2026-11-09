@@ -65,7 +65,10 @@ private fun Shell(state: AppState, actions: AppActions, backStack: MutableList<N
                         onOpen = { open(backStack, it) },
                     )
                 }
-                entry<Route.Copies> { CopiesScreen(state.autoCopy, actions.autoCopy, onBack = { back(backStack) }) }
+                entry<Route.Copies> {
+                    CopiesScreen(state.autoCopy, actions.autoCopy, onBack = { back(backStack) }, onOpenSetUp = { open(backStack, Route.CopiesSetUp) })
+                }
+                entry<Route.CopiesSetUp> { SetUpScreen(state, actions, onBack = { back(backStack) }) }
                 entry<Route.Screenshots> { ScreenshotsScreen(state, actions, onBack = { back(backStack) }) }
                 entry<Route.Codes> {
                     CodesScreen(

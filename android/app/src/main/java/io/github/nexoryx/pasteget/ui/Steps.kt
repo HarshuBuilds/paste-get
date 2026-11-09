@@ -8,9 +8,9 @@ import io.github.nexoryx.pasteget.R
 /** The button that does [step]: its label. */
 @StringRes
 fun stepLabel(step: NextStep): Int = when (step) {
-    NextStep.SET_UP_BUILT_IN -> R.string.builtin_set_up
+    NextStep.SET_UP_BUILT_IN -> R.string.setup_start
     NextStep.ALLOW_NOTIFICATIONS -> R.string.builtin_allow_notifications
-    NextStep.FINISH_BUILT_IN_PAIRING -> R.string.builtin_open_settings
+    NextStep.FINISH_BUILT_IN_PAIRING -> R.string.setup_continue
     NextStep.RETRY_BUILT_IN -> R.string.builtin_retry
     NextStep.CONNECT_WIFI -> R.string.step_open_wifi
     NextStep.ALLOW_SHIZUKU -> R.string.shizuku_allow
@@ -23,12 +23,14 @@ fun stepLabel(step: NextStep): Int = when (step) {
     NextStep.SET_UP_SHELL_FOR_CODES -> R.string.step_turn_on_copies
 }
 
-/** Does [step], with the same callbacks as the feature's own buttons. */
-fun runStep(step: NextStep, actions: AppActions) {
+/**
+ * Does [step], with the same callbacks as the feature's own buttons. The built-in mode's set-up
+ * has its own screen, opened with [onOpen].
+ */
+fun runStep(step: NextStep, actions: AppActions, onOpen: (Route) -> Unit) {
     when (step) {
-        NextStep.SET_UP_BUILT_IN -> actions.autoCopy.onSetUpBuiltIn()
+        NextStep.SET_UP_BUILT_IN, NextStep.FINISH_BUILT_IN_PAIRING -> onOpen(Route.CopiesSetUp)
         NextStep.ALLOW_NOTIFICATIONS -> actions.autoCopy.onOpenNotificationSettings()
-        NextStep.FINISH_BUILT_IN_PAIRING -> actions.autoCopy.onOpenWirelessDebugging()
         NextStep.RETRY_BUILT_IN -> actions.autoCopy.onRetryBuiltIn()
         NextStep.CONNECT_WIFI -> actions.autoCopy.onOpenWifi()
         NextStep.ALLOW_SHIZUKU -> actions.autoCopy.onAllowShizuku()

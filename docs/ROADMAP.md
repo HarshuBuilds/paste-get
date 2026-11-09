@@ -122,7 +122,11 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
   computer's page, this phone's ID, pull to refresh), a screen per feature, Settings
   (appearance, language, the tile, licences); the notification and the tile name the computers;
   launcher shortcuts; 640 dp columns on wide screens (`TESTING.md`, P13–P18). Still to do: the
-  built-in mode's set-up wizard, the keep-alive checklist and onboarding
+  keep-alive checklist and onboarding
+- [x] The built-in mode's set-up, step by step: Wi-Fi, notifications, Developer options and
+  Wireless debugging checked live (also in split screen), Xiaomi's own words, the pairing's
+  progress mirrored from the notification, a code field in split screen, and each failure
+  explained with **Retry** (`TESTING.md`, W9–W12)
 - [x] *Settings…* window in the tray: this computer's name, notifications, links, hotkeys and
   starting at login, checked before saving. Notifications and links apply at once
   (`pasteget` control request `reload_settings`); a new name or hotkeys restart the daemon the

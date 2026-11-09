@@ -401,20 +401,24 @@ once, then starts its own helper as the shell user whenever needed, even after a
 phone (on Wi-Fi). No other app, nothing to restart by hand. It's new and experimental: please
 report what happens.
 
-**Once, to set up** (the phone on Wi-Fi):
-1. Developer options must be on: Settings → About phone → tap *OS version* (HyperOS) or *Build
-   number* seven times.
-2. In paste-get, turn on **Send what you copy**: its screen opens. Tap **Set up without
-   Shizuku**. A notification "Pair paste-get with wireless debugging" appears, and Developer options open.
-   The code is typed into that notification, so paste-get's notifications must be allowed: if
-   they aren't, the screen says so and **Allow notifications** opens their settings instead.
-3. Turn on **Wireless debugging** (allow it on this network), tap it, then **Pair device with
-   pairing code**. A 6-digit code shows.
-4. Without leaving that screen, pull down the notifications and type the code in paste-get's
-   notification (**Enter code**).
-5. The notification goes away, the row says "On, automatic" and the screen checks **Built-in**.
-   You can turn Wireless debugging off: paste-get switches it on for a moment when it needs it,
-   then off again.
+**Once, to set up** (the phone on Wi-Fi): in paste-get, turn on **Send what you copy**. The
+set-up opens ("Set up the automatic copy", also from the Copies screen's **Start set-up**). Its
+four steps tick themselves as you do them in Settings, and only the current one says what to do:
+1. **Before you start**: Wi-Fi and paste-get's notifications (the code is typed into one), each
+   with a button to fix it. On Xiaomi phones, a tip about HyperOS's notification style.
+2. **Developer options**: Settings → About phone → tap *OS version* (Xiaomi) or *Build number*
+   seven times. **Open About phone** goes there.
+3. **Wireless debugging**: turn it on in Developer options and allow it on this network.
+4. **Pairing code**: **Open Wireless debugging** shows the notification "Pair paste-get with
+   wireless debugging" and opens Developer options. Tap Wireless debugging → **Pair device with
+   pairing code**; without leaving that screen, type the 6 digits in paste-get's notification
+   (**Enter code**). The set-up shows each step (finding the code screen, pairing, getting
+   permission), then "All set". You can turn Wireless debugging off: paste-get switches it on for
+   a moment when it needs it, then off again.
+
+**Split screen instead of the notification:** put paste-get in split screen from recent apps,
+then **Open Wireless debugging**: Settings opens in the other half, and six boxes in paste-get
+take the code. This works with paste-get's notifications off too.
 
 If Shizuku was set up, the built-in mode replaces it; you can uninstall Shizuku.
 
@@ -426,9 +430,12 @@ If Shizuku was set up, the built-in mode replaces it; you can uninstall Shizuku.
 | W4 | Restart the phone, unlock it, wait a minute on Wi-Fi, copy text | Pasted on the PC, without opening paste-get. Wireless debugging is off again afterwards |
 | W5 | Restart the phone with Wi-Fi off | The home screen's card says "Copies need one more step" with **Open Wi-Fi settings**; turn Wi-Fi on: it starts by itself |
 | W6 | In Wireless debugging → Paired devices, forget paste-get, then restart the phone | The row says "Not working: tap to fix"; the Copies screen says "wireless debugging no longer knows paste-get: pair again" |
-| W7 | **Pair again** on the Copies screen | Back to step 2 |
+| W7 | **Pair again** on the Copies screen | The Copies screen offers **Start set-up** again |
 | W8 | With the built-in mode running, turn on **Hide "pasted from your clipboard"** on the Copies screen (it shows once a copy went out), then repeat W2 | Pasted, with no notice. Settings → Privacy → *Show clipboard access* is now off. Turning the switch off brings the notice back |
-| W9 | Before setting up: Settings → Apps → paste-get → Notifications off. In paste-get, turn on **Send what you copy** | The Copies screen says the set-up needs notifications, and offers **Allow notifications** (paste-get's notification settings) instead of **Set up without Shizuku**. Turn them on, come back: **Set up without Shizuku** is back |
+| W9 | Before setting up: Settings → Apps → paste-get → Notifications off. In paste-get, turn on **Send what you copy** | The set-up stays at step 1: *Notifications* is unticked, with **Allow notifications** (paste-get's notification settings). Turn them on, come back: step 1 ticks itself |
+| W10 | Start the set-up with Developer options off, then do each step in Settings and come back | Each step ticks by itself when you're back, "Step 2 of 4", "Step 3 of 4"…; the bar fills |
+| W11 | At step 4, type a wrong code in the notification | "Wrong or expired code…" with **Retry**; a new code from Settings works |
+| W12 | Split screen as above: turn Wireless debugging on in the Settings half, then type the code in paste-get's boxes | Step 3 ticks without leaving Settings; the code is sent at the sixth digit and the set-up says "All set" |
 
 If a step fails, the Copies screen shows why. **Please report that text** (and what **Details** shows), and, if you can, the log:
 `adb logcat -s paste-get` (lines start with "built-in mode" or "shell helper").

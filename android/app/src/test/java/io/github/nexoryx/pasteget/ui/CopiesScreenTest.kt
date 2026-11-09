@@ -43,15 +43,16 @@ class CopiesScreenTest {
         compose.onNode(hasContentDescription(app.getString(R.string.copies_title)) and isToggleable())
 
     @Test
-    fun turningCopiesOnBeforeSetUpOpensTheirScreen() {
+    fun turningCopiesOnBeforeSetUpOpensTheSetUp() {
         val changes = mutableListOf<Boolean>()
         showApp(AppFixtures.state(computers = listOf(AppFixtures.hp)), AppActions(autoCopy = CopiesActions(onChange = { changes += it })))
 
         copiesSwitch().performScrollTo().performClick()
 
         assertEquals(listOf(true), changes)
-        assertEquals(Route.Copies, stack.last())
-        compose.onNodeWithText(app.getString(R.string.methods_title)).assertDoesNotExist()
+        // Back from the set-up leads to the copies' screen.
+        assertEquals(listOf(Route.Home, Route.Copies, Route.CopiesSetUp), stack)
+        compose.onNodeWithText(app.getString(R.string.setup_intro)).assertIsDisplayed()
     }
 
     @Test
@@ -85,7 +86,7 @@ class CopiesScreenTest {
         compose.onNodeWithText(app.getString(R.string.method_builtin)).performScrollTo().assertIsDisplayed()
         compose.onNodeWithContentDescription(app.getString(R.string.method_in_use)).performScrollTo().assertIsDisplayed()
         // Nothing to do: no set-up offered, no "by hand meanwhile".
-        compose.onNodeWithText(app.getString(R.string.builtin_set_up)).assertDoesNotExist()
+        compose.onNodeWithText(app.getString(R.string.setup_start)).assertDoesNotExist()
         compose.onNodeWithText(app.getString(R.string.mode_manual)).assertDoesNotExist()
     }
 
