@@ -386,21 +386,18 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
     }
 
-    /** A launcher shortcut (Pair a computer, History), or a pairing link. */
-    private fun handleIntent(intent: Intent?) {
-        when (intent?.action) {
-            ACTION_PAIR -> scan()
-            ACTION_HISTORY -> openTab = Tab.HISTORY
-            else -> handlePairingLink(intent)
-        }
-    }
-
     /**
-     * A pairing QR code scanned with the system camera opens the app with a pasteget:// link,
-     * and so can any web page or message: the user confirms it first.
+     * A launcher shortcut (Pair a computer, History), or a pairing link: a pairing QR code
+     * scanned with the system camera opens the app with a pasteget:// link, and so can any web
+     * page or message. The user confirms it first.
      */
-    private fun handlePairingLink(intent: Intent?) {
-        intent?.dataString?.let(model::offerPairing)
+    private fun handleIntent(intent: Intent?) {
+        when (val request = LaunchRequest.of(intent)) {
+            LaunchRequest.Pair -> scan()
+            LaunchRequest.History -> openTab = Tab.HISTORY
+            is LaunchRequest.Link -> model.offerPairing(request.uri)
+            null -> {}
+        }
     }
 
     /** The first run asks for notifications on its own page, once it has said why. */
@@ -555,10 +552,6 @@ class MainActivity : ComponentActivity() {
 
     private companion object {
         const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
-
-        // The launcher shortcuts' actions (res/xml/shortcuts.xml).
-        const val ACTION_PAIR = "io.github.nexoryx.pasteget.action.PAIR"
-        const val ACTION_HISTORY = "io.github.nexoryx.pasteget.action.HISTORY"
         const val SHIZUKU_DOWNLOAD = "https://shizuku.rikka.app/download/"
 
         /** Whose words the set-up uses: it doesn't change while the app runs. */
@@ -567,5 +560,35 @@ class MainActivity : ComponentActivity() {
         // The navigation bar's scrims enableEdgeToEdge uses by default, for 3-button navigation.
         val LIGHT_SCRIM = Color.argb(0xe6, 0xFF, 0xFF, 0xFF)
         val DARK_SCRIM = Color.argb(0x80, 0x1b, 0x1b, 0x1b)
+    }
+}
+
+/** What an intent that opens [MainActivity] asks for. */
+sealed interface LaunchRequest {
+    data object Pair : LaunchRequest
+
+    data object History : LaunchRequest
+
+    /** A link, maybe a pairing code. */
+    data class Link(val uri: String) : LaunchRequest
+
+    companion object {
+        // The launcher shortcuts' actions (res/xml/shortcuts.xml).
+        const val ACTION_PAIR = "io.github.nexoryx.pasteget.action.PAIR"
+        const val ACTION_HISTORY = "io.github.nexoryx.pasteget.action.HISTORY"
+
+        /**
+         * `null` for nothing to do, and for the task's first intent given again: on Android 10 to
+         * 12, Back closes the app when a shortcut or a link opened it, and reopening it from
+         * recent apps brings back that intent, already handled.
+         */
+        fun of(intent: Intent?): LaunchRequest? {
+            if (intent == null || intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return null
+            return when (intent.action) {
+                ACTION_PAIR -> Pair
+                ACTION_HISTORY -> History
+                else -> intent.dataString?.let(::Link)
+            }
+        }
     }
 }
