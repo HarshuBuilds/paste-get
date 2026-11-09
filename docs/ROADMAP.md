@@ -139,7 +139,8 @@ History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart ac
   - [x] Shelves and secrets: `detect::category` (link, email, phone number, colour, code,
     JSON) and `detect::looks_secret` (private keys, `otpauth://`, API tokens, card numbers,
     generated passwords), with `detect::bare_code` for numbers kept a short while only
-  - [ ] Store skeleton (`core/src/history`, feature `history`): SQLite with FTS5
+  - [x] Store skeleton (`core/src/history`, feature `history`): SQLite with FTS5 trigram, built
+    from source (cross-compiles with `cargo-ndk`; about 1.9 MB per ABI)
   - [ ] Recording text: dedupe, secrets refused and counted, long texts
   - [ ] Pages and search: any part of a word, accents ignored, filters
   - [ ] Images: originals, thumbnails, gallery references

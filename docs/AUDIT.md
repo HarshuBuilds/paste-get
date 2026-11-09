@@ -131,8 +131,9 @@ OS-specific extras (sensitive markers, file lists, HTML) can be added per platfo
 - **Transfers:** the sender offers metadata first (hash, MIME types, size), then streams resumable chunks.
 - **No echo loops:** every clip carries origin device + content hash. Clips we just applied are
   ignored by the local watcher. On Android 13+, clips we write carry `EXTRA_IS_REMOTE_DEVICE`.
-- **History:** SQLite + FTS5, encrypted with a key stored in the OS keystore (Android Keystore,
-  Windows DPAPI, Secret Service on Linux, Keychain on macOS).
+- **History:** SQLite + FTS5 in the core, kept on each device (section 10). Version 1 relies on
+  the OS's disk encryption; encrypting it with a key in the OS keystore (Android Keystore, Windows
+  DPAPI, Secret Service on Linux, Keychain on macOS) comes later, with the identity key.
 - **Away from home:**
   - user-hosted encrypted relay;
   - evaluate *iroh* for NAT traversal;
@@ -143,7 +144,7 @@ OS-specific extras (sensitive markers, file lists, HTML) can be added per platfo
 | Threat | Mitigation |
 |---|---|
 | Attacker on the same Wi-Fi | Pinned keys, no unauthenticated endpoints |
-| Stolen phone | Revoke from the PC; history encrypted at rest |
+| Stolen phone | Revoke from the PC; the history is protected by Android's file-based encryption, not by paste-get (section 10) |
 | Other local app on the PC | Local API on a user-only socket/named pipe + token |
 | Passwords leaking through sync | Sensitive flag, app denylist, pattern detection, auto-expiry |
 | Supply chain | `cargo-deny`, pinned dependencies, signed releases, reproducible builds |
@@ -155,7 +156,7 @@ OS-specific extras (sensitive markers, file lists, HTML) can be added per platfo
 | Screenshot → PC clipboard | Section 4 | ✅ | Full photo access required |
 | Text both ways | Section 2. Writing the Android clipboard from the background is allowed | 🟡 | Background reading |
 | Images PC → phone | Share via `FileProvider` URI, not raw bytes | 🟡 | 1 MB Binder limit |
-| Skip sensitive copies | `EXTRA_IS_SENSITIVE`, foreground app (usage stats via Shizuku), patterns (Luhn, IBAN, private keys) | 🟡 | Many apps don't set the flag |
+| Skip sensitive copies | `EXTRA_IS_SENSITIVE`, foreground app (usage stats via Shizuku), patterns (`detect::looks_secret`: private keys, tokens, Luhn card numbers). IBANs are not secret (they are printed on invoices) | 🟡 | Many apps don't set the flag |
 | 2FA codes | Notification listener + code extraction | 🟡 | **Android 15 hides OTPs** from untrusted listeners. Fixed through the shell (built-in mode or Shizuku): `appops set <pkg> RECEIVE_SENSITIVE_NOTIFICATIONS allow`, done in one tap (v0.2) ([source](https://androidauthority.com/android-15-two-factor-authentication-codes-3492585)) |
 | OCR | **On the PC**, with the OS engine (Windows.Media.Ocr, Tesseract on Linux, Vision on macOS) | ✅ | Not ML Kit on the phone: proprietary, breaks F-Droid |
 | Blur sensitive data | v1 on the PC (OCR returns word positions). Later on the phone (ONNX models) | 🔴 | Hardest image feature |
@@ -163,7 +164,7 @@ OS-specific extras (sensitive markers, file lists, HTML) can be added per platfo
 | Strip GPS, convert HEIC | `ExifInterface`, `ImageDecoder` | ✅ | |
 | Clean paste (links, plain text, JSON) | Desktop only | ✅ | |
 | Smart actions | Links, colors, addresses ✅. "Call from phone" 🟡 | 🟡 | Background activity starts blocked → `am start` via Shizuku |
-| History, search, pins | SQLite FTS; last-writer-wins sync | ✅ | |
+| History, search, pins | SQLite FTS5 in the core, one history per device (section 10). Syncing histories later | ✅ | |
 | Expiring clips, private mode | Timer + Quick Settings tile | ✅ | |
 | Rich text (HTML) | Per-OS format | 🟡 | Windows "HTML Format" header |
 | Files phone → PC | Share sheet; pasteable as real files on the PC | ✅ | ❌ from Android file managers |
@@ -198,6 +199,29 @@ OS-specific extras (sensitive markers, file lists, HTML) can be added per platfo
 | Trust (the app sees everything you copy) | High | Open source, local-only, sensitive filters, visible activity log |
 | GNOME Wayland | Medium (not tier 1) | Shell extension later |
 | Signing costs | Low | SignPath; Apple later |
+
+## 10. Clipboard history
+
+Decided in November 2026 after comparing three designs (storage-first, organization-first,
+experience-first); built on the storage-first one. Phone first, then each PC.
+
+| Question | Decision | Why |
+|---|---|---|
+| Where | `core::history` (Cargo feature `history`): rusqlite with SQLite built from its C source (3.54, FTS5), on the phone and the PC | Same schema, rules and tests everywhere. Android's own SQLite is as old as 3.22 (Android 10), and Room has FTS3/4 only |
+| What an item is | The SHA-256 of the bytes (= `ClipOffer.sha256`), one row per unique content; copying it again moves it to the top | Already on the wire and checked on receipt |
+| Search | FTS5 `trigram` tokenizer with `remove_diacritics 1`, on the first 4 KiB of each text. Words of 1–2 characters are matched in Rust-folded text instead | Any part of a word, accents ignored: "verif" finds "vérification", "hub" finds github. Costs about 3× the indexed text; above 3.5×, switch to `unicode61` with prefix queries |
+| Index layout | Contentless (`contentless_delete=1`) with FTS5 `secure-delete` | The text isn't stored twice; a deleted row leaves the index at once |
+| Secrets | Refused before anything is written, and only counted, by reason: the sensitive flag, one-time codes, `detect::looks_secret` (keys, tokens, cards, generated passwords). A number of 4–8 digits alone is kept 15 minutes | Passwords and codes never reach the disk; a postcode copied by mistake costs nothing |
+| Images | Received images: the original file for 7 days or until a 150 MB budget (500 MB on a PC) is full, then a thumbnail made by the app (≤ 64 KiB, in the database). Phone screenshots: a MediaStore reference, no copy | About 40 MB for a heavy user over 3 months; copying every screenshot would be about 3.4 GB a year |
+| Retention | Off by default. Unpinned items kept 3 months, at most 20,000; a 200 MB guard on the database. Pins are never evicted | A history is a honeypot: keep less |
+| At rest | **The OS's encryption only, in version 1**: Android's file-based encryption, BitLocker or LUKS on the PC. SQLCipher with a keystore key later, with the identity key | Encrypting the history alone while `identity.key` is a plain file buys little, and with a key that needs the phone unlocked, clips arriving while it is locked couldn't be written. **On a PC without BitLocker or LUKS, the history is readable from the disk** |
+| Delete | `secure_delete`, FTS5 secure-delete, the WAL truncated after a delete, files removed after the commit | A deleted clip is gone from the database, its WAL and its index (tested). Flash wear-levelling may still keep old blocks |
+| AI | No model in the app | The smallest useful ones are 400–500 MB, would have to be downloaded (no network but your devices), and the built-in ones are proprietary. Plain rules (`detect::category`) sort links, code, colours, emails and phone numbers |
+| OCR | Not in version 1. On the PC as in section 7; on the phone only after a measured spike | About 12 MB of models in the APK, and battery |
+
+**Cost:** SQLite adds about 1.9 MB to the native library per ABI (arm64, stripped, measured with
+the bundled build's default options), so about 3.7 MB for the APK's two ABIs. Its C source is
+compiled by the `cc` crate, so `cargo-ndk` cross-compiles it like `ring`.
 
 ## Sources
 

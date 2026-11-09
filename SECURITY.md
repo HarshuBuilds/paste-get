@@ -69,6 +69,23 @@ running `adb`: that is how it starts its shell helper. Consequences:
   only if you turn on *Hide "pasted from your clipboard"*, for Android's *Show clipboard access*
   switch, which then applies to every app.
 
+## The clipboard history (being built, off by default)
+
+The history store is in the core (`core/src/history`) but no app turns it on yet. When one does:
+- It stays on the device, in a folder only paste-get can open (on the phone, one that is never
+  backed up). It is never sent anywhere.
+- **Never kept:** clips marked sensitive (password managers), 2FA codes, and anything that looks
+  like a private key, a 2FA seed (`otpauth://`), an API token, a card number or a generated
+  password (`core/src/detect.rs`). Only how many were kept out is counted. A number of 4 to 8
+  digits alone is kept for 15 minutes.
+- **Not encrypted by paste-get in this version.** It relies on the device's disk encryption:
+  Android encrypts app data; on a PC, that is BitLocker or LUKS. **On a PC without disk
+  encryption, anyone who can read the disk can read the history.** Encryption with a key in the
+  OS keystore is planned, together with the identity key.
+- Deleting a clip removes it from the database, its journal (WAL) and its search index. Flash
+  storage may still hold old copies of the blocks until it reuses them.
+- Logs and error messages never contain what was copied or searched.
+
 ## What it doesn't protect against (yet)
 
 - **A photographed QR code.** Someone who sees the code can pair within the 5 minutes, before

@@ -8,6 +8,8 @@ pub mod clip;
 pub mod detect;
 pub mod echo;
 pub mod framing;
+#[cfg(feature = "history")]
+pub mod history;
 pub mod identity;
 pub mod pairing;
 pub mod proto;
