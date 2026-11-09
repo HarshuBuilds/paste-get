@@ -230,7 +230,7 @@ fn setup<R: Runtime>(app: &AppHandle<R>, tray: Arc<Tray>) -> Result<()> {
     #[cfg(windows)]
     tauri::async_runtime::spawn(async {
         let notifier = DesktopNotifier::start();
-        network::watch(move |text| notifier.notice(text)).await;
+        network::watch(move |(title, body)| notifier.notice_with(title, body)).await;
     });
     tauri::async_runtime::spawn(refresh_loop(app.clone(), tray));
     Ok(())

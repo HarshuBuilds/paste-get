@@ -76,29 +76,41 @@ fn kept_out(networks: &[String]) -> String {
     }
 }
 
-/// The notice, short: details are in Settings. `None` when nothing was found.
-pub fn notice(findings: &Findings) -> Option<String> {
-    let found = if !findings.blocked.is_empty() {
-        kept_out(&findings.blocked)
-    } else if !findings.public.is_empty() {
-        format!(
-            "{}{}",
-            treated_as_public(&findings.public),
+/// The notice, as a title and a line under it, short: the names and the details are in
+/// Settings. `None` when nothing was found.
+pub fn notice(findings: &Findings) -> Option<(String, &'static str)> {
+    let several = |names: &[String]| names.len() > 1;
+    let (title, body) = if !findings.blocked.is_empty() {
+        (
             tr(
-                ": its firewall may keep your phone from reaching paste-get",
-                " : son pare-feu risque d'empêcher ton téléphone de joindre paste-get",
-            )
+                "The firewall blocks paste-get",
+                "Le pare-feu bloque paste-get",
+            ),
+            tr(
+                "Your phone can't reach paste-get on this network. paste-get's Settings say what \
+                 to do.",
+                "Ton téléphone ne peut pas joindre paste-get sur ce réseau. Les réglages de \
+                 paste-get disent quoi faire.",
+            ),
+        )
+    } else if !findings.public.is_empty() {
+        (
+            if several(&findings.public) {
+                tr("Networks marked Public", "Réseaux marqués publics")
+            } else {
+                tr("Network marked Public", "Réseau marqué public")
+            },
+            tr(
+                "Windows' firewall may keep your phone from reaching paste-get. paste-get's \
+                 Settings say what to do.",
+                "Le pare-feu de Windows risque d'empêcher ton téléphone de joindre paste-get. Les \
+                 réglages de paste-get disent quoi faire.",
+            ),
         )
     } else {
         return None;
     };
-    Some(format!(
-        "{found}{}",
-        tr(
-            ". paste-get's Settings say what to do.",
-            ". Les réglages de paste-get disent quoi faire.",
-        )
-    ))
+    Some((title.to_owned(), body))
 }
 
 /// What Settings says about the `findings`, with the lines for `program`.
@@ -204,7 +216,7 @@ pub async fn findings_now(program: PathBuf) -> Findings {
 /// Checks the networks now and every few minutes, and calls `tell` with the notice when a
 /// network may keep the phone out that didn't the last time. Windows only.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub async fn watch(tell: impl Fn(String)) {
+pub async fn watch(tell: impl Fn((String, &'static str))) {
     let Some(program) = this_program() else {
         return;
     };
@@ -276,24 +288,34 @@ mod tests {
     }
 
     #[test]
-    fn the_notice_says_may_and_counts_the_networks() {
+    fn the_notice_has_a_short_title_and_says_may() {
         english();
         assert_eq!(notice(&Findings::default()), None);
+        let (title, body) = notice(&found(&["Livebox-1234"], &[])).unwrap();
+        assert_eq!(title, "Network marked Public");
         assert_eq!(
-            notice(&found(&["A"], &[])).unwrap(),
-            "Windows treats the network “A” as Public: its firewall may keep your phone from \
-             reaching paste-get. paste-get's Settings say what to do."
+            body,
+            "Windows' firewall may keep your phone from reaching paste-get. paste-get's Settings \
+             say what to do."
         );
-        assert!(
-            notice(&found(&["A", "B", "C"], &[]))
-                .unwrap()
-                .starts_with("Windows treats the networks “A”, “B” and “C” as Public: ")
+        assert_eq!(
+            notice(&found(&["A", "B"], &[])).unwrap().0,
+            "Networks marked Public"
         );
         // A rule that blocks it is the surer cause.
         assert_eq!(
-            notice(&found(&["A"], &["A"])).unwrap(),
-            "Windows' firewall keeps paste-get out on the network “A”. paste-get's Settings say \
-             what to do."
+            notice(&found(&["A"], &["A"])).unwrap().0,
+            "The firewall blocks paste-get"
         );
+        // A Windows toast's title holds two lines; the line under it holds the rest.
+        for findings in [
+            found(&["A"], &[]),
+            found(&["A", "B"], &[]),
+            found(&[], &["A"]),
+        ] {
+            let (title, body) = notice(&findings).unwrap();
+            assert!(title.chars().count() <= 32, "{title}");
+            assert!(body.chars().count() <= 120, "{body}");
+        }
     }
 }

@@ -126,6 +126,12 @@ impl DesktopNotifier {
         Self { queue }
     }
 
+    /// A notice with a line of its own under the title, for one that says more than a title
+    /// holds: a Windows toast shows two lines of title at most.
+    pub fn notice_with(&self, summary: String, body: &'static str) {
+        self.queue(summary, body, None);
+    }
+
     fn queue(&self, summary: String, body: &'static str, open: Option<String>) {
         let _ = self.queue.try_send(Shown {
             summary,
