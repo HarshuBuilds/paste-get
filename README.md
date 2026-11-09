@@ -35,6 +35,8 @@ lives in the notification area (under `^` in the taskbar).
 - Fedora, openSUSE: `sudo dnf install ./paste-get_<version>_x86_64.rpm` (openSUSE: `sudo zypper
   install --allow-unsigned-rpm ./paste-get_<version>_x86_64.rpm`).
 - Any other distribution: `chmod +x paste-get_<version>_amd64.AppImage` and run it.
+- No Flatpak: its sandbox hides the clipboard from apps in the background on KDE Plasma and
+  Hyprland ([why](docs/RELEASING.md#why-there-is-no-flatpak-yet)).
 - Arch: two PKGBUILDs, soon on the AUR: [`paste-get-bin`](packaging/aur/paste-get-bin/PKGBUILD)
   installs the release's .deb, [`paste-get-git`](packaging/aur/paste-get-git/PKGBUILD) builds the
   latest code from source. Until then: `cd packaging/aur/paste-get-git && makepkg -si`.

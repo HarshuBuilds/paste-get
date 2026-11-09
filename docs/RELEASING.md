@@ -122,6 +122,40 @@ Don't upload it before step 8 has run once: until then its checksum is `SKIP`.
 To change something else in `paste-get-bin` between releases (a dependency, say), raise `pkgrel`
 by one, run `makepkg --printsrcinfo > .SRCINFO` in its directory, and upload as in step 10.
 
+## Why there is no Flatpak yet
+
+A Flatpak (and so Flathub, the store behind KDE Discover and GNOME Software on most
+distributions) can't do paste-get's main job on the tier-1 desktops: see a copy made in another
+app while paste-get is in the background. On Wayland, only the data-control protocols allow that
+(`ext_data_control_manager_v1`, or the older `zwlr_data_control_manager_v1`), and both
+compositors hide them from sandboxed apps. Checked in their source, November 2026:
+
+- **KDE Plasma (KWin):** `src/wayland_server.cpp` lists `ext_data_control_manager_v1` among the
+  interfaces a sandboxed client never sees (it is the only data-control protocol KWin offers). A
+  client counts as sandboxed if it came through Flatpak's security context, and also if its
+  process runs in an `app-flatpak-…` systemd scope (`src/wayland/clientconnection.cpp`), so
+  even a Flatpak given the raw Wayland socket is caught.
+- **Hyprland:** sandboxed clients (those that came through the security context) only see the
+  protocols on a fixed list (`CProtocolManager::isGlobalPrivileged`, in
+  `src/managers/ProtocolManager.cpp`), and neither data-control protocol is on it. A Flatpak
+  given the raw Wayland socket would escape this, but that permission defeats the sandbox, and
+  Flathub's review would most likely refuse it *(not asked)*.
+- **X11 through XWayland is no way around it:** both compositors hand a Wayland app's copy to X11
+  apps only while an X11 window has the keyboard focus (KWin: `src/xwayland/clipboard.cpp`;
+  Hyprland: `src/xwayland/XWM.cpp`).
+
+So a Flatpak paste-get could only read the clipboard while its own window has focus, and it has
+no window most of the time. Shipping one would look like it works and then miss every copy.
+
+What would change that:
+- an xdg-desktop-portal for clipboard managers (asking the user once, then allowed in the
+  background), implemented by the KDE and Hyprland portals. Today the only clipboard portal
+  works inside a remote-desktop session (a "control this computer" prompt and indicator), and
+  Hyprland's portal has no remote-desktop part;
+- or KWin and Hyprland letting the user grant data-control to one sandboxed app.
+
+Until then: the AppImage, .deb, .rpm and AUR packages, which are not sandboxed.
+
 ## The Android release key
 
 Phones only install an update signed with the same key as the installed app, so this key is
