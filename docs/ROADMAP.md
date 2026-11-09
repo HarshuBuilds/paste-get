@@ -111,6 +111,8 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
     first CI run is still to see)
   - [x] AppStream metainfo (`packaging/linux/io.github.nexoryx.pasteget.metainfo.xml`) in every
     Linux package, for KDE Discover and GNOME Software; validated by CI
+  - [x] A firewalld service (TCP 47290, UDP 5353) in the .deb, .rpm and `paste-get-git`, and a
+    README section for when the phone doesn't find the PC (Wi-Fi, Windows and Linux firewalls)
   - [x] Release APK, signed in CI with a key kept in repository secrets (creating the key and
     the secrets is a one-time step for the maintainer, `RELEASING.md`)
 - [x] `SECURITY.md` draft: threat model, known gaps, private reporting

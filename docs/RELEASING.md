@@ -9,7 +9,7 @@ How the packages are built, and the steps of a release. CI does the building
 |---|---|---|
 | Windows installer, `paste-get_<version>_x64-setup.exe` | `packaging/build-desktop.sh nsis` on `windows-latest` | Installs for the current user (no admin prompt) in `%LOCALAPPDATA%\paste-get`, with a Start menu entry and an uninstaller. `pasteget.exe` is installed next to `pasteget-tray.exe` |
 | Linux AppImage, `paste-get_<version>_amd64.AppImage` | `packaging/build-desktop.sh appimage,deb,rpm` on Ubuntu 22.04 | One file; runs on distributions at least as new as Ubuntu 22.04. Contains `pasteget` too, but only the tray is started from outside |
-| Debian/Ubuntu package, `paste-get_<version>_amd64.deb` | the same run | `/usr/bin/pasteget` and `pasteget-tray`, a desktop entry, an icon and the AppStream metainfo. Depends on the system's WebKitGTK 4.1, GTK 3 and libayatana-appindicator3 (the tray icon). Ubuntu 22.04, Debian 12 or newer |
+| Debian/Ubuntu package, `paste-get_<version>_amd64.deb` | the same run | `/usr/bin/pasteget` and `pasteget-tray`, a desktop entry, an icon, the AppStream metainfo and a firewalld service (`packaging/linux/firewalld/paste-get.xml`: TCP 47290, UDP 5353; not turned on by the package). Depends on the system's WebKitGTK 4.1, GTK 3 and libayatana-appindicator3 (the tray icon). Ubuntu 22.04, Debian 12 or newer |
 | Fedora/openSUSE package, `paste-get_<version>_x86_64.rpm` | the same run (Tauri names it `paste-get-<version>-1.x86_64.rpm`; the workflow renames it) | The same files. Requires the same libraries by their file names (`libwebkit2gtk-4.1.so.0()(64bit)` and so on), which works across RPM distributions |
 | Android APK, `paste-get_<version>_foss.apk` | `./gradlew assembleFossRelease` on `ubuntu-latest` | Signed with the release key, for both phone ABIs (`arm64-v8a`, `x86_64`). Without the key (forks, before it's set up) it comes out as `…_foss-unsigned.apk`, which Android won't install; a tag refuses to release without it |
 | Arch package `paste-get-bin` | `packaging/aur/paste-get-bin/PKGBUILD`, tested with `makepkg` in an Arch container on the .deb above | The .deb's files, unpacked. Points at a published release's .deb, so it's updated after each release (see below) |
@@ -23,8 +23,8 @@ Before that, CI checks the Linux packages: `packaging/linux/check-packages.sh` l
 .deb and .rpm install and the libraries they ask for, then the .deb is installed with `apt` on
 Debian 12 and the .rpm with `dnf` on the latest Fedora, and both programs must start
 (`--version`). A dependency with the wrong name, or a library missing from the list, fails there.
-On Fedora, the installed desktop entry and metainfo also go through `desktop-file-validate` and
-`appstreamcli validate`.
+On Fedora, the installed desktop entry, metainfo and firewalld service also go through
+`desktop-file-validate`, `appstreamcli validate` and `firewall-offline-cmd --info-service`.
 
 The AppStream metainfo, `packaging/linux/io.github.nexoryx.pasteget.metainfo.xml`, is what KDE
 Discover and GNOME Software show about paste-get: summary, description, links, and one

@@ -115,12 +115,13 @@ jobs:
         run: |
           pasteget --version
           pasteget-tray --version
-      - name: The installed desktop entry and AppStream metainfo are valid
+      - name: The installed desktop entry, AppStream metainfo and firewalld service are valid
         if: matrix.package == '.rpm'
         run: |
-          dnf install -y appstream desktop-file-utils
+          dnf install -y appstream desktop-file-utils firewalld
           desktop-file-validate /usr/share/applications/paste-get.desktop
           appstreamcli validate --no-net /usr/share/metainfo/io.github.nexoryx.pasteget.metainfo.xml
+          firewall-offline-cmd --info-service=paste-get
 
   android:
     name: Android APK

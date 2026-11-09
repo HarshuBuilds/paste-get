@@ -55,5 +55,6 @@ package() {
     "$pkgdir/usr/share/icons/hicolor/512x512/apps/pasteget-tray.png"
   install -Dm644 packaging/linux/io.github.nexoryx.pasteget.metainfo.xml \
     -t "$pkgdir/usr/share/metainfo/"
+  install -Dm644 packaging/linux/firewalld/paste-get.xml -t "$pkgdir/usr/lib/firewalld/services/"
   install -Dm644 README.md docs/TESTING.md -t "$pkgdir/usr/share/doc/$pkgname/"
 }

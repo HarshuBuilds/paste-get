@@ -34,12 +34,12 @@ lives in the notification area (under `^` in the taskbar).
 - Ubuntu 22.04+, Debian 12+, Mint: `sudo apt install ./paste-get_<version>_amd64.deb`.
 - Fedora, openSUSE: `sudo dnf install ./paste-get_<version>_x86_64.rpm` (openSUSE: `sudo zypper
   install --allow-unsigned-rpm ./paste-get_<version>_x86_64.rpm`).
-- Any other distribution: `chmod +x paste-get_<version>_amd64.AppImage` and run it.
-- No Flatpak: its sandbox hides the clipboard from apps in the background on KDE Plasma and
-  Hyprland ([why](docs/RELEASING.md#why-there-is-no-flatpak-yet)).
 - Arch: two PKGBUILDs, soon on the AUR: [`paste-get-bin`](packaging/aur/paste-get-bin/PKGBUILD)
   installs the release's .deb, [`paste-get-git`](packaging/aur/paste-get-git/PKGBUILD) builds the
   latest code from source. Until then: `cd packaging/aur/paste-get-git && makepkg -si`.
+- Any other distribution: `chmod +x paste-get_<version>_amd64.AppImage` and run it.
+- No Flatpak: its sandbox hides the clipboard from apps in the background on KDE Plasma and
+  Hyprland ([why](docs/RELEASING.md#why-there-is-no-flatpak-yet)).
 - The tray icon needs a tray: KDE Plasma has one; on Hyprland, use a bar with a tray (Waybar's
   `tray` module).
 - GNOME (best effort): the icon needs the "AppIndicator and KStatusNotifierItem Support"
@@ -55,12 +55,37 @@ because the 2FA feature reads notifications: Play Store → your profile picture
 ## Getting started
 
 1. Start paste-get on the PC. The first time, it shows a QR code.
-2. On the phone, tap **Pair a computer** and scan it. Both must be on the same Wi-Fi.
+2. On the phone, tap **Pair a computer** and scan it. Both must be on the same Wi-Fi (if it
+   doesn't find the PC, see below).
 3. To send copies automatically, turn on **Send what you copy**, then **Set up without
    Shizuku** and follow the steps (it needs Developer options, once).
 4. Optional: **Send new screenshots**, **Send 2FA codes**.
 
 On the PC, the tray menu has **Settings…** for the computer's name, notifications and hotkeys.
+
+## If the phone doesn't find the PC
+
+The phone connects straight to the PC, on TCP port 47290, and finds it on the network with mDNS
+(UDP port 5353). Something on the way is usually blocking one of them:
+
+- **Same Wi-Fi.** Both must be on the same network. Guest networks, and routers with *AP
+  isolation* or *client isolation* turned on, keep devices from talking to each other: use the
+  main network. A VPN on the phone or the PC can send the traffic elsewhere too.
+- **Windows firewall.** At the first start, Windows asks whether to let paste-get use the
+  network. If your Wi-Fi is marked *Public*, "private networks" isn't enough: mark it *Private*
+  (Settings → Network & internet → Wi-Fi → your network → *Network profile type*), or tick
+  *Public* for paste-get in Windows Security → Firewall & network protection → *Allow an app
+  through firewall*.
+- **Linux firewall.** Arch has none unless you added one. Fedora Workstation's default zone
+  allows ports above 1024 and mDNS, so it usually works as is *(not checked)*. With firewalld
+  (openSUSE, Fedora with another zone), the .deb and .rpm install a `paste-get` service; turn it
+  on with
+  `sudo firewall-cmd --reload && sudo firewall-cmd --permanent --add-service=paste-get && sudo firewall-cmd --reload`
+  (with the AppImage: `--add-port=47290/tcp --add-service=mdns` instead of
+  `--add-service=paste-get`). With ufw (Ubuntu, when turned on):
+  `sudo ufw allow 47290/tcp && sudo ufw allow 5353/udp`.
+- **Still nothing?** `pasteget status` shows the port the PC listens on (47290 unless changed).
+  Pairing again (*Pair a phone…* in the tray menu) gives the phone the PC's current address.
 
 ## Privacy
 
