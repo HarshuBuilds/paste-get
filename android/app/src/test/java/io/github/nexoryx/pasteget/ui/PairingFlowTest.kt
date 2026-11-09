@@ -7,6 +7,8 @@ import io.github.nexoryx.pasteget.R
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -23,7 +25,7 @@ class PairingFlowTest {
     private val app: Application = RuntimeEnvironment.getApplication()
     private val fake = FakeComputers()
 
-    private fun model(io: CoroutineDispatcher = Dispatchers.Unconfined) = HomeViewModel(app, fake, io).also { it.refresh() }
+    private fun model(io: CoroutineDispatcher = Dispatchers.Unconfined) = AppViewModel(app, fake, io).also { it.refresh() }
 
     @Test
     fun aLinkWaitsForConfirmation() {
@@ -36,13 +38,13 @@ class PairingFlowTest {
         assertEquals(listOf("192.168.1.20:47290"), confirm.invite.addresses)
         assertEquals(emptyList<String>(), fake.pairCalls)
 
-        model.confirmPairing()
+        model.confirmPairing(confirm)
         assertEquals(listOf(LINK), fake.pairCalls)
         assertEquals(PairingState.Idle, model.pairing)
         assertEquals(app.getString(R.string.paired_with, "HP-AIO"), model.message)
-        assertEquals(listOf(HomeFixtures.hp), model.paired)
+        assertEquals(listOf(AppFixtures.hp), model.paired)
         // Nothing left to confirm: a second yes does nothing.
-        model.confirmPairing()
+        model.confirmPairing(confirm)
         assertEquals(1, fake.pairCalls.size)
     }
 
@@ -51,11 +53,41 @@ class PairingFlowTest {
         val model = model()
 
         model.offerPairing(LINK)
+        val shown = model.pairing as PairingState.Confirm
         model.cancelPairing()
 
         assertEquals(PairingState.Idle, model.pairing)
-        model.confirmPairing()
+        model.confirmPairing(shown)
         assertEquals(emptyList<String>(), fake.pairCalls)
+    }
+
+    @Test
+    fun anotherCodeCantTakeThePlaceOfTheOneShown() {
+        val model = model()
+
+        model.offerPairing(LINK)
+        val shown = model.pairing as PairingState.Confirm
+        // A link from another app, while the user reads the sheet or taps Pair.
+        model.offerPairing(OTHER)
+        assertSame(shown, model.pairing)
+
+        model.confirmPairing(shown)
+        assertEquals(listOf(LINK), fake.pairCalls)
+    }
+
+    @Test
+    fun aYesPairsOnlyTheCodeItWasFor() {
+        val model = model()
+
+        model.offerPairing(LINK)
+        val first = model.pairing as PairingState.Confirm
+        model.cancelPairing()
+        model.offerPairing(OTHER)
+
+        // The first sheet's yes, late: the second code is still waiting for its own.
+        model.confirmPairing(first)
+        assertEquals(emptyList<String>(), fake.pairCalls)
+        assertEquals(OTHER, (model.pairing as PairingState.Confirm).code)
     }
 
     @Test
@@ -77,7 +109,7 @@ class PairingFlowTest {
         val model = model()
 
         model.offerPairing(LINK)
-        model.confirmPairing()
+        model.confirmShown()
 
         val error = (model.pairing as PairingState.Failed).error
         assertEquals(R.string.pair_error_unreachable, error.message)
@@ -87,13 +119,44 @@ class PairingFlowTest {
     }
 
     @Test
+    fun anUnreachableComputerCanBeTriedAgainWithTheSameCode() {
+        fake.failure = PastegetException.Unreachable("192.168.1.20:47290 did not answer")
+        val model = model()
+        model.offerPairing(LINK)
+        val shown = model.pairing as PairingState.Confirm
+        model.confirmPairing(shown)
+
+        // Back to the question, not straight to pairing.
+        model.retryPairing(model.pairing as PairingState.Failed)
+        assertSame(shown, model.pairing)
+        fake.failure = null
+        model.confirmPairing(shown)
+        assertEquals(listOf(LINK, LINK), fake.pairCalls)
+        assertEquals(PairingState.Idle, model.pairing)
+    }
+
+    @Test
+    fun aRefusedCodeIsntTriedAgain() {
+        fake.failure = PastegetException.PairingFailed("wrong secret")
+        val model = model()
+        model.offerPairing(LINK)
+        model.confirmShown()
+
+        val failed = model.pairing as PairingState.Failed
+        assertNull(failed.retry)
+        model.retryPairing(failed)
+        assertSame(failed, model.pairing)
+    }
+
+    @Test
     fun oneAtATime() {
         val io = QueueDispatcher()
         val model = model(io)
         io.runAll()
 
         model.offerPairing(LINK)
-        model.confirmPairing()
+        io.runAll()
+        model.confirmShown()
         assertEquals(PairingState.Busy, model.pairing)
         // Another link meanwhile is ignored, and cancelling doesn't stop what runs.
         model.offerPairing(LINK.replace("HP-AIO", "Other"))
@@ -112,6 +175,8 @@ class PairingFlowTest {
         assertTrue("SECRETSECRET" !in model.pairing.toString())
     }
 
+    private fun AppViewModel.confirmShown() = confirmPairing(pairing as PairingState.Confirm)
+
     /** Runs what's sent to it only when asked, to see the state in between. */
     private class QueueDispatcher : CoroutineDispatcher() {
         private val queue = ArrayDeque<Runnable>()
@@ -127,5 +192,6 @@ class PairingFlowTest {
 
     private companion object {
         const val LINK = "pasteget://pair?v=0&id=a1&s=SECRETSECRET&a=192.168.1.20%3A47290&n=HP-AIO"
+        const val OTHER = "pasteget://pair?v=0&id=e5&s=OTHERSECRET&a=203.0.113.7%3A47290&n=HP-AIO"
     }
 }

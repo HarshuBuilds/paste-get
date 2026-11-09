@@ -4,12 +4,14 @@ package io.github.nexoryx.pasteget.ui
 
 import android.app.Application
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.navigation3.runtime.NavKey
 import io.github.nexoryx.pasteget.PairingCode
 import io.github.nexoryx.pasteget.R
 import org.junit.Assert.assertEquals
@@ -33,13 +35,15 @@ class PairingSheetTest {
         PairingCode.Invite("a1", "HP-AIO", listOf("192.168.1.20:47290", "10.0.0.5:47290")),
     )
 
-    private fun show(state: HomeState, actions: HomeActions = HomeActions()) {
-        compose.setContent { MaterialTheme { HomeScreen(state, actions) } }
+    /** The whole app: the sheet shows over any screen. */
+    private fun show(state: AppState, actions: AppActions = AppActions()) {
+        val stack = mutableStateListOf<NavKey>(Route.Home)
+        compose.setContent { MaterialTheme { PasteGetUi(state, actions, stack) } }
     }
 
     @Test
     fun theSheetShowsWhatTheCodeSaysAndTheWarning() {
-        show(HomeFixtures.state().copy(pairing = confirm))
+        show(AppFixtures.state().copy(pairing = confirm))
 
         compose.onNodeWithText(app.getString(R.string.pair_confirm_title)).assertIsDisplayed()
         compose.onNodeWithText(app.getString(R.string.pair_confirm_name, "HP-AIO")).assertIsDisplayed()
@@ -53,30 +57,31 @@ class PairingSheetTest {
 
     @Test
     fun pairOnlyWhenTheUserSaysSo() {
-        var confirmed = 0
+        val confirmed = mutableListOf<PairingState.Confirm>()
         var cancelled = 0
-        show(HomeFixtures.state().copy(pairing = confirm), HomeActions(onConfirmPairing = { confirmed++ }, onCancelPairing = { cancelled++ }))
+        show(AppFixtures.state().copy(pairing = confirm), AppActions(onConfirmPairing = { confirmed += it }, onCancelPairing = { cancelled++ }))
 
         compose.onNodeWithText(app.getString(R.string.cancel)).performScrollTo().performClick()
-        assertEquals(0 to 1, confirmed to cancelled)
+        assertEquals(0 to 1, confirmed.size to cancelled)
         compose.onNodeWithText(app.getString(R.string.pair_confirm_button)).performScrollTo().performClick()
         compose.waitForIdle()
-        assertEquals(1 to 1, confirmed to cancelled)
+        // The yes names the code it was for.
+        assertEquals(listOf(confirm) to 1, confirmed to cancelled)
     }
 
     @Test
     fun aKnownComputerIsNamedAsThePhoneKnowsIt() {
-        val known = HomeFixtures.hp.copy(name = "Bureau")
-        show(HomeFixtures.state(computers = listOf(known)).copy(pairing = confirm))
+        val known = AppFixtures.hp.copy(name = "Bureau")
+        show(AppFixtures.state(computers = listOf(known)).copy(pairing = confirm))
 
         compose.onNodeWithText(app.getString(R.string.pair_confirm_again, "Bureau")).performScrollTo().assertIsDisplayed()
     }
 
     @Test
     fun whilePairingThePairButtonWaits() {
-        show(HomeFixtures.state().copy(pairing = PairingState.Busy))
+        show(AppFixtures.state().copy(pairing = PairingState.Busy))
 
-        compose.onNodeWithText(app.getString(R.string.pair_button)).assertIsNotEnabled()
+        compose.onNodeWithText(app.getString(R.string.hero_scan)).assertIsNotEnabled()
         compose.onNodeWithText(app.getString(R.string.pairing)).assertIsDisplayed()
     }
 
@@ -84,13 +89,25 @@ class PairingSheetTest {
     fun anErrorSaysWhatToDoAndHasDetails() {
         var closed = 0
         val error = PairingError(R.string.pair_error_unreachable, "192.168.1.20:47290 did not answer")
-        show(HomeFixtures.state().copy(pairing = PairingState.Failed(error)), HomeActions(onCancelPairing = { closed++ }))
+        show(AppFixtures.state().copy(pairing = PairingState.Failed(error)), AppActions(onCancelPairing = { closed++ }))
 
         compose.onNodeWithText(app.getString(R.string.pair_error_unreachable)).assertIsDisplayed()
         compose.onNodeWithText("192.168.1.20:47290 did not answer").assertDoesNotExist()
-        compose.onNodeWithText(app.getString(R.string.pair_details)).performClick()
+        compose.onNodeWithText(app.getString(R.string.details)).performClick()
         compose.onNodeWithText("192.168.1.20:47290 did not answer").assertIsDisplayed()
         compose.onNodeWithText(app.getString(R.string.close)).performClick()
         assertEquals(1, closed)
+        // Nothing to try again with.
+        compose.onNodeWithText(app.getString(R.string.pair_retry)).assertDoesNotExist()
+    }
+
+    @Test
+    fun anUnreachableComputerOffersToTryAgain() {
+        val retried = mutableListOf<PairingState.Failed>()
+        val failed = PairingState.Failed(PairingError(R.string.pair_error_unreachable, "no answer"), retry = confirm)
+        show(AppFixtures.state().copy(pairing = failed), AppActions(onRetryPairing = { retried += it }))
+
+        compose.onNodeWithText(app.getString(R.string.pair_retry)).performClick()
+        assertEquals(listOf(failed), retried)
     }
 }

@@ -12,11 +12,11 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isHeading
 import androidx.compose.ui.test.isToggleable
-import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -41,7 +41,7 @@ class HomeAccessibilityTest {
 
     private val isSwitch = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Switch)
 
-    private fun show(state: HomeState, actions: HomeActions = HomeActions()) {
+    private fun show(state: AppState, actions: AppActions = AppActions()) {
         compose.setContent { MaterialTheme { HomeScreen(state, actions) } }
     }
 
@@ -49,48 +49,74 @@ class HomeAccessibilityTest {
     fun eachSwitchIsNamedByItsRow() {
         val changes = mutableListOf<Boolean>()
         show(
-            HomeFixtures.state(screenshots = ScreenshotSetting(wanted = true, access = PhotoAccess.FULL)),
-            HomeActions(onScreenshotsChange = { changes += it }, autoCopy = AutoCopyActions(onChange = { changes += it })),
+            AppFixtures.state(screenshots = ScreenshotSetting(wanted = true, access = PhotoAccess.FULL)),
+            AppActions(onScreenshotsChange = { changes += it }, autoCopy = CopiesActions(onChange = { changes += it })),
         )
 
-        val screenshots = compose.onNode(hasText(app.getString(R.string.screenshots_title)) and isToggleable())
+        // "Send new screenshots, switch, on": the switch has the row's name.
+        val screenshots = compose.onNode(hasContentDescription(app.getString(R.string.screenshots_title)) and isToggleable())
         screenshots.performScrollTo().assert(isSwitch).assertIsOn()
-        val copies = compose.onNode(hasText(app.getString(R.string.copies_title)) and isToggleable())
+        val copies = compose.onNode(hasContentDescription(app.getString(R.string.copies_title)) and isToggleable())
         copies.performScrollTo().assert(isSwitch).assertIsOff()
-        compose.onNode(hasText(app.getString(R.string.codes_title)) and isToggleable()).performScrollTo().assert(isSwitch)
+        compose.onNode(hasContentDescription(app.getString(R.string.codes_title)) and isToggleable()).performScrollTo().assert(isSwitch)
 
-        // A tap anywhere on the row toggles it.
         screenshots.performClick()
         copies.performClick()
         assertEquals(listOf(false, true), changes)
     }
 
     @Test
-    fun sectionTitlesAreHeadings() {
-        show(HomeFixtures.state(computers = listOf(HomeFixtures.hp)))
+    fun theRestOfEachRowOpensItsScreen() {
+        val opened = mutableListOf<Route>()
+        compose.setContent { MaterialTheme { HomeScreen(AppFixtures.state(), AppActions(), onOpen = { opened += it }) } }
 
-        compose.onNodeWithText(app.getString(R.string.app_name)).assert(isHeading())
-        compose.onNodeWithText(app.getString(R.string.paired_computers)).performScrollTo().assert(isHeading())
-    }
-
-    @Test
-    fun theStatusAndTheMessageAreReadOutWhenTheyChange() {
-        show(HomeFixtures.state(message = "Paired with HP-AIO"))
-
-        val polite = SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite)
-        compose.onNodeWithText(app.getString(R.string.status_no_computer)).assert(polite)
-        compose.onNodeWithText("Paired with HP-AIO").assert(polite)
-    }
-
-    @Test
-    fun forgetButtonsNameTheirComputer() {
-        show(HomeFixtures.state(computers = listOf(HomeFixtures.hp, HomeFixtures.arch)))
-
-        compose.onNodeWithContentDescription(app.getString(R.string.forget_named, "Arch-PC"))
+        // Title and state read as one button.
+        compose.onNode(hasText(app.getString(R.string.codes_title)) and hasText(app.getString(R.string.feature_off)))
             .performScrollTo()
             .assertHasClickAction()
             .performClick()
-        // It asks about that one.
-        compose.onNodeWithText(app.getString(R.string.forget_title, "Arch-PC")).assertExists()
+        assertEquals(listOf<Route>(Route.Codes), opened)
+    }
+
+    @Test
+    fun sectionTitlesAreHeadings() {
+        show(AppFixtures.state(computers = listOf(AppFixtures.hp)))
+        compose.onNodeWithText(app.getString(R.string.app_name)).assert(isHeading())
+    }
+
+    @Test
+    fun theDevicesSectionsAreHeadings() {
+        compose.setContent { MaterialTheme { DevicesScreen(AppFixtures.state(computers = listOf(AppFixtures.hp)), AppActions()) } }
+
+        compose.onNodeWithText(app.getString(R.string.tab_devices)).assert(isHeading())
+        compose.onNodeWithText(app.getString(R.string.paired_computers)).performScrollTo().assert(isHeading())
+        compose.onNodeWithText(app.getString(R.string.this_phone_title)).performScrollTo().assert(isHeading())
+    }
+
+    @Test
+    fun theStatusIsReadOutWhenItChanges() {
+        show(AppFixtures.state())
+
+        val polite = SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite)
+        // Title and text as one announcement.
+        compose.onNode(hasText(app.getString(R.string.hero_pair_title)) and hasText(app.getString(R.string.hero_pair_text)))
+            .assert(polite)
+    }
+
+    @Test
+    fun eachComputerReadsAsOneButton() {
+        val opened = mutableListOf<String>()
+        compose.setContent {
+            MaterialTheme {
+                DevicesScreen(AppFixtures.state(computers = listOf(AppFixtures.hp, AppFixtures.arch)), AppActions(), onOpen = { opened += it })
+            }
+        }
+
+        // Name and state in one node, which opens that computer's page.
+        compose.onNode(hasText("Arch-PC") and hasText(app.getString(R.string.offline)))
+            .performScrollTo()
+            .assertHasClickAction()
+            .performClick()
+        assertEquals(listOf("b2"), opened)
     }
 }

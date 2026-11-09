@@ -21,7 +21,9 @@ import android.os.Process
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
+import androidx.annotation.StringRes
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.RemoteInput
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -54,7 +56,49 @@ enum class BuiltInStatus {
     FAILED,
 }
 
-data class BuiltInState(val status: BuiltInStatus, val detail: String? = null)
+data class BuiltInState(
+    val status: BuiltInStatus,
+    val detail: String? = null,
+    /** While [BuiltInStatus.PAIRING]: how far the code got. `null` counts as waiting for it. */
+    val step: PairingStep? = null,
+    /** While [BuiltInStatus.PAIRING]: why the last code didn't work, if it didn't. */
+    val failure: PairingFailure? = null,
+)
+
+/** The pairing steps, as the set-up screen and the notification show them. */
+enum class PairingStep {
+    WAITING_FOR_CODE,
+
+    /** Looking for Settings' pairing code screen on the phone. */
+    FINDING,
+    PAIRING,
+
+    /** Paired: getting the right to switch wireless debugging on after a restart. */
+    GRANTING,
+}
+
+/** Why a pairing code didn't work, for a sentence the user can act on. */
+enum class PairingFailure {
+    WRONG_CODE,
+
+    /** The code screen was closed, or never opened: the code needs it open. */
+    NO_CODE_SCREEN,
+
+    /** Paired, but wireless debugging didn't answer afterwards. */
+    NO_DEBUGGING,
+    OTHER,
+    ;
+
+    companion object {
+        /** What went wrong, from what the pairing threw. */
+        fun of(e: Throwable): PairingFailure = when (e) {
+            is AdbException.WrongCode -> WRONG_CODE
+            // The pairing port went away between finding it and pairing.
+            is AdbException.Unreachable -> NO_CODE_SCREEN
+            else -> OTHER
+        }
+    }
+}
 
 /**
  * The built-in mode of the automatic copy: what Shizuku does for mode A, done by the app itself.
@@ -154,7 +198,7 @@ class BuiltInShell(
             set(BuiltInStatus.STARTING)
             worker.execute { launch() }
         } else {
-            set(BuiltInStatus.FAILED, "the shell helper keeps stopping")
+            set(BuiltInStatus.FAILED, context.getString(R.string.builtin_helper_stopping))
         }
     }
 
@@ -219,10 +263,10 @@ class BuiltInShell(
 
     /**
      * Step 1 of pairing: shows the notification where the user types the code while Settings
-     * shows it. The caller opens Settings.
+     * shows it. The caller opens Settings. The code can also be typed in the app, in split screen.
      */
     fun beginPairing() {
-        set(BuiltInStatus.PAIRING)
+        set(BuiltInStatus.PAIRING, step = PairingStep.WAITING_FOR_CODE)
         worker.execute {
             // Paired already (an earlier try that didn't finish): no code needed.
             val paired = AdbKey.exists(context.filesDir) && debuggingOn() &&
@@ -231,7 +275,7 @@ class BuiltInShell(
         }
     }
 
-    /** Step 2: the code typed in the notification. On a background thread. */
+    /** Step 2: the code typed in the notification or in the app. On a background thread. */
     fun submitCode(code: String) {
         worker.execute { pair(code) }
     }
@@ -241,31 +285,41 @@ class BuiltInShell(
         stop()
         Preferences.setBuiltInPaired(context, false)
         AdbKey.delete(context.filesDir)
+        // Cancelled mid-pairing: the code field mustn't stay.
+        notifications.cancel(NOTIFICATION_ID)
         set(BuiltInStatus.NOT_SET_UP)
     }
 
     private fun pair(code: String) {
         // Each step says so, to tell where it stops if it does.
-        notifyPairing(context.getString(R.string.builtin_pair_step_find))
+        progress(PairingStep.FINDING, R.string.builtin_pair_step_find)
         try {
             val key = AdbKey.loadOrCreate(context.filesDir)
             val pairing = LocalAdbServices.find(context, LocalAdbServices.PAIRING, FIND_TIMEOUT_MS)
-                ?: return pairingFailed(context.getString(R.string.builtin_pair_no_dialog))
-            notifyPairing(context.getString(R.string.builtin_pair_working))
+                ?: return pairingFailed(context.getString(R.string.builtin_pair_no_dialog), PairingFailure.NO_CODE_SCREEN)
+            progress(PairingStep.PAIRING, R.string.builtin_pair_working)
             onHosts(pairing) { host -> adbPair(host, pairing.port.toUShort(), code, key.pkcs8, key.adbPublicKey()) }
-            notifyPairing(context.getString(R.string.builtin_pair_step_grant))
+            progress(PairingStep.GRANTING, R.string.builtin_pair_step_grant)
             Log.i(TAG, "built-in mode: paired with wireless debugging")
-            if (!finishSetUp(key, FIND_TIMEOUT_MS)) pairingFailed(context.getString(R.string.builtin_no_debugging))
+            if (!finishSetUp(key, FIND_TIMEOUT_MS)) {
+                pairingFailed(context.getString(R.string.builtin_no_debugging), PairingFailure.NO_DEBUGGING)
+            }
         } catch (e: AdbException.WrongCode) {
-            pairingFailed(context.getString(R.string.builtin_pair_wrong_code))
+            pairingFailed(context.getString(R.string.builtin_pair_wrong_code), PairingFailure.WRONG_CODE)
         } catch (e: AdbException) {
-            pairingFailed(e.message ?: e.javaClass.simpleName)
+            pairingFailed(e.message ?: e.javaClass.simpleName, PairingFailure.of(e))
         } catch (e: Throwable) {
             // Anything else (an I/O error, an internal error of the Rust library) must reach the
             // user rather than end the app with the notification stuck.
             Log.w(TAG, "built-in mode: pairing failed", e)
-            pairingFailed("${e.javaClass.simpleName}: ${e.message}")
+            pairingFailed("${e.javaClass.simpleName}: ${e.message}", PairingFailure.OTHER)
         }
+    }
+
+    /** Where pairing got: in the notification, and on the set-up screen. */
+    private fun progress(step: PairingStep, @StringRes text: Int) {
+        set(BuiltInStatus.PAIRING, step = step)
+        notifyPairing(context.getString(text))
     }
 
     /**
@@ -295,11 +349,11 @@ class BuiltInShell(
         return true
     }
 
-    private fun pairingFailed(reason: String) {
+    private fun pairingFailed(reason: String, failure: PairingFailure) {
         Log.w(TAG, "built-in mode: pairing failed: $reason")
         // Offer the code field again.
         notifyPairing(context.getString(R.string.builtin_pair_failed, reason))
-        set(BuiltInStatus.PAIRING, reason)
+        set(BuiltInStatus.PAIRING, reason, PairingStep.WAITING_FOR_CODE, failure)
     }
 
     /** Starts the helper, unless one is already there. On the worker thread. */
@@ -359,8 +413,7 @@ class BuiltInShell(
         throw last ?: AdbException.Unreachable("no address")
     }
 
-    private fun debuggingOn(): Boolean =
-        Settings.Global.getInt(context.contentResolver, ADB_WIFI_ENABLED, 0) == 1
+    private fun debuggingOn(): Boolean = SetUpChecks.wirelessDebugging(context)
 
     private fun canSwitchDebugging(): Boolean =
         ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_SECURE_SETTINGS) ==
@@ -368,16 +421,14 @@ class BuiltInShell(
 
     private fun setDebugging(on: Boolean) {
         try {
-            Settings.Global.putInt(context.contentResolver, ADB_WIFI_ENABLED, if (on) 1 else 0)
+            Settings.Global.putInt(context.contentResolver, SetUpChecks.ADB_WIFI_ENABLED, if (on) 1 else 0)
             Log.i(TAG, "built-in mode: wireless debugging switched ${if (on) "on" else "off"}")
         } catch (e: SecurityException) {
             Log.w(TAG, "built-in mode: can't switch wireless debugging: ${e.message}")
         }
     }
 
-    private fun onWifi(): Boolean =
-        connectivity.getNetworkCapabilities(connectivity.activeNetwork)
-            ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+    private fun onWifi(): Boolean = SetUpChecks.onWifi(context)
 
     private fun waitFor(timeoutMs: Long, condition: () -> Boolean): Boolean {
         val end = SystemClock.elapsedRealtime() + timeoutMs
@@ -419,8 +470,8 @@ class BuiltInShell(
         notifications.notify(NOTIFICATION_ID, notification)
     }
 
-    private fun set(status: BuiltInStatus, detail: String? = null) {
-        mutableState.value = BuiltInState(status, detail)
+    private fun set(status: BuiltInStatus, detail: String? = null, step: PairingStep? = null, failure: PairingFailure? = null) {
+        mutableState.value = BuiltInState(status, detail, step, failure)
     }
 
     /** Receives the code typed in the pairing notification. */
@@ -431,24 +482,33 @@ class BuiltInShell(
         }
     }
 
-    private companion object {
-        const val TAG = "paste-get"
-        const val CHANNEL_ID = "builtin_setup"
-        const val NOTIFICATION_ID = 3
-        const val CODE_KEY = "code"
+    companion object {
+        private const val TAG = "paste-get"
+        private const val CHANNEL_ID = "builtin_setup"
+        private const val NOTIFICATION_ID = 3
+        private const val CODE_KEY = "code"
 
-        /** `Settings.Global.ADB_WIFI_ENABLED`, hidden from the SDK. */
-        const val ADB_WIFI_ENABLED = "adb_wifi_enabled"
-        const val FIND_TIMEOUT_MS = 15_000L
+        private const val FIND_TIMEOUT_MS = 15_000L
 
         /** How long "Set up" looks for wireless debugging before asking for a code. */
-        const val PROBE_TIMEOUT_MS = 4_000L
-        const val HELPER_START_MS = 10_000L
-        const val POLL_MS = 200L
-        const val MAX_RESTARTS = 5
-        const val RESTART_WINDOW_MS = 60 * 60 * 1000L
+        private const val PROBE_TIMEOUT_MS = 4_000L
+        private const val HELPER_START_MS = 10_000L
+        private const val POLL_MS = 200L
+        private const val MAX_RESTARTS = 5
+        private const val RESTART_WINDOW_MS = 60 * 60 * 1000L
 
         /** UIDs per Android user: an app's user is its UID divided by this. */
-        const val PER_USER_RANGE = 100_000
+        private const val PER_USER_RANGE = 100_000
+
+        /**
+         * Whether the pairing notification can show. The code is typed into it, so set-up can't
+         * work while paste-get's notifications are off (refused on Android 13+, or turned off in
+         * Settings) or its set-up channel is blocked.
+         */
+        fun canNotify(context: Context): Boolean {
+            if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return false
+            val channel = context.getSystemService(NotificationManager::class.java).getNotificationChannel(CHANNEL_ID)
+            return channel == null || channel.importance != NotificationManager.IMPORTANCE_NONE
+        }
     }
 }

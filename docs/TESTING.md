@@ -132,8 +132,9 @@ The CI builds a debug APK on every push. On GitHub: **Actions** → latest **CI*
 
 With `adb` and USB debugging instead: `adb install -r app-foss-debug.apk`.
 
-Then follow [`devices/xiaomi-hyperos.md`](devices/xiaomi-hyperos.md), section 3 (Autostart, no
-battery restrictions), or HyperOS will stop the connection in the background.
+Then open the gear → **Keep paste-get running** and do each item, or HyperOS will stop the
+connection in the background ([`devices/xiaomi-hyperos.md`](devices/xiaomi-hyperos.md), section 3,
+says why).
 
 ### Checklist
 
@@ -141,11 +142,13 @@ The phone and the PC must be on the **same Wi-Fi**. On the PC, run `pasteget dae
 
 | # | Do this | Expected |
 |---|---|---|
-| P1 | Open paste-get, allow notifications | A persistent "paste-get" notification appears |
-| P2 | PC: `pasteget pair`. Phone: **Pair a computer**, scan the code | Phone: a sheet "Pair with this computer?" with the PC's name and address. Tap **Pair**: a progress bar (the button waits), then "Paired with …" and "Connected to 1 computer". PC: `✓ Paired with …` |
+| P0 | Install paste-get fresh (or clear its data), PC: `pasteget pair`, then open it | A guide instead of the tabs: *Copy here. Paste there.*, the computer's side, **Scan the code** (P2's sheet; a check once paired), notifications (Android asks only once the page has said why), what to send (copies chosen), each chosen feature's set-up, *Keep paste-get running*, then **Copy this sentence**: "Arrived on <PC> in … ms", and `Ctrl+V` on the PC pastes it. With the PC's daemon stopped instead, after 5 s: "It didn't arrive" and what to check. **Skip** (any page) or **Finish** opens the tabs; the guide never shows again, nor on a phone that was paired before this version. Closed before that (swiped away from recent apps once paired), paste-get opens on the guide again |
+| P1 | Open paste-get, allow notifications (P0 asked already on a fresh install) | A persistent notification appears: "No computer paired yet", then after P2 "Connected to <PC>" with a **Send clipboard** button |
+| P2 | PC: `pasteget pair`. Phone: **Scan the code** on the home screen, scan it | Phone: a sheet "Pair with this computer?" with the PC's name and address. Tap **Pair**: a sheet with a progress bar, then "Paired with …" at the bottom of the screen for a few seconds, and the card at the top says "Connected to <PC>". PC: `✓ Paired with …` |
+| P2b | Turn Wi-Fi off on the phone for a minute | The card says "Looking for <PC>…" with a moving bar; after 30 s it says what to check and offers **Try again**. Wi-Fi back on: "Connected to <PC>" again |
 | P3 | In any app, select text → **Share** → **Send to PC**, then `Ctrl+V` on the PC | The text is pasted |
 | P4 | Gallery → a screenshot → **Share** → **Send to PC**, then paste on the PC (Paint, GIMP, Discord) | The image is pasted |
-| P5 | Add the **Send clipboard** tile to Quick Settings. Copy text, pull down the shade, tap the tile | "Sent to 1 computer"; `Ctrl+V` on the PC pastes it |
+| P5 | Add the **Send clipboard** tile to Quick Settings (on Android 13+: the gear → **Add the tile**). Copy text, pull down the shade, tap the tile | "Sent to 1 computer"; `Ctrl+V` on the PC pastes it |
 | P6 | PC: `pasteget send "depuis le PC"`, then long-press a text field on the phone → Paste | `depuis le PC` is pasted |
 | P7 | Lock the phone for 5 minutes, unlock, repeat P3 | Still works, without opening the app |
 | P8 | Restart the phone, wait a minute, repeat P3 | Still works (the app restarts on boot) |
@@ -154,8 +157,18 @@ The phone and the PC must be on the **same Wi-Fi**. On the PC, run `pasteget dae
 | P11 | Turn the phone's Wi-Fi off (mobile data on), scan a pairing code | Within about 10 s, an error that lists each address of the code with its reason, the PC's Wi-Fi or Ethernet address first |
 | P12 | Rename the phone (Settings → About phone → Device name), then force-stop paste-get and open it again | Within seconds `pasteget status` on the PC shows the new name, also after the PC restarts |
 | P13 | Turn on dark mode, close paste-get (swipe it away in recents), open it again | The start screen and the app are dark from the first frame, with no white flash |
-| P14 | PC: `pasteget pair`, then quit the daemon. Phone: scan the code, **Pair** | After a few seconds: "Pairing didn't work" and what to check (same Wi-Fi, paste-get open on the PC), in the phone's language. **Details** shows the technical error |
-| P15 | Last, with the phone connected: under Paired computers, tap **Forget…** next to the PC, then **Cancel**; tap it again, then **Forget** | Cancel keeps the PC. Forget removes it from the list and the phone stops connecting to it. Within 2 s the PC's tray no longer lists the phone and shows "<phone> unpaired this computer"; `pasteget status` lists no device. Pair again to go on |
+| P14 | Tap **History**, **Devices**, then the gear at the top right; press Back twice | History lists what was sent (P3–P5) with sizes and times. Devices lists the PC ("Connected · … ms") and *This phone* with its device ID in groups of four; tapping the PC shows its addresses. With the PC's daemon stopped and started again, pulling the Devices list down reconnects at once instead of after the backoff. The gear opens Settings; Back goes to Devices, then Home. Rotate the phone on any of them: the same screen stays |
+| P15 | The gear → **Dark**, then **Light**, then **System**; turn **Wallpaper colors** off and on (Android 12+); **Language** → French (Android 13+); **Open-source licences** | The app changes at once; after closing and reopening it, the start screen matches the choice too (Android 12+). Without wallpaper colors, the app is indigo. In French, every screen is in French. The licences list the libraries and show the Apache License text |
+| P16 | Quit the PC's daemon, pull down Quick Settings; start it again | The tile reads "Offline: sends when back", then the PC's name, lit. The notification says "Looking for <PC>…", then "Connected to <PC>" |
+| P17 | Long-press paste-get's launcher icon: **Send**, then **Pair**, then **History**. Then close paste-get, open it with **Pair**, press Back until it closes, and reopen it from recent apps | Send sends the clipboard (as the tile does); Pair opens the scanner; History opens the History tab. Reopened from recent apps, paste-get opens without the scanner (Android 10 to 12 used to open it again) |
+| P18 | Copy text, pull down the notification shade, tap **Send clipboard** in paste-get's notification | "Sent to 1 computer"; `Ctrl+V` on the PC pastes it |
+| P19 | Turn the phone to landscape on Home, Devices and Settings (or open paste-get on a tablet) | A rail on the left instead of the bottom bar; each screen's column stays narrow and centred, switches next to their labels. Scrolled to the end, the last item clears the gesture bar and, on Devices, the Pair button |
+| P20 | The gear → **Keep paste-get running**; tap **Allow** under *Unrestricted battery use* and accept | "Allow" turns into a check and the count goes up. On a Xiaomi phone: **Open Autostart** opens HyperOS's Autostart list (or App info); after turning paste-get on there, **It's done** ticks it; *Lock it in recent apps* is a tip. On other phones only battery and notifications are listed |
+| P21 | Scan a PC's code and leave the sheet open. From the PC: `adb shell am start -a android.intent.action.VIEW -d "pasteget://pair?v=0&id=X&s=Y&a=203.0.113.7%3A47290&n=Other"` | The sheet keeps showing the PC you scanned, not "Other"; **Pair** pairs with that PC |
+| P22 | In a password manager (Bitwarden, KeePassDX), copy a password, then tap **Send clipboard** in paste-get's notification. Then quit the PC's daemon, send it again, start the daemon | The PC pastes it, and it is not in Win+V history, Klipper or the tray's *Recent*. With the daemon stopped: "Not sent: no computer is connected", and nothing arrives when it's back |
+| P23 | In **Devices**, open the PC's page. Go to Settings → Apps → paste-get → Permissions (or Notifications) and turn one off: Android stops paste-get. Come back to it from recent apps | The PC's page shows again, not the Devices list |
+| P24 | PC: `pasteget pair`, then quit the daemon. Phone: scan the code, **Pair**. Then start the daemon, `pasteget pair` again, turn the phone's Wi-Fi off, scan, **Pair**; turn Wi-Fi back on, **Try again**, **Pair** | After a few seconds: "Pairing didn't work" and what to check (same Wi-Fi, paste-get open on the PC), in the phone's language, with **Try again**. **Details** shows the technical error. **Try again** asks "Pair with this computer?" again for the same code, and **Pair** then pairs |
+| P25 | Last, with the phone connected: in the **Devices** tab, tap the PC, then **Forget this computer…**, then **Cancel**; tap it again, then **Forget** | Cancel keeps the PC. Forget removes it from the list, and the phone stops connecting to it. Within 2 s the PC's tray no longer lists the phone and shows "<phone> unpaired this computer"; `pasteget status` lists no device. Pair again to go on |
 
 Phone logs never contain clipboard contents either. To get them: `adb logcat -s paste-get`.
 
@@ -166,7 +179,8 @@ second. Update both sides first: `git pull` and `cargo build --release` on the P
 the latest CI run on the phone (it installs over the previous one; pairings are kept).
 
 On the phone, turn on **Send new screenshots** and choose **Allow all** for photos. "Select
-photos" hides new screenshots: the card then says so and offers **Open settings**.
+photos" hides new screenshots: the row then says "One step left", and its screen says why
+and offers **Open settings**.
 
 On Hyprland, notifications need a notification daemon (mako, dunst, swaync…). KDE Plasma and
 Windows have one built in.
@@ -174,7 +188,8 @@ Windows have one built in.
 | # | Do this | Expected |
 |---|---|---|
 | S1 | Take a screenshot on the phone, then `Ctrl+V` in Discord (or Paint, GIMP) on the PC | The screenshot is pasted, upright. The PC shows "Image from POCO M8 5G ✓" |
-| S2 | Look at the app's home screen | "Last screenshot (… kB) reached your computer in … ms" |
+| S2 | Look at the app's home screen, under **Recent** | "Screenshot, … kB", and under it "<PC> in … ms" |
+| S2b | Settings → Apps → paste-get → Permissions → Photos → *Allow limited access*, back to paste-get | The Screenshots row says "One step left"; its screen checks *Only selected photos*, says why that hides new screenshots and offers **Open settings** |
 | S3 | Share a photo from the gallery with **Send to PC**, paste on the PC | The photo is pasted the right way up, even if taken in portrait |
 | S4 | Turn Wi-Fi off on the phone for a minute, then on again | "Connected to 1 computer" again within a few seconds |
 | S5 | Restart the PC into the other OS (Windows ↔ Arch), start `pasteget daemon` there (pair it once if it isn't yet) | The phone connects to it within a few seconds, without a new QR code |
@@ -184,8 +199,8 @@ Windows have one built in.
 ### Measuring latency (target: under 1 s)
 
 Two numbers, both on the phone:
-- The home screen (S2) counts from the moment Android announced the new screenshot file to the
-  PC's acknowledgement. Repeat S1 five times and note the values.
+- The home screen's Recent list (S2) counts from the moment Android announced the new screenshot
+  file to the PC's acknowledgement. Repeat S1 five times and note the values.
 - `adb logcat -s paste-get` shows each step: "screenshot of … bytes read in … ms", then
   "delivered … ms after sending, … ms after Android announced the screenshot".
 
@@ -229,8 +244,8 @@ C4 worked.
 
 ## 8. Copy on the phone, paste on the PC (M5)
 
-Android lets only the app in front read the clipboard. paste-get reads it in two ways, shown on
-the home screen under **Send what you copy**:
+Android lets only the app in front read the clipboard. paste-get reads it in two ways, shown on the
+**Send what you copy** screen (tap its row on the home screen):
 
 - **Mode A, Shizuku.** [Shizuku](https://shizuku.rikka.app/) runs a small part of paste-get as the
   shell user, which may read the clipboard in the background. Shizuku has to be started again
@@ -258,23 +273,23 @@ Watch the PC daemon's terminal, and on the phone `adb logcat -s paste-get` if yo
 
 | # | Do this | Expected |
 |---|---|---|
-| A1 | Turn on **Send what you copy**, allow paste-get in Shizuku | The card says "Mode: Shizuku, as shell" |
-| A2 | In any app (Chrome, Notes…), select text → **Copy**. On the PC, `Ctrl+V` | The text is pasted. The card says "Last copy (…) sent at …" |
+| A1 | Turn on **Send what you copy**, allow paste-get in Shizuku | The row says "On, automatic"; its screen checks **Shizuku** under *How copies are read* |
+| A2 | In any app (Chrome, Notes…), select text → **Copy**. On the PC, `Ctrl+V` | The text is pasted. The Copies screen says "Last copy (…) sent at …"; the home screen's Recent lists it |
 | A3 | Copy the same text again | The PC logs nothing new (the phone logs "seen before, not sent") |
 | A4 | Copy text **on the PC**, paste it on the phone, wait 5 s | The PC does not receive it back from the phone |
-| A5 | During A2: does the phone show a notice like "Shell pasted from your clipboard"? | Report what it says (Android 12+ may show one; the card's *Open privacy settings* leads to "Show clipboard access", which turns it off) |
+| A5 | During A2: does the phone show a notice like "Shell pasted from your clipboard"? | Report what it says (Android 12+ may show one; the Copies screen's *Open privacy settings* leads to "Show clipboard access", which turns it off) |
 | A6 | Copy a password from a password manager (Bitwarden, KeePassDX…), paste it on the PC | Pasted, and absent from Windows' clipboard history (`Win+V`) or Klipper |
 | A7 | Windows, if you have a second PC on the same Microsoft account with *Settings → System → Clipboard → Share across devices* on: copy text on the phone, then `Win+V` on the other PC | Not there (it is in this PC's own `Win+V` history) |
-| B1 | With Shizuku running, tap **Grant them (paste-get restarts)** | paste-get restarts. The card says "Ready for when Shizuku stops" |
-| B2 | In Shizuku, tap **Stop**. Back in paste-get | Within a few seconds Android asks to allow access to the device logs: allow it. The card says "Mode: fallback, through the system log" |
+| B1 | With Shizuku running, tap **Prepare the backup method (paste-get restarts)** on the Copies screen | paste-get restarts. The Copies screen says "Ready for when Shizuku stops" |
+| B2 | In Shizuku, tap **Stop**. Back in paste-get | Within a few seconds Android asks to allow access to the device logs: allow it. The row says "On, backup method" |
 | B3 | Go to another app, copy text, paste on the PC | Pasted. Report whether anything flashed or the keyboard closed |
 | B4 | Restart the phone, don't start Shizuku | A notification says "Copies are not sent". Tap it, allow log access, then repeat B3: it works |
-| B5 | Start Shizuku again | The card goes back to "Mode: Shizuku" within a few seconds; B3 no longer takes focus |
+| B5 | Start Shizuku again | The row goes back to "On, automatic" within a few seconds; B3 no longer takes focus |
 | B6 | Lock the phone for 5 minutes, unlock it, repeat A2 (or B3 without Shizuku) | Still works |
 
 The phone's log names the hidden Android methods it uses, in a line like "Shizuku: watching the
 clipboard as uid 2000 with addPrimaryClipChangedListener(…), …". **Please include that line in
-your report**: it shows which variant HyperOS has. If the card says "Shizuku can't watch the
+your report**: it shows which variant HyperOS has. If the Copies screen says "Shizuku can't watch the
 clipboard on this phone: unknown signature …", report the whole message: the app only needs that
 signature added.
 
@@ -412,33 +427,43 @@ once, then starts its own helper as the shell user whenever needed, even after a
 phone (on Wi-Fi). No other app, nothing to restart by hand. It's new and experimental: please
 report what happens.
 
-**Once, to set up** (the phone on Wi-Fi):
-1. Developer options must be on: Settings → About phone → tap *OS version* (HyperOS) or *Build
-   number* seven times.
-2. In paste-get, turn on **Send what you copy**, then tap **Set up without Shizuku**. A
-   notification "Pair paste-get with wireless debugging" appears, and Developer options open.
-3. Turn on **Wireless debugging** (allow it on this network), tap it, then **Pair device with
-   pairing code**. A 6-digit code shows.
-4. Without leaving that screen, pull down the notifications and type the code in paste-get's
-   notification (**Enter code**).
-5. The notification goes away, and the card says "Mode: built-in, as shell, without Shizuku".
-   You can turn Wireless debugging off: paste-get switches it on for a moment when it needs it,
-   then off again.
+**Once, to set up** (the phone on Wi-Fi): in paste-get, turn on **Send what you copy**. The
+set-up opens ("Set up the automatic copy", also from the Copies screen's **Start set-up**). Its
+four steps tick themselves as you do them in Settings, and only the current one says what to do:
+1. **Before you start**: Wi-Fi and paste-get's notifications (the code is typed into one), each
+   with a button to fix it. On Xiaomi phones, a tip about HyperOS's notification style.
+2. **Developer options**: Settings → About phone → tap *OS version* (Xiaomi) or *Build number*
+   seven times. **Open About phone** goes there.
+3. **Wireless debugging**: turn it on in Developer options and allow it on this network.
+4. **Pairing code**: **Open Wireless debugging** shows the notification "Pair paste-get with
+   wireless debugging" and opens Developer options. Tap Wireless debugging → **Pair device with
+   pairing code**; without leaving that screen, type the 6 digits in paste-get's notification
+   (**Enter code**). The set-up shows each step (finding the code screen, pairing, getting
+   permission), then "All set". You can turn Wireless debugging off: paste-get switches it on for
+   a moment when it needs it, then off again.
+
+**Split screen instead of the notification:** put paste-get in split screen from recent apps,
+then **Open Wireless debugging**: Settings opens in the other half, and six boxes in paste-get
+take the code. This works with paste-get's notifications off too.
 
 If Shizuku was set up, the built-in mode replaces it; you can uninstall Shizuku.
 
 | # | Do this | Expected |
 |---|---|---|
-| W1 | Set up as above | "Paired devices" in Wireless debugging lists **paste-get**; the card says "Mode: built-in" |
+| W1 | Set up as above | "Paired devices" in Wireless debugging lists **paste-get**; the Copies screen checks **Built-in** |
 | W2 | Copy text in any app, paste on the PC | Pasted. Android shows "Shell pasted from your clipboard", as with Shizuku |
 | W3 | Turn Wireless debugging off by hand, copy again | Still works (the helper runs on its own) |
 | W4 | Restart the phone, unlock it, wait a minute on Wi-Fi, copy text | Pasted on the PC, without opening paste-get. Wireless debugging is off again afterwards |
-| W5 | Restart the phone with Wi-Fi off | The card says "waiting for Wi-Fi"; turn Wi-Fi on: it starts by itself |
-| W6 | In Wireless debugging → Paired devices, forget paste-get, then restart the phone | The card says "wireless debugging no longer knows paste-get: pair again" |
-| W7 | **Pair again** in the card | Back to step 2 |
-| W8 | With the built-in mode running, turn on **Hide "pasted from your clipboard"** in the card, then repeat W2 | Pasted, with no notice. Settings → Privacy → *Show clipboard access* is now off. Turning the switch off brings the notice back |
+| W5 | Restart the phone with Wi-Fi off, open paste-get | The home screen's card says "Looking for <PC>…" (without Wi-Fi nothing reaches the PC, so that comes first); the Copies row says "One step left", and the Copies screen says the built-in mode is waiting for Wi-Fi, with **Open Wi-Fi settings**. Turn Wi-Fi on: the PC connects and copies start by themselves |
+| W6 | In Wireless debugging → Paired devices, forget paste-get, then restart the phone | The row says "Not working: tap to fix"; the Copies screen says "wireless debugging no longer knows paste-get: pair again" |
+| W7 | **Pair again** on the Copies screen | The Copies screen offers **Start set-up** again |
+| W8 | With the built-in mode running, turn on **Hide "pasted from your clipboard"** on the Copies screen (it shows once a copy went out), then repeat W2 | Pasted, with no notice. Settings → Privacy → *Show clipboard access* is now off. Turning the switch off brings the notice back |
+| W9 | Before setting up: Settings → Apps → paste-get → Notifications off. In paste-get, turn on **Send what you copy** | The set-up stays at step 1: *Notifications* is unticked, with **Allow notifications** (paste-get's notification settings). Turn them on, come back: step 1 ticks itself |
+| W10 | Start the set-up with Developer options off, then do each step in Settings and come back | Each step ticks by itself when you're back, "Step 2 of 4", "Step 3 of 4"…; the bar fills |
+| W11 | At step 4, type a wrong code in the notification | "Wrong or expired code…" with **Retry**; a new code from Settings works |
+| W12 | Split screen as above: turn Wireless debugging on in the Settings half, then type the code in paste-get's boxes | Step 3 ticks without leaving Settings; the code is sent at the sixth digit and the set-up says "All set" |
 
-If a step fails, the card shows why. **Please report that text**, and, if you can, the log:
+If a step fails, the Copies screen shows why. **Please report that text** (and what **Details** shows), and, if you can, the log:
 `adb logcat -s paste-get` (lines start with "built-in mode" or "shell helper").
 
 ## 13. Links (v0.2)
@@ -466,17 +491,20 @@ shows "Code from <app> (<phone>) ✓", never the code.
 
 It needs notification access, and on Android 15 (the POCO) the right to see codes, which Android
 otherwise hides from apps that read notifications. With the built-in mode (or Shizuku) running,
-**Allow (one tap)** grants both. Without, the card opens Settings → Notification access, and
+**Allow (one tap)** on the **Send 2FA codes** screen grants both. Without, it opens Settings →
+Notification access, and
 Android 15 keeps hiding the codes.
 
 | # | Do this | Expected |
 |---|---|---|
-| C1 | With the built-in mode running, turn on **Send 2FA codes**, tap **Allow (one tap)** | "Allowed"; the card says "Waiting for a code" |
+| C1 | With the built-in mode running, turn on **Send 2FA codes**, open its screen, tap **Allow (one tap)** | "Allowed"; both items under *Access* are checked (the second only on Android 15) and the row says "On" |
 | C2 | Get a code by SMS (log in to a site that texts one, or have someone send "Your code is 482913") | Within a second or two, the PC shows "Code from Messages (<phone>) ✓"; `Ctrl+V` pastes 482913 |
 | C3 | Open `Win+V` (or Klipper) | The code is not in the clipboard history; the tray's *Recent* doesn't list it |
 | C4 | A code from an app's notification (bank, Google prompt, authenticator push) | Same as C2, with that app's name |
 | C5 | An SMS with an order number or an amount and no "code" word | Nothing is sent |
-| C6 | Turn off **Send 2FA codes**, get another code | Nothing is sent |
+| C6 | More than 5 minutes after C2, reply to that SMS, or get another message without a code in the same conversation | Nothing is sent: the old code doesn't go out again |
+| C7 | Turn off **Send 2FA codes**, get another code | Nothing is sent |
+| C8 | Before C1, without the built-in mode or Shizuku: turn on **Send 2FA codes** and open its screen | *Read notifications* is unchecked, with **Open notification access** and what to do if Android says the setting is restricted (**Open App info**). On Android 15, once allowed, *See the codes Android 15 hides* stays unchecked and the screen offers to set up the automatic copy |
 
 If a code isn't found, report the shape of the message (with the digits changed) so the detector
 can learn it.
@@ -494,15 +522,16 @@ land over it.
 |---|---|---|
 | Q1 | Quit paste-get on the PC (tray → *Quit*). On the phone, copy a line | The phone says it went to 0 computers |
 | Q2 | Start paste-get on the PC again | Within a few seconds the line is in the PC's clipboard; the log says "sending the clip it missed" |
-| Q3 | PC off, copy two lines on the phone one after the other, start the PC | Only the second one arrives |
+| Q3 | PC off, copy two lines on the phone one after the other, look at Home's *Recent*, start the PC | *Recent* says "It will arrive when <PC> is back" under the second line only, "Not sent: no computer was connected" under the first. Only the second one arrives |
 | Q4 | Phone's Wi-Fi off, and right away copy something on the PC (the tray may still show the phone connected), turn Wi-Fi back on | The copy is in the phone's clipboard once it reconnects, once |
-| Q5 | PC off, copy a line on the phone, then a password from a password manager (or get a 2FA code), start the PC | Nothing arrives, not even the line |
+| Q5 | PC off, copy a line on the phone, then a password from a password manager (or get a 2FA code), start the PC | *Recent* (and the 2FA screen's *Last code*) says "Not sent: no computer was connected" under the password or code. Nothing arrives, not even the line |
 | Q6 | PC off, copy on the phone, force-stop paste-get on the phone, start both | Nothing arrives: the copy was only in memory |
 | Q7 | Put the PC to sleep. Within a minute, copy a line on the phone (it may still say it went to 1 computer), then wake the PC | The line is in the PC's clipboard once the phone reconnects |
 | Q8 | With both connected, copy a line on the PC; once it's on the phone, turn the phone's Wi-Fi off and on | The line is not sent a second time when the phone reconnects |
 | Q9 | Turn the phone's Wi-Fi off. Right away copy a line on the PC, then a few seconds later another line on the phone, and turn Wi-Fi back on | Once the phone reconnects, both paste the phone's line: the PC's log says "clip received", the phone keeps its own |
 | Q10 | Same as Q9, but copy on the phone first, then on the PC | Both paste the PC's line; the PC's log says "clip dropped: a newer copy from here is on its way to the device" |
 | Q11 | Phone's Wi-Fi off, copy a password on the PC as in C7, turn Wi-Fi back on | Nothing arrives |
+| Q12 | PC off. On the phone, copy a line, then **Send clipboard now** in the app (or the tile, or Share → Send to PC) | The button works while the PC is offline, and the phone says "It will arrive when <PC> is back". Start the PC: the line arrives |
 
 ## 16. GNOME (tier 2)
 
@@ -547,7 +576,8 @@ relies on elsewhere on Linux.
 - When both sides copied while apart, the newer copy wins on both. Copies made within a few
   milliseconds of each other (less than the network delay) can still end up crossed.
 - The phone shows nothing of its own when a clip from the PC arrives (Android 13 and later may
-  show their clipboard preview); its home screen says what came last.
+  show their clipboard preview); its home screen's Recent list shows what came (kind, size and
+  time, never the contents), in memory only.
 - Only text copied on the phone is sent automatically, not images or files: share those.
 - Mode B takes focus for a moment on each copy, which may close the keyboard. On Android 13+, it
   needs paste-get opened once (and log access allowed) after each restart of the phone.

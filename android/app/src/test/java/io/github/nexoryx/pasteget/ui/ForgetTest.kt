@@ -4,22 +4,27 @@ package io.github.nexoryx.pasteget.ui
 
 import android.app.Application
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import io.github.nexoryx.pasteget.R
+import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import uniffi.pasteget_ffi.PastegetException
 
-/** Forgetting a computer asks first, and Cancel keeps it. */
+/** Forgetting a computer, on its page, asks first, and Cancel keeps it. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class ForgetTest {
@@ -28,17 +33,21 @@ class ForgetTest {
 
     private val app: Application = RuntimeEnvironment.getApplication()
     private val forgotten = mutableListOf<String>()
+    private var backs = 0
 
+    /** HP-AIO's page, as Devices opens it. */
     private fun showAndTapForget() {
         compose.setContent {
             MaterialTheme {
-                HomeScreen(
-                    HomeFixtures.state(computers = listOf(HomeFixtures.hp, HomeFixtures.arch), connected = setOf("a1")),
-                    HomeActions(onForget = { forgotten += it.deviceId }),
+                DeviceScreen(
+                    AppFixtures.state(computers = listOf(AppFixtures.hp, AppFixtures.arch), connected = setOf("a1")),
+                    "a1",
+                    AppActions(onForget = { forgotten += it.deviceId }),
+                    onBack = { backs++ },
                 )
             }
         }
-        compose.onNodeWithContentDescription(app.getString(R.string.forget_named, "HP-AIO")).performScrollTo().performClick()
+        compose.onNodeWithText(app.getString(R.string.forget_this)).performScrollTo().performClick()
     }
 
     @Test
@@ -66,5 +75,53 @@ class ForgetTest {
         compose.onNodeWithText(app.getString(R.string.forget_confirm)).performClick()
         compose.onNodeWithText(app.getString(R.string.forget_title, "HP-AIO")).assertDoesNotExist()
         assertEquals(listOf("a1"), forgotten)
+    }
+
+    @Test
+    fun aFailedForgetIsSaidInTheUsersWords() {
+        val fake = FakeComputers(listOf(AppFixtures.hp), forgetFailure = PastegetException.Storage("No space left on device (os error 28)"))
+        val model = AppViewModel(app, fake, Dispatchers.Unconfined).also { it.refresh() }
+
+        model.forget(AppFixtures.hp)
+        assertEquals(app.getString(R.string.forget_failed, "HP-AIO"), model.message)
+
+        // Unpaired by the computer meanwhile: gone, as asked, and that is said elsewhere.
+        fake.forgetFailure = PastegetException.UnknownDevice("unknown device")
+        model.messageShown(model.message!!)
+        model.forget(AppFixtures.hp)
+        assertNull(model.message)
+    }
+
+    @Test
+    fun theDetailsShowTheConnectionAndAddresses() {
+        compose.setContent {
+            MaterialTheme {
+                DeviceScreen(AppFixtures.state(computers = listOf(AppFixtures.hp), connected = setOf("a1")), "a1", AppActions(), onBack = {})
+            }
+        }
+        compose.onNodeWithText(app.getString(R.string.connected)).assertIsDisplayed()
+        compose.onNodeWithText("192.168.1.20:47290").assertIsDisplayed()
+    }
+
+    @Test
+    fun aPageRestoredBeforeTheListIsReadWaitsForIt() {
+        // Android stopped the app on this page: it comes back before the computers are read.
+        var state by mutableStateOf(AppFixtures.state().copy(computersLoaded = false))
+        compose.setContent { MaterialTheme { DeviceScreen(state, "a1", AppActions(), onBack = { backs++ }) } }
+        compose.waitForIdle()
+        assertEquals(0, backs)
+
+        state = AppFixtures.state(computers = listOf(AppFixtures.hp))
+        compose.onNodeWithText(app.getString(R.string.forget_this)).performScrollTo().assertIsDisplayed()
+        assertEquals(0, backs)
+    }
+
+    @Test
+    fun aComputerNoLongerPairedClosesItsPage() {
+        compose.setContent {
+            MaterialTheme { DeviceScreen(AppFixtures.state(computers = listOf(AppFixtures.arch)), "a1", AppActions(), onBack = { backs++ }) }
+        }
+        compose.waitForIdle()
+        assertEquals(1, backs)
     }
 }

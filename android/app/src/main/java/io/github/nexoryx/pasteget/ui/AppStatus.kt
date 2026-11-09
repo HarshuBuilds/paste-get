@@ -42,6 +42,9 @@ enum class NextStep {
     /** Copies: set up the built-in mode (Android's wireless debugging). */
     SET_UP_BUILT_IN,
 
+    /** Copies: the built-in mode's set-up asks for its code in a notification, and they are off. */
+    ALLOW_NOTIFICATIONS,
+
     /** Copies: the built-in mode waits for the pairing code, typed in its notification. */
     FINISH_BUILT_IN_PAIRING,
 
@@ -107,13 +110,17 @@ sealed interface AppStatus {
     data class Working(val connected: List<String>, val offline: List<String>) : AppStatus
 }
 
-/** The automatic copy, from the state of each way it can read copies. */
+/**
+ * The automatic copy, from the state of each way it can read copies. [canNotify]: the built-in
+ * mode's pairing notification can show.
+ */
 fun copiesHealth(
     on: Boolean,
     builtIn: BuiltInState,
     shizuku: ShizukuState,
     logs: LogStatus,
     fallback: FallbackAccess,
+    canNotify: Boolean,
 ): FeatureHealth {
     if (!on) return FeatureHealth(Feature.COPIES, Health.OFF)
     val mode = CopyMode.of(builtIn, shizuku, logs)
@@ -127,7 +134,8 @@ fun copiesHealth(
         shizuku.status == ShizukuStatus.CONNECTING -> starting
         builtIn.status == BuiltInStatus.NEEDS_WIFI -> blocked(NextStep.CONNECT_WIFI)
         builtIn.status == BuiltInStatus.FAILED -> blocked(NextStep.RETRY_BUILT_IN)
-        builtIn.status == BuiltInStatus.PAIRING -> blocked(NextStep.FINISH_BUILT_IN_PAIRING)
+        builtIn.status == BuiltInStatus.PAIRING ->
+            blocked(if (canNotify) NextStep.FINISH_BUILT_IN_PAIRING else NextStep.ALLOW_NOTIFICATIONS)
         // Installed and running: one tap is the shortest way.
         shizuku.status == ShizukuStatus.NO_PERMISSION -> blocked(NextStep.ALLOW_SHIZUKU)
         // Android may be asking right now.
@@ -136,7 +144,7 @@ fun copiesHealth(
         logs == LogStatus.WAITING_FOR_APP -> starting
         fallback.readLogs && !fallback.overlay -> blocked(NextStep.ALLOW_OVERLAY)
         // The recommended way: it needs no other app and survives restarts.
-        else -> blocked(NextStep.SET_UP_BUILT_IN)
+        else -> blocked(if (canNotify) NextStep.SET_UP_BUILT_IN else NextStep.ALLOW_NOTIFICATIONS)
     }
 }
 

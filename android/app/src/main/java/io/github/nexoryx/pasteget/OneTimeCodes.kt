@@ -17,9 +17,6 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.os.BundleCompat
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import uniffi.pasteget_ffi.findOneTimeCode
 import java.util.concurrent.Executors
 
@@ -44,22 +41,15 @@ object OneTimeCodes {
     /** `Notification.EXTRA_BUILDER_APPLICATION_INFO`, hidden: the posting app, set by Android. */
     private const val EXTRA_APP_INFO = "android.appInfo"
 
-    /** Messages of a conversation looked at, newest last. */
-    private const val MESSAGES = 3
-
-    private val lastState = MutableStateFlow<LastCode?>(null)
-
-    /** The last code sent, for the home screen. */
-    val last: StateFlow<LastCode?> = lastState.asStateFlow()
-
     private val recent = RecentCodes()
+    private val conversations = Conversations()
     private val worker = Executors.newSingleThreadExecutor()
 
     /** On the listener's thread. Returns at once: the work happens on a thread of its own. */
     fun posted(context: Context, notification: StatusBarNotification) {
         if (!Preferences.sendCodes(context)) return
         if (notification.packageName == context.packageName || notification.isOngoing) return
-        val text = textOf(notification.notification)
+        val text = textOf(notification.notification, notification.key, conversations)
         if (text.isEmpty()) return
         val app = context.applicationContext
         worker.execute {
@@ -69,21 +59,31 @@ object OneTimeCodes {
             val sentTo = app.pasteGet.client.sendOneTimeCode(code, name).toInt()
             // The app that sent it, never the code.
             Log.i(TAG, "one-time code from ${notification.packageName} sent to $sentTo computers")
-            lastState.value = LastCode(System.currentTimeMillis(), name, sentTo)
+            // Its length is what the computers acknowledge; the code itself is never kept.
+            app.pasteGet.activity.sent(ActivityKind.CODE, code.encodeToByteArray().size, sentTo, automatic = true, sensitive = true, app = name)
         }
     }
 
-    /** The title, text and last messages of a notification, where codes are. */
-    fun textOf(notification: Notification): String {
+    /**
+     * Where to look for a code: a notification's title and text. In a conversation
+     * (MessagingStyle, as SMS apps post), only its newest message, and only the first time it is
+     * seen: the app posts the whole conversation again for each new message or reply, and an old
+     * code must not go out again. [key] names the notification, [now] is the wall clock.
+     */
+    fun textOf(notification: Notification, key: String, seen: Conversations, now: Long = System.currentTimeMillis()): String {
         val extras = notification.extras ?: return ""
-        val parts = mutableListOf(
+        val messages = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(notification)?.messages
+        if (!messages.isNullOrEmpty()) {
+            // Newest last, as Android shows them.
+            val newest = messages.last()
+            val text = newest.text?.toString() ?: return ""
+            return if (seen.isNew(key, newest.timestamp, text, now)) text else ""
+        }
+        return listOfNotNull(
             extras.getCharSequence(Notification.EXTRA_TITLE),
             extras.getCharSequence(Notification.EXTRA_TEXT),
             extras.getCharSequence(Notification.EXTRA_BIG_TEXT),
-        )
-        NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(notification)
-            ?.messages?.takeLast(MESSAGES)?.forEach { parts.add(it.text) }
-        return parts.filterNotNull().joinToString("\n")
+        ).joinToString("\n")
     }
 
     /** "Messages", or the package name if Android won't say. */
@@ -126,9 +126,6 @@ data class CodeAccess(val listening: Boolean, val seesCodes: Boolean?) {
     val ready: Boolean get() = listening && seesCodes != false
 }
 
-/** A code sent at [atMillis] (wall clock), from the app [app], to [sentTo] computers. */
-data class LastCode(val atMillis: Long, val app: String, val sentTo: Int)
-
 /**
  * The codes sent in the last [forMillis]: an SMS app posts a notification again when the
  * conversation changes, and the code must go once. Kept in memory only.
@@ -149,6 +146,38 @@ class RecentCodes(private val forMillis: Long = FIVE_MINUTES_MS) {
     private companion object {
         const val FIVE_MINUTES_MS = 5 * 60_000L
         const val KEPT = 16
+    }
+}
+
+/**
+ * The newest message seen in each conversation, by notification key, so that each message is
+ * looked at once however often its conversation is posted again. In memory only, and only a
+ * hash of the text.
+ */
+class Conversations {
+    private val newest = object : LinkedHashMap<String, Pair<Long, Int>>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Long, Int>>) = size > KEPT
+    }
+
+    /**
+     * Whether the message [text] sent at [timestamp] (wall clock, 0 if the app gave none) is new
+     * in the conversation [key]. Remembers it.
+     */
+    @Synchronized
+    fun isNew(key: String, timestamp: Long, text: String, now: Long): Boolean {
+        // A conversation seen for the first time (after a restart of the app, say) may end with
+        // an old message: a code that old is stale.
+        if (timestamp > 0 && now - timestamp > MAX_AGE_MS) return false
+        val seen = newest[key]
+        // Some apps give every message the same time: then a different text is a new message.
+        val new = seen == null || timestamp > seen.first || (timestamp == seen.first && text.hashCode() != seen.second)
+        if (new) newest[key] = timestamp to text.hashCode()
+        return new
+    }
+
+    private companion object {
+        const val KEPT = 64
+        const val MAX_AGE_MS = 10 * 60_000L
     }
 }
 

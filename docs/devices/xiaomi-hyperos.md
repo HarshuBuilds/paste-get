@@ -26,6 +26,10 @@ Menu names may differ slightly between HyperOS versions and regions *(to verify 
    (paste-get restarts): that prepares mode B for the next reboot.
 
 ## 3. Keep paste-get alive
+paste-get lists these in its own settings (the gear → **Keep paste-get running**): battery and
+notifications are checked by the app; Autostart and Battery saver can't be read by any app, so
+you tick them there once done.
+
 Settings → Apps → Manage apps → paste-get:
 - **Autostart**: on
 - **Battery saver**: No restrictions
@@ -38,6 +42,7 @@ Also: open recent apps, long-press paste-get → **lock** it.
 |---|---|
 | Photos and videos: **Allow all** | Detect new screenshots ("selected photos" breaks detection) |
 | Notifications | Foreground service + "sent ✓" feedback |
+| Unrestricted battery use (Android asks "Let app always run in the background?") | Keep the connection to the PC when the screen is off |
 | Camera | Scan the pairing QR code |
 | Shizuku: allow paste-get | Read the clipboard as the shell user (mode A) |
 | Display over other apps (granted through Shizuku) | Mode B: a window shown for a moment reads the clipboard |

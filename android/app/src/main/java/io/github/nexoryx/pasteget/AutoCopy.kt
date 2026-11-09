@@ -8,9 +8,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -52,11 +49,6 @@ class AutoCopy(private val app: PasteGetApp) {
     val builtIn = BuiltInShell(app, ::copied, ::builtInReady)
     val shizuku = ShizukuClipboard(app, ::copied)
     val logs = LogClipboard(app, ::copied)
-
-    private val lastCopyState = MutableStateFlow<LastCopy?>(null)
-
-    /** The last copy sent automatically. */
-    val lastCopy: StateFlow<LastCopy?> = lastCopyState.asStateFlow()
 
     private var scope: CoroutineScope? = null
 
@@ -118,7 +110,7 @@ class AutoCopy(private val app: PasteGetApp) {
             return
         }
         Log.i(TAG, "copy of $bytes bytes sent to $sentTo computers")
-        lastCopyState.value = LastCopy(System.currentTimeMillis(), bytes, sentTo)
+        app.activity.sent(ActivityKind.TEXT, bytes, sentTo, automatic = true, sensitive = copy.sensitive)
     }
 
     private companion object {
@@ -126,6 +118,3 @@ class AutoCopy(private val app: PasteGetApp) {
         const val SHIZUKU_GRACE_MS = 3_000L
     }
 }
-
-/** A copy the automatic copy sent, at [atMillis] (wall clock), to [sentTo] computers. */
-data class LastCopy(val atMillis: Long, val bytes: Int, val sentTo: Int)

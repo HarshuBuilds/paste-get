@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#3949AB</color>
-    <!-- Close to the Compose background, so nothing flashes when it draws. -->
+    <!-- The Compose background in paste-get's own colors (ui/theme/Color.kt), so nothing
+         flashes when it draws. -->
     <color name="window_background">#FBF8FF</color>
 </resources>

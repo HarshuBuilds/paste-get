@@ -8,8 +8,22 @@ import android.content.Intent
 import android.os.Build
 import android.service.quicksettings.TileService
 
-/** Quick Settings tile: one tap sends the clipboard to the connected computers. */
+/**
+ * Quick Settings tile: one tap sends the clipboard to the connected computers. It shows whether
+ * one is connected, and which ([TileLook]); the service asks for an update when that changes.
+ */
 class ClipboardTileService : TileService() {
+    override fun onStartListening() {
+        super.onStartListening()
+        val tile = qsTile ?: return
+        val paired = pasteGet.client.pairedComputers()
+        val connected = pasteGet.connected.value
+        val look = TileLook.of(this, paired.map { it.name }, paired.filter { it.deviceId in connected }.map { it.name })
+        tile.state = look.state
+        tile.subtitle = look.subtitle
+        tile.updateTile()
+    }
+
     @SuppressLint("StartActivityAndCollapseDeprecated")
     override fun onClick() {
         val intent = Intent(this, SendClipboardActivity::class.java)

@@ -23,7 +23,11 @@ sealed interface PairingState {
     /** Pairing: about 10 s at most per address. */
     data object Busy : PairingState
 
-    data class Failed(val error: PairingError) : PairingState
+    /**
+     * [retry]: the code, when it is still worth trying again as it is (the computer couldn't be
+     * reached). Trying again goes back to [Confirm].
+     */
+    data class Failed(val error: PairingError, val retry: Confirm? = null) : PairingState
 }
 
 /** A failed pairing: what to tell the user ([message]), and the technical [details]. */

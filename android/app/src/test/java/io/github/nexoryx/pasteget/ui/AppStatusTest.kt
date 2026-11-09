@@ -27,6 +27,7 @@ class AppStatusTest {
 
     private val copySteps = setOf(
         NextStep.SET_UP_BUILT_IN,
+        NextStep.ALLOW_NOTIFICATIONS,
         NextStep.FINISH_BUILT_IN_PAIRING,
         NextStep.RETRY_BUILT_IN,
         NextStep.CONNECT_WIFI,
@@ -42,15 +43,21 @@ class AppStatusTest {
                 for (shizuku in ShizukuStatus.entries) {
                     for (logs in LogStatus.entries) {
                         for (fallback in fallbacks) {
-                            val health = copiesHealth(on, BuiltInState(builtIn), ShizukuState(shizuku), logs, fallback)
-                            val case = "on=$on $builtIn $shizuku $logs $fallback: $health"
-                            assertEquals(case, Feature.COPIES, health.feature)
-                            assertConsistent(case, health)
-                            if (health.step != null) assertTrue(case, health.step in copySteps)
-                            if (!on) assertEquals(case, Health.OFF, health.health)
-                            // Working means something reads copies, and nothing else.
-                            val reading = on && CopyMode.of(BuiltInState(builtIn), ShizukuState(shizuku), logs) != CopyMode.MANUAL
-                            assertEquals(case, reading, health.health == Health.WORKING)
+                            for (canNotify in listOf(true, false)) {
+                                val health = copiesHealth(on, BuiltInState(builtIn), ShizukuState(shizuku), logs, fallback, canNotify)
+                                val case = "on=$on $builtIn $shizuku $logs $fallback notify=$canNotify: $health"
+                                assertEquals(case, Feature.COPIES, health.feature)
+                                assertConsistent(case, health)
+                                if (health.step != null) assertTrue(case, health.step in copySteps)
+                                if (!on) assertEquals(case, Health.OFF, health.health)
+                                // Working means something reads copies, and nothing else.
+                                val reading = on && CopyMode.of(BuiltInState(builtIn), ShizukuState(shizuku), logs) != CopyMode.MANUAL
+                                assertEquals(case, reading, health.health == Health.WORKING)
+                                // Never a step that needs the notification while it can't show.
+                                if (!canNotify) {
+                                    assertTrue(case, health.step != NextStep.SET_UP_BUILT_IN && health.step != NextStep.FINISH_BUILT_IN_PAIRING)
+                                }
+                            }
                         }
                     }
                 }
@@ -60,8 +67,13 @@ class AppStatusTest {
 
     @Test
     fun copiesTable() {
-        fun health(builtIn: BuiltInStatus, shizuku: ShizukuStatus, logs: LogStatus, fallback: FallbackAccess = none) =
-            copiesHealth(true, BuiltInState(builtIn), ShizukuState(shizuku), logs, fallback)
+        fun health(
+            builtIn: BuiltInStatus,
+            shizuku: ShizukuStatus,
+            logs: LogStatus,
+            fallback: FallbackAccess = none,
+            canNotify: Boolean = true,
+        ) = copiesHealth(true, BuiltInState(builtIn), ShizukuState(shizuku), logs, fallback, canNotify)
 
         val builtIn = health(BuiltInStatus.WATCHING, ShizukuStatus.OFF, LogStatus.OFF)
         assertEquals(Health.WORKING, builtIn.health)
@@ -74,6 +86,15 @@ class AppStatusTest {
         assertEquals(Health.BLOCKED, fresh.health)
         assertEquals(NextStep.SET_UP_BUILT_IN, fresh.step)
         assertEquals(CopyMode.MANUAL, fresh.mode)
+        // Its code is typed into a notification: those come first.
+        val silenced = health(BuiltInStatus.NOT_SET_UP, ShizukuStatus.NOT_INSTALLED, LogStatus.NEEDS_PERMISSIONS, canNotify = false)
+        assertEquals(NextStep.ALLOW_NOTIFICATIONS, silenced.step)
+        assertEquals(
+            NextStep.ALLOW_NOTIFICATIONS,
+            health(BuiltInStatus.PAIRING, ShizukuStatus.OFF, LogStatus.NEEDS_PERMISSIONS, canNotify = false).step,
+        )
+        // Once set up, it runs without them.
+        assertEquals(Health.WORKING, health(BuiltInStatus.WATCHING, ShizukuStatus.OFF, LogStatus.OFF, canNotify = false).health)
 
         assertEquals(NextStep.CONNECT_WIFI, health(BuiltInStatus.NEEDS_WIFI, ShizukuStatus.OFF, LogStatus.NEEDS_PERMISSIONS).step)
         assertEquals(NextStep.RETRY_BUILT_IN, health(BuiltInStatus.FAILED, ShizukuStatus.OFF, LogStatus.NEEDS_PERMISSIONS).step)

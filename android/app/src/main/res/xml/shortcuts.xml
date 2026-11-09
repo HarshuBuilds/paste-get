@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-press the launcher icon: send the clipboard, pair a computer, or open the history.
+     The launcher starts them as paste-get itself, so the activities needn't be exported. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_send"
+        android:shortcutId="send"
+        android:shortcutLongLabel="@string/tile_label"
+        android:shortcutShortLabel="@string/shortcut_send">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="io.github.nexoryx.pasteget.SendClipboardActivity"
+            android:targetPackage="io.github.nexoryx.pasteget" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_pair"
+        android:shortcutId="pair"
+        android:shortcutLongLabel="@string/pair_button"
+        android:shortcutShortLabel="@string/shortcut_pair">
+        <intent
+            android:action="io.github.nexoryx.pasteget.action.PAIR"
+            android:targetClass="io.github.nexoryx.pasteget.MainActivity"
+            android:targetPackage="io.github.nexoryx.pasteget" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_history"
+        android:shortcutId="history"
+        android:shortcutLongLabel="@string/tab_history"
+        android:shortcutShortLabel="@string/tab_history">
+        <intent
+            android:action="io.github.nexoryx.pasteget.action.HISTORY"
+            android:targetClass="io.github.nexoryx.pasteget.MainActivity"
+            android:targetPackage="io.github.nexoryx.pasteget" />
+    </shortcut>
+</shortcuts>

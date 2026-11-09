@@ -80,6 +80,17 @@ pub struct PairedComputer {
     pub addresses: Vec<String>,
 }
 
+/// What a pairing code says about the computer, for the user to check before pairing. Never its
+/// secret.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
+pub struct InviteSummary {
+    pub device_id: String,
+    /// `None` when the code gives no name.
+    pub name: Option<String>,
+    /// Socket addresses, in the order pairing tries them.
+    pub addresses: Vec<String>,
+}
+
 /// A clip a computer acknowledged.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct ClipDelivery {
@@ -312,8 +323,12 @@ impl PhoneClient {
     }
 
     /// Sends text to every connected computer. Returns how many.
-    pub fn send_text(&self, text: String) -> u32 {
-        self.send(mime::TEXT, text.into_bytes(), false)
+    ///
+    /// `sensitive` text (a password manager marked it so on the clipboard) is sent marked as
+    /// such, so computers keep it out of history, and it doesn't wait for computers that are
+    /// away.
+    pub fn send_text(&self, text: String, sensitive: bool) -> u32 {
+        self.send(mime::TEXT, text.into_bytes(), sensitive)
     }
 
     /// Sends a PNG or JPEG image, as it is, to every connected computer. Returns how many.
@@ -346,6 +361,22 @@ impl PhoneClient {
         lock(&self.state.guard).should_send(&clip.mime_type, &clip.data);
         self.broadcast_clip(&clip)
     }
+}
+
+/// What `invite_uri` (a scanned code or a `pasteget://` link) says, read as
+/// [`PhoneClient::pair`] reads it; `None` if pairing would refuse it. None of it is checked:
+/// anyone can make a code with any name and addresses. Pairing proves the computer has the
+/// code's key.
+#[uniffi::export]
+pub fn describe_invite(invite_uri: String) -> Option<InviteSummary> {
+    let invite: PairingInvite = invite_uri.trim().parse().ok()?;
+    // The core names a nameless device; the app says so in the user's language instead.
+    let name = Some(invite.device_name).filter(|name| *name != sanitize_device_name(""));
+    Some(InviteSummary {
+        device_id: invite.device_id.to_string(),
+        name,
+        addresses: invite.addresses.iter().map(SocketAddr::to_string).collect(),
+    })
 }
 
 /// The one-time code (2FA) in a notification's text, digits only, if it has one.
@@ -596,11 +627,66 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pasteget_core::pairing::PairingWindow;
     use pasteget_core::session::SessionError;
     use pasteget_core::transport;
+    use std::time::Instant;
 
     fn addr(s: &str) -> SocketAddr {
         s.parse().unwrap()
+    }
+
+    fn invite_uri(name: &str, addresses: Vec<SocketAddr>) -> (Identity, String) {
+        let pc = Identity::generate().unwrap();
+        let window = PairingWindow::open(Instant::now()).unwrap();
+        let uri = window.invite(&pc, name, addresses).to_uri();
+        (pc, uri)
+    }
+
+    #[test]
+    fn an_invite_is_described_as_pairing_reads_it() {
+        // A PC with many interfaces (VPN, Hyper-V, Docker…) lists every one.
+        let addresses: Vec<SocketAddr> = (1..=12)
+            .map(|i| addr(&format!("10.0.{i}.2:47290")))
+            .collect();
+        let (pc, uri) = invite_uri("HP-AIO", addresses.clone());
+
+        let summary = describe_invite(format!("  {uri}\n")).unwrap();
+
+        assert_eq!(summary.device_id, pc.device_id().to_string());
+        assert_eq!(summary.name.as_deref(), Some("HP-AIO"));
+        assert_eq!(
+            summary.addresses,
+            addresses
+                .iter()
+                .map(SocketAddr::to_string)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_nameless_invite_has_no_name() {
+        let (_, uri) = invite_uri("", vec![addr("192.168.1.20:47290")]);
+
+        assert_eq!(describe_invite(uri).unwrap().name, None);
+    }
+
+    #[test]
+    fn what_pairing_refuses_is_not_described() {
+        let (_, uri) = invite_uri("HP-AIO", vec![addr("192.168.1.20:47290")]);
+        let refused = [
+            String::new(),
+            "https://example.com/".to_owned(),
+            uri.replace("v=0", "v=1"),
+            // A key twice: one value could be shown and the other used.
+            format!("{uri}&n=Other"),
+            uri.replace("47290", "port"),
+        ];
+
+        for bad in refused {
+            assert!(bad.parse::<PairingInvite>().is_err(), "{bad}");
+            assert_eq!(describe_invite(bad.clone()), None, "{bad}");
+        }
     }
 
     /// Records whether the app was told a computer connected.

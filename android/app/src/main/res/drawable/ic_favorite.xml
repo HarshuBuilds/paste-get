@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Material Symbols Rounded "favorite" (Apache-2.0): see android/THIRD_PARTY_NOTICES.md. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M480,813q-14,0-28.5-5q-14.5-5-25.5-16l-69-63q-106-97-191.5-192.5q-85.5-95.5-85.5-210.5q0-94,63-157q63-63,157-63q53,0,100,22.5q47,22.5,80,61.5q33-39,80-61.5q47-22.5,100-22.5q94,0,157,63q63,63,63,157q0,115-85,211q-85,96-193,193l-68,62q-11,11-25.5,16q-14.5,5-28.5,5ZM442,270q-29-41-62-62.5q-33-21.5-80-21.5q-60,0-100,40q-40,40-40,100q0,52,37,110.5q37,58.5,88.5,113.5q51.5,55,106,103q54.5,48,88.5,79q34-31,88.5-79q54.5-48,106-103q51.5-55,88.5-113.5q37-58.5,37-110.5q0-60-40-100q-40-40-100-40q-47,0-80,21.5q-33,21.5-62,62.5q-7,10-17,15q-10,5-21,5q-11,0-21-5q-10-5-17-15Z" />
+</vector>

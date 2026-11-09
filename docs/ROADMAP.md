@@ -59,7 +59,8 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
 - [x] Mode A: Shizuku user service listening as shell, with reflection fallbacks
 - [x] One-time grants through Shizuku (`READ_LOGS`, overlay)
 - [x] Mode B: `READ_LOGS` + overlay fallback
-- [x] Health screen (current mode, Shizuku state, last sync): a card on the home screen
+- [x] Health screen (current mode, Shizuku state, last sync): the home screen's status card and
+  the *Send what you copy* screen (how copies are read, next step, details)
 - [x] Verified on the POCO M8 5G (`TESTING.md`, section 8), with Windows 11, November 2026.
   HyperOS shows Android's "Shell pasted from your clipboard" notice on each copy. Which
   `IClipboard` signature it has is still to be read from the log
@@ -125,10 +126,28 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
   → *Forget this device*; its session ends at once. The phone is told (`Unpaired` in the
   session, or `Refusal`, `NOT_PAIRED`, when it next dials), forgets the PC too and shows "<PC>
   unpaired this phone". Forgetting a connected PC on the phone tells the PC the same way
-  (`TESTING.md`, P15)
+  (`TESTING.md`, P25)
 - [x] The phone asks before pairing: a scanned code or a `pasteget://` link (which any web page
   or message can open) shows the name and addresses it gives and pairs only on *Pair*. Pairing
   errors are explained in the phone's language, with the technical message under *Details*
+- [x] The phone's screens, redrawn: Home (a status card with one next step, what paste-get
+  sends, the last clips with their latency), History (what was sent and received since the app
+  started: kind, size, time, never contents, until the history store exists), Devices (each
+  computer's page, this phone's ID, pull to refresh), a screen per feature, Settings
+  (appearance, language, the tile, licences); the notification and the tile name the computers;
+  launcher shortcuts; 640 dp columns on wide screens (`TESTING.md`, P14–P19)
+- [x] The built-in mode's set-up, step by step: Wi-Fi, notifications, Developer options and
+  Wireless debugging checked live (also in split screen), Xiaomi's own words, the pairing's
+  progress mirrored from the notification, a code field in split screen, and each failure
+  explained with **Retry** (`TESTING.md`, W9–W12)
+- [x] *Keep paste-get running*, in Settings: battery optimisation (Android's own "always run in
+  the background?" question) and notifications checked live; on Xiaomi phones, Autostart and
+  Battery saver (behind `VendorSettings`, with App info as the fallback), ticked by hand since
+  no API reads them, and the recent-apps lock as a tip (`TESTING.md`, P20)
+- [x] A first-run guide, on phones with no pairing: what paste-get is, the computer's side,
+  pairing, notifications (asked on their own page), what to send and each choice's set-up,
+  keeping it running, then a test sentence copied for real and "Arrived on <PC> in … ms", or
+  what to check after 5 s (`TESTING.md`, P0)
 - [x] *Settings…* window in the tray: this computer's name, notifications, links, hotkeys and
   starting at login, checked before saving. Notifications and links apply at once
   (`pasteget` control request `reload_settings`); a new name or hotkeys restart the daemon the
