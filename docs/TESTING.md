@@ -150,6 +150,7 @@ The phone and the PC must be on the **same Wi-Fi**. On the PC, run `pasteget dae
 | P15 | Quit the PC's daemon, pull down Quick Settings; start it again | The tile reads "Offline: sends when back", then the PC's name, lit. The notification says "Looking for <PC>…", then "Connected to <PC>" |
 | P16 | Long-press paste-get's launcher icon: **Send**, then **Pair**, then **History** | Send sends the clipboard (as the tile does); Pair opens the scanner; History opens the History tab |
 | P17 | Copy text, pull down the notification shade, tap **Send clipboard** in paste-get's notification | "Sent to 1 computer"; `Ctrl+V` on the PC pastes it |
+| P18 | Turn the phone to landscape on Home, Devices and Settings (or open paste-get on a tablet) | A rail on the left instead of the bottom bar; each screen's column stays narrow and centred, switches next to their labels. Scrolled to the end, the last item clears the gesture bar and, on Devices, the Pair button |
 | P11 | PC: `pasteget pair`, then quit the daemon. Phone: scan the code, **Pair** | After a few seconds: "Pairing didn't work" and what to check (same Wi-Fi, paste-get open on the PC), in the phone's language. **Details** shows the technical error |
 | P12 | Last: in the **Devices** tab, tap the PC, then **Forget this computer…**, then **Cancel**; tap it again, then **Forget** | Cancel keeps the PC. Forget removes it from the list, and the phone stops connecting to it. The PC still lists the phone (forget it there too, or pair again) |
 
