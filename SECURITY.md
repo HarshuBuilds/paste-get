@@ -74,11 +74,16 @@ running `adb`: that is how it starts its shell helper. Consequences:
 
 ## The clipboard history (being built, off by default)
 
-The history store is in the core (`core/src/history`), and the phone API can record into it
-(`ffi/src/history.rs`), but no app turns it on yet. When one does:
+The history store is in the core (`core/src/history`). The phone API can record into it
+(`ffi/src/history.rs`), but the app doesn't turn it on yet. On a PC it is on only once
+`settings.toml` says so (`[history]`, `enabled = true`). When it is on:
 - It stays on the device, in a folder only paste-get can open on the phone (one that is never
   backed up), and only your user account on a PC (mode 0700 on Linux and macOS, set when the
-  history opens). It is never sent anywhere.
+  history opens): `%LOCALAPPDATA%\paste-get\<profile>\history` on Windows, which doesn't roam
+  with the profile, and `~/.local/share/paste-get/<profile>/history` on Linux, outside
+  `~/.config`, which dotfile repositories often hold. It is never sent anywhere.
+- Images from other devices are decoded on the PC to make thumbnails (`image` crate, 512 MiB
+  of memory at most); they come from paired devices only.
 - **Never kept:** clips marked sensitive (password managers), 2FA codes (and copies of their
   digits made just before or in the 15 minutes after), and anything that looks like a private
   key, a 2FA seed (`otpauth://`), an API token, a card number or a generated password

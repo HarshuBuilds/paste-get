@@ -500,6 +500,32 @@ land over it.
 | Q9 | Turn the phone's Wi-Fi off. Right away copy a line on the PC, then a few seconds later another line on the phone, and turn Wi-Fi back on | Once the phone reconnects, both paste the phone's line: the PC's log says "clip received", the phone keeps its own |
 | Q10 | Same as Q9, but copy on the phone first, then on the PC | Both paste the PC's line; the PC's log says "clip dropped: a newer copy from here is on its way to the device" |
 
+## 16. Clipboard history on the PC (v0.2)
+
+Off by default. To turn it on, add these lines at the end of `settings.toml`
+(`%APPDATA%\paste-get\default\` on Windows, `~/.config/paste-get/default/` on Linux), then
+restart paste-get (or save the tray's *Settings…* window, which applies it at once):
+
+```toml
+[history]
+enabled = true
+```
+
+Use the two daemons of section 2.
+
+| # | Do this | Expected |
+|---|---|---|
+| H1 | Turn the history on as above | The log says `history: on`, with its folder: `%LOCALAPPDATA%\paste-get\default\history` on Windows (not under Roaming), `~/.local/share/paste-get/default/history` on Linux, where `ls -ld` shows `drwx------` |
+| H2 | Copy `vérification du compte` in any app, then `pasteget --profile phone send "du téléphone"` | `pasteget history list`: "du téléphone" first, from the second daemon's name (as `pasteget status` shows it), then the copy, from "this computer" |
+| H3 | `pasteget history search verif`, then `pasteget history search site:github.com` after copying a GitHub link | Each lists only what it should; accents don't matter |
+| H4 | Copy something else, then `pasteget history copy <ID>` with the ID of H2's copy; `Ctrl+V` | The H2 text is pasted. Terminal 2 logs no `clip received` for it: it isn't sent again |
+| H5 | Copy a password from KeePassXC (Linux) or Bitwarden (Windows); on the phone, get a 2FA code sent to the PC | Neither is in `pasteget history list`; `pasteget history stats` counts them as kept out |
+| H6 | Take a screenshot to the clipboard; `pasteget history list` | "Image (PNG, …)" is listed; `pasteget history copy <ID>` puts it back, and it pastes in an image editor |
+| H7 | Stop paste-get and start it again; `pasteget history list` | The same items |
+| H8 | Hyprland: `pasteget history list --plain \| fuzzel --dmenu \| pasteget history copy --stdin` (or `wofi --dmenu`) | One line per item, even for texts of several lines; the one picked is on the clipboard |
+| H9 | `pasteget history pin <ID>`, `pasteget history clear`, then `pasteget history clear --last 1h --pinned` | The first clear keeps the pinned item (marked `*`); the second deletes it if it was copied in the last hour |
+| H10 | Set `enabled = false`, restart; `pasteget history list` | "the clipboard history is off…". The folder is left as it was: delete it to remove what was kept |
+
 ## Known limitations
 
 - If the PC changes address while the phone (or a PC that joined it) is connected, the other
@@ -525,6 +551,9 @@ land over it.
 - The identity key is a file readable only by your user, not yet in the OS keystore.
 - The tray's *Recent* list is in memory only, holds the last 10 clips, and forgets them when the
   daemon stops. Sensitive clips (passwords) never appear in it. Pausing doesn't survive a restart.
+- The PC's clipboard history has no window in the tray yet: `pasteget history`. It records what
+  syncs, so nothing while syncing is paused but what is sent on purpose. Turning it off keeps
+  what it holds until it is cleared or its folder deleted.
 - Hotkeys are read from `settings.toml` at start: restart paste-get after changing them. On
   GNOME and other desktops without the global shortcuts portal, bind the commands yourself.
 - Text and images only (PNG and JPEG on the wire). Copying a file in a file manager isn't synced.

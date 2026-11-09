@@ -195,6 +195,15 @@ History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart ac
       can't open; an item copied back isn't sent again (`ffi/tests/phone_and_pc.rs`)
     - [ ] Android: turning it on, the screens
   - [ ] PC: history in the daemon, `pasteget history`, the tray's history window
+    - [x] Daemon: `[history]` in `settings.toml` (off by default, applied without a restart),
+      kept in `%LOCALAPPDATA%` or `~/.local/share` (`PASTEGET_HOME` too), what the *Recent* list
+      gets (sensitive clips only counted), JPEG thumbnails of images, items deleted when they
+      expire; a history that can't open leaves syncing as it was
+    - [x] Control requests (`history`, `history_copy`, `history_pin`, `history_delete`,
+      `history_clear`, `history_stats`; control version 2) and `pasteget history list`, `search`,
+      `copy` (also `--stdin`, for pickers), `pin`, `unpin`, `delete`, `clear`, `stats`; `--plain`
+      prints one escaped line per item for fuzzel or wofi (`TESTING.md`, section 16)
+    - [ ] The tray's history window
 Desktop identity key in the OS keystore when one is available (M2 stores it in a user-only file,
 like SSH keys, because Hyprland setups often run no Secret Service).
 

@@ -28,6 +28,7 @@ make trust decisions. In order of risk:
 | `desktop/src/control.rs` | Local control channel: Unix socket in a 0700 directory, Windows named pipe | ~550 |
 | `desktop/src/config.rs` | Key file permissions (0600), profile names (path traversal) | part |
 | `ffi/src/lib.rs` | The same decisions on the phone side, through the core | part |
+| `desktop/src/history.rs` | The PC's history: the same, plus thumbnails of images from other devices, and the `pasteget history` line format | ~340 |
 | `ffi/src/history.rs` | The phone's history: what the phone copies, sends and receives goes to `HistoryStore::record` on a thread of its own | ~870, half of it type mappings |
 | `android/…/OneTimeCodes.kt` | Notification listener for 2FA codes: what it reads, what it sends | ~170 |
 | `ffi/src/wireless_adb/` | ADB client for the phone's own wireless debugging: pairing (TLS 1.3 + BoringSSL SPAKE2 + AES-GCM), `exec:` over TLS | ~700 |
@@ -163,7 +164,9 @@ Each line is a claim to check. "→" points at where it's enforced.
     On the phone, every clip goes through it too, sensitive ones included (they are counted),
     from a queue that drops clips rather than make a session wait; a history that can't open
     or write leaves syncing as it was. → `ffi/src/history.rs`, `ffi/src/lib.rs` (`State::keep`),
-    tests `the_history_never_keeps_a_secret` and `syncing_goes_on_when_the_history_cant_open`
+    tests `the_history_never_keeps_a_secret` and `syncing_goes_on_when_the_history_cant_open`.
+    On the PC, likewise, what the *Recent* list gets. → `desktop/src/history.rs`,
+    `desktop/src/daemon.rs` (`remember_clip`), test `a_sensitive_clip_adds_no_row`
 31. Deleting from the history leaves nothing of the clip: rows, body, thumbnail and search
     entries go in one transaction (`secure_delete`, FTS5 secure-delete), the original file
     after the commit, then the free pages and the WAL are emptied. The same goes for an expired

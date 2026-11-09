@@ -15,6 +15,9 @@
 //! Devices that paired with us (phones) connect in. Devices we paired with by scanning their
 //! code (`pasteget join`) are dialed out and redialed after disconnects, also at the addresses
 //! mDNS finds them at, since their address may change.
+//!
+//! When `settings.toml` turns it on, the clipboard history ([`History`]) records what goes
+//! through the *Recent* list, sensitive clips included (it only counts them).
 
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
@@ -26,6 +29,7 @@ use anyhow::{Context, Result, bail};
 use pasteget_core::clip::{Clip, Kind, mime};
 use pasteget_core::detect;
 use pasteget_core::echo::EchoGuard;
+use pasteget_core::history::{self as store, ItemId};
 use pasteget_core::identity::{DeviceId, Identity};
 use pasteget_core::pairing::{
     self, Dial, Opening, PairedDevice, PairingError, PairingInvite, PairingRequest, PairingWindow,
@@ -42,9 +46,11 @@ use tokio::time::{sleep, timeout};
 use crate::admission::{Admission, Ticket};
 use crate::clipboard::{ClipboardBackend, ClipboardWatcher, Content, DEFAULT_POLL_INTERVAL};
 use crate::config::{
-    KnownDevice, KnownDevices, LoadedDevices, MAX_ADDRESSES, NotifyFor, Profile, Settings,
+    HistorySettings, KnownDevice, KnownDevices, LoadedDevices, MAX_ADDRESSES, NotifyFor, Profile,
+    Settings,
 };
 use crate::discovery::{self, Advertiser, Announced};
+use crate::history::History;
 use crate::hotkeys::{self, Action, Hotkeys};
 use crate::i18n::{french, tr};
 use crate::notify::{Notifier, Received};
@@ -143,6 +149,8 @@ struct Shared {
     started_with: Settings,
     paused: AtomicBool,
     recent: Mutex<RecentClips>,
+    /// The clipboard history, while `settings.toml` has it on and it could open.
+    history: Mutex<Option<Arc<History>>>,
     events: broadcast::Sender<Event>,
     tasks: Mutex<JoinSet<()>>,
     /// The redial loops of devices we joined, to stop when one is unpaired.
@@ -208,6 +216,7 @@ impl Daemon {
             started_with: settings.clone(),
             paused: AtomicBool::new(false),
             recent: Mutex::new(RecentClips::default()),
+            history: Mutex::new(None),
             events,
             tasks: Mutex::new(JoinSet::new()),
             dialers: Mutex::new(HashMap::new()),
@@ -224,6 +233,9 @@ impl Daemon {
                 .to_owned(),
             );
         }
+
+        // Opened once the port is this daemon's: another daemon of the profile would have it.
+        shared.apply_history_settings(&settings.history);
 
         shared.spawn(accept_loop(Arc::clone(&shared), listener));
         shared.spawn(local_changes_loop(Arc::clone(&shared), changes));
@@ -366,7 +378,8 @@ impl Daemon {
             kind: Kind::Copy,
             origin_clip_id: None,
         };
-        self.shared.remember_clip(&clip, None);
+        self.shared
+            .remember_clip(&clip, store::Context::new(store::Source::SentByHand));
         self.shared.peers.broadcast(&clip, None)
     }
 
@@ -438,10 +451,30 @@ impl Daemon {
         self.shared.clipboard.write(content, |_| {})
     }
 
-    /// Reads `settings.toml` again and applies what can change while running: notifications
-    /// and links. Returns whether the rest (name, port, hotkeys) changed, which takes a restart.
+    /// The clipboard history, or an error saying it is off.
+    pub fn history(&self) -> Result<Arc<History>> {
+        self.shared.history().context(
+            "the clipboard history is off: set `enabled = true` under `[history]` in \
+             settings.toml",
+        )
+    }
+
+    /// Puts an item of the history back on the clipboard. It isn't sent again: the devices may
+    /// be offered it with `send`.
+    pub fn copy_from_history(&self, id: ItemId) -> Result<()> {
+        let content = self
+            .history()?
+            .content(id)?
+            .context("that item is gone, or wasn't kept whole")?;
+        self.shared.clipboard.write(content, |_| {})
+    }
+
+    /// Reads `settings.toml` again and applies what can change while running: notifications,
+    /// links and the history. Returns whether the rest (name, port, hotkeys) changed, which
+    /// takes a restart.
     pub fn reload_settings(&self) -> Result<bool> {
         let settings = self.shared.profile.settings()?;
+        self.shared.apply_history_settings(&settings.history);
         *lock(&self.shared.notify_for) = settings.notify;
         self.shared
             .offer_to_open_links
@@ -587,7 +620,7 @@ impl Shared {
             kind: Kind::Copy,
             origin_clip_id: None,
         };
-        self.remember_clip(&clip, None);
+        self.remember_clip(&clip, store::Context::new(store::Source::SentByHand));
         let sent_to = self.peers.broadcast(&clip, None);
         tracing::info!(mime_type = %clip.mime_type, len = clip.data.len(), sent_to, "clipboard sent");
         Ok(sent_to)
@@ -622,13 +655,60 @@ impl Shared {
         }
     }
 
-    /// Adds a clip to the recent list. Sensitive clips are not kept.
-    fn remember_clip(&self, clip: &Clip, from: Option<DeviceId>) {
+    /// Adds a clip to the recent list and to the history. Sensitive clips are kept by neither:
+    /// the history counts them.
+    fn remember_clip(&self, clip: &Clip, context: store::Context) {
+        let from = context.via.map(|id| self.name_of(&id));
+        if let Some(history) = self.history() {
+            history.record(clip, context);
+        }
         if clip.sensitive {
             return;
         }
-        let from = from.map(|id| self.name_of(&id));
         lock(&self.recent).push(&clip.mime_type, &clip.data, from, SystemTime::now());
+    }
+
+    fn history(&self) -> Option<Arc<History>> {
+        lock(&self.history).clone()
+    }
+
+    /// Opens the history, applies new settings to it, or closes it, as `settings` say. A
+    /// history that can't open leaves syncing as it was, and says so.
+    fn apply_history_settings(&self, settings: &HistorySettings) {
+        if !settings.enabled {
+            if lock(&self.history).take().is_some() {
+                tracing::info!("history: off");
+            }
+            return;
+        }
+        if let Some(history) = self.history() {
+            if let Err(e) = history.set_settings(settings) {
+                tracing::warn!(error = %format!("{e:#}"), "history: new settings not applied");
+            }
+            return;
+        }
+        let dir = self.profile.history_dir();
+        match History::open(&dir, self.identity.device_id(), settings) {
+            Ok(history) => {
+                for device in lock(&self.known).iter() {
+                    history.name_device(device.id, &device.name, 0);
+                }
+                tracing::info!(dir = %dir.display(), "history: on");
+                *lock(&self.history) = Some(Arc::new(history));
+            }
+            Err(e) => {
+                tracing::warn!(error = %format!("{e:#}"), "history: could not open, running without");
+                if let Some(notifier) = &self.notifier {
+                    notifier.notice(
+                        tr(
+                            "paste-get couldn't open its clipboard history: it syncs without it",
+                            "paste-get n'a pas pu ouvrir son historique du presse-papiers : il synchronise sans",
+                        )
+                        .to_owned(),
+                    );
+                }
+            }
+        }
     }
 
     fn name_of(&self, id: &DeviceId) -> String {
@@ -732,6 +812,9 @@ impl SessionEvents for Shared {
                 }
             }
         }
+        if let Some(history) = self.history() {
+            history.name_device(peer, &hello.device_name, hello.platform);
+        }
         tracing::info!(device = %hello.device_name, id = %peer, "connected");
     }
 
@@ -793,7 +876,7 @@ impl SessionEvents for Shared {
             return;
         }
         lock(&self.guard).applied_remote(&clip);
-        self.remember_clip(&clip, Some(peer));
+        self.remember_clip(&clip, store::Context::received_from(peer));
 
         let received = Received {
             image: clip.mime_type != mime::TEXT,
@@ -1080,7 +1163,7 @@ async fn local_changes_loop(shared: Arc<Shared>, mut changes: mpsc::Receiver<Con
             kind: Kind::Copy,
             origin_clip_id: None,
         };
-        shared.remember_clip(&clip, None);
+        shared.remember_clip(&clip, store::Context::new(store::Source::CopiedHere));
         let sent_to = shared.peers.broadcast(&clip, None);
         tracing::info!(mime_type = %clip.mime_type, len = clip.data.len(), sent_to, "local copy");
     }
@@ -2209,6 +2292,181 @@ mod tests {
         assert!(pc.daemon.send_clipboard().await.is_err());
         pc.daemon.perform(Action::SendClipboard).await;
         assert_eq!(*pc.notifications.1.lock().unwrap(), ["Nothing to send"]);
+    }
+
+    /// A daemon with the clipboard history on.
+    async fn start_with_history(name: &str) -> TestDaemon {
+        let home = tempfile::tempdir().unwrap();
+        let profile = Profile::open_in(home.path(), name).unwrap();
+        std::fs::write(
+            profile.dir().join("settings.toml"),
+            format!("device_name = \"{name}\"\n[history]\nenabled = true\n"),
+        )
+        .unwrap();
+        start_in(home, profile).await
+    }
+
+    /// Every item of the history, newest first, once what was queued is recorded.
+    fn history_items(daemon: &Daemon) -> Vec<store::Item> {
+        let history = daemon.history().unwrap();
+        history.wait_for_recorder();
+        history.page(&store::Query::default()).unwrap().items
+    }
+
+    /// Steps 51-52: what's copied here, sent and received is kept, also after a restart.
+    #[tokio::test]
+    async fn the_history_keeps_what_goes_through_and_survives_a_restart() {
+        let pc = start_with_history("pc").await;
+        let laptop = start("laptop").await;
+        let invite = pc.daemon.open_pairing().await.unwrap();
+        laptop.daemon.join(&invite).await.unwrap();
+        assert!(wait_for_async(|| connected(&pc.daemon)).await);
+
+        pc.clipboard.set(Raw::Text("copié ici".into()));
+        assert!(wait_for(|| laptop.clipboard.get() == Some(Raw::Text("copié ici".into()))).await);
+        laptop.clipboard.set(Raw::Text("du portable".into()));
+        assert!(wait_for(|| pc.clipboard.get() == Some(Raw::Text("du portable".into()))).await);
+        pc.daemon.send(Content {
+            mime_type: mime::TEXT.into(),
+            data: b"pasteget send".to_vec(),
+            sensitive: false,
+        });
+
+        let items = history_items(&pc.daemon);
+        let summary: Vec<_> = items
+            .iter()
+            .map(|item| (item.preview.as_str(), item.source))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("pasteget send", store::Source::SentByHand),
+                ("du portable", store::Source::Received),
+                ("copié ici", store::Source::CopiedHere),
+            ]
+        );
+        let laptop_device = items[1].via.as_ref().unwrap();
+        assert_eq!(laptop_device.id, laptop.daemon.device_id());
+        assert_eq!(laptop_device.name, "laptop");
+        assert_eq!(items[1].origin, items[1].via);
+        assert_eq!(items[2].origin, None);
+
+        let pc = restart(pc).await;
+        let again = history_items(&pc.daemon);
+        assert_eq!(again, items);
+        // And an item still goes back on the clipboard.
+        pc.daemon.copy_from_history(items[2].id).unwrap();
+        assert!(wait_for(|| pc.clipboard.get() == Some(Raw::Text("copié ici".into()))).await);
+    }
+
+    /// A sensitive clip, sent or received, adds no row: it is only counted.
+    #[tokio::test]
+    async fn a_sensitive_clip_adds_no_row() {
+        let pc = start_with_history("pc").await;
+        let laptop = start("laptop").await;
+        let invite = pc.daemon.open_pairing().await.unwrap();
+        laptop.daemon.join(&invite).await.unwrap();
+        assert!(wait_for_async(|| connected(&laptop.daemon)).await);
+
+        laptop.daemon.send(Content {
+            mime_type: mime::TEXT.into(),
+            data: b"hunter2 from KeePassXC".to_vec(),
+            sensitive: true,
+        });
+        assert!(
+            wait_for(|| pc.clipboard.get() == Some(Raw::Text("hunter2 from KeePassXC".into())))
+                .await
+        );
+        pc.daemon.send(Content {
+            mime_type: mime::TEXT.into(),
+            data: b"hunter2 from Bitwarden".to_vec(),
+            sensitive: true,
+        });
+
+        assert!(history_items(&pc.daemon).is_empty());
+        let history = pc.daemon.history().unwrap();
+        assert_eq!(history.stats().unwrap().items, 0);
+        assert_eq!(
+            history.kept_out(0).unwrap(),
+            [(store::Reason::Sensitive, 2)]
+        );
+    }
+
+    /// An item put back on the clipboard isn't sent: the other device keeps what it has.
+    #[tokio::test]
+    async fn an_item_copied_back_is_not_sent_again() {
+        let pc = start_with_history("pc").await;
+        let laptop = start("laptop").await;
+        let invite = pc.daemon.open_pairing().await.unwrap();
+        laptop.daemon.join(&invite).await.unwrap();
+        assert!(wait_for_async(|| connected(&pc.daemon)).await);
+        pc.clipboard.set(Raw::Text("un".into()));
+        assert!(wait_for(|| laptop.clipboard.get() == Some(Raw::Text("un".into()))).await);
+        laptop.clipboard.set(Raw::Text("deux".into()));
+        assert!(wait_for(|| pc.clipboard.get() == Some(Raw::Text("deux".into()))).await);
+
+        let first = history_items(&pc.daemon)[1].id;
+        pc.daemon.copy_from_history(first).unwrap();
+
+        assert!(wait_for(|| pc.clipboard.get() == Some(Raw::Text("un".into()))).await);
+        sleep(Duration::from_millis(200)).await;
+        assert_eq!(laptop.clipboard.get(), Some(Raw::Text("deux".into())));
+        assert!(pc.daemon.copy_from_history(ItemId(999)).is_err());
+    }
+
+    /// Off by default; turned on and off again by editing settings.toml, without a restart.
+    #[tokio::test]
+    async fn the_history_is_turned_on_and_off_by_the_settings() {
+        let pc = start("pc").await;
+        let error = pc.daemon.history().unwrap_err().to_string();
+        assert!(error.contains("off"), "{error}");
+        pc.clipboard.set(Raw::Text("before".into()));
+        sleep(Duration::from_millis(100)).await;
+
+        let profile = pc.daemon.shared.profile.clone();
+        let mut settings = profile.settings().unwrap();
+        settings.history.enabled = true;
+        profile.save_settings(&settings).unwrap();
+        assert!(!pc.daemon.reload_settings().unwrap());
+        sleep(Duration::from_millis(100)).await;
+        pc.clipboard.set(Raw::Text("after".into()));
+        assert!(wait_for(|| history_items(&pc.daemon).len() == 1).await);
+        assert_eq!(history_items(&pc.daemon)[0].preview, "after");
+        assert!(profile.history_dir().join(store::DATABASE_FILE).is_file());
+
+        settings.history.enabled = false;
+        profile.save_settings(&settings).unwrap();
+        pc.daemon.reload_settings().unwrap();
+        assert!(pc.daemon.history().is_err());
+    }
+
+    /// A history that can't open leaves the daemon syncing, and says so.
+    #[tokio::test]
+    async fn the_daemon_runs_without_a_history_that_cant_open() {
+        let home = tempfile::tempdir().unwrap();
+        let profile = Profile::open_in(home.path(), "pc").unwrap();
+        std::fs::write(
+            profile.dir().join("settings.toml"),
+            "device_name = \"pc\"\n[history]\nenabled = true\n",
+        )
+        .unwrap();
+        std::fs::write(profile.history_dir(), b"not a folder").unwrap();
+
+        let pc = start_in(home, profile).await;
+
+        assert!(pc.daemon.history().is_err());
+        assert_eq!(
+            *pc.notifications.1.lock().unwrap(),
+            ["paste-get couldn't open its clipboard history: it syncs without it"]
+        );
+        let laptop = start("laptop").await;
+        let invite = pc.daemon.open_pairing().await.unwrap();
+        laptop.daemon.join(&invite).await.unwrap();
+        assert!(wait_for_async(|| connected(&pc.daemon)).await);
+        pc.clipboard.set(Raw::Text("still syncing".into()));
+        assert!(
+            wait_for(|| laptop.clipboard.get() == Some(Raw::Text("still syncing".into()))).await
+        );
     }
 
     async fn wait_for_async<F: Future<Output = bool>>(mut condition: impl FnMut() -> F) -> bool {
