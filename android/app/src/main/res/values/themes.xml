@@ -1,6 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.PasteGet" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- The window behind the Compose UI. values-night/themes.xml has the dark one, so a dark
+         phone never flashes white while the app starts. -->
+    <style name="Theme.PasteGet" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
+
+    <!-- What the home screen shows while it starts: the icon on the window's color, the same on
+         every Android version (core-splashscreen). MainActivity then switches to Theme.PasteGet. -->
+    <style name="Theme.PasteGet.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/window_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="windowSplashScreenIconBackgroundColor">@color/ic_launcher_background</item>
+        <item name="postSplashScreenTheme">@style/Theme.PasteGet</item>
+    </style>
 
     <!-- For activities that do their work and close without showing anything. -->
     <style name="Theme.PasteGet.Invisible" parent="android:Theme.Translucent.NoTitleBar">

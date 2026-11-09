@@ -4,6 +4,7 @@ kotlin = "2.4.21"
 compose-bom = "2026.09.00"
 activity-compose = "1.13.0"
 core-ktx = "1.19.1"
+core-splashscreen = "1.2.0"
 lifecycle = "2.11.0"
 coroutines = "1.11.0"
 jna = "5.19.1"
@@ -14,6 +15,7 @@ robolectric = "4.17"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "core-ktx" }
+androidx-core-splashscreen = { module = "androidx.core:core-splashscreen", version.ref = "core-splashscreen" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity-compose" }
 androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
 compose-bom = { module = "androidx.compose:compose-bom", version.ref = "compose-bom" }

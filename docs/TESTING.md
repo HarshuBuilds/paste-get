@@ -143,6 +143,7 @@ The phone and the PC must be on the **same Wi-Fi**. On the PC, run `pasteget dae
 | P7 | Lock the phone for 5 minutes, unlock, repeat P3 | Still works, without opening the app |
 | P8 | Restart the phone, wait a minute, repeat P3 | Still works (the app restarts on boot) |
 | P9 | Scan the PC's pairing QR code with the **normal camera app** (only if it offers to open the link; not every camera does) | paste-get opens and pairs |
+| P10 | Turn on dark mode, close paste-get (swipe it away in recents), open it again | The start screen and the app are dark from the first frame, with no white flash |
 
 Phone logs never contain clipboard contents either. To get them: `adb logcat -s paste-get`.
 

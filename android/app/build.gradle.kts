@@ -96,6 +96,8 @@ android {
 
 dependencies {
     implementation(libs.androidx.core.ktx)
+    // The same start screen on every Android version, in the dark theme too (Apache-2.0).
+    implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(platform(libs.compose.bom))
