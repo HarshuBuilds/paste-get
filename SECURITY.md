@@ -76,8 +76,9 @@ The history store is in the core (`core/src/history`) but no app turns it on yet
   backed up), and only your user account on a PC (mode 0700 on Linux and macOS, set when the
   history opens). It is never sent anywhere.
 - **Never kept:** clips marked sensitive (password managers), 2FA codes (and copies of their
-  digits made just before or in the 15 minutes after), and anything that looks like a private key, a 2FA seed (`otpauth://`), an API token, a card number or a generated
-  password (`core/src/detect.rs`). Only how many were kept out is counted. A number of 4 to 8
+  digits made just before or in the 15 minutes after), and anything that looks like a private
+  key, a 2FA seed (`otpauth://`), an API token, a card number or a generated password
+  (`core/src/detect.rs`). Only how many were kept out is counted. A number of 4 to 8
   digits alone is kept for 15 minutes: then it is hidden, and deleted like below the next time
   the history applies its limits (after the next clip, or when the app's timer for it fires).
 - **Not encrypted by paste-get in this version.** It relies on the device's disk encryption:

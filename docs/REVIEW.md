@@ -137,8 +137,8 @@ Each line is a claim to check. "→" points at where it's enforced.
     → `core/src/detect.rs`, `core/src/clip.rs`, `OneTimeCodes.kt`, `ShellCommands.codeAccessGrants`
 30. The clipboard history writes nothing about a clip that is sensitive, a one-time code (or a
     copy of its digits, however spaced, in the next 15 minutes; a copy made just before is
-    deleted when the code arrives), or matched by `detect::looks_secret`, except a
-    count per reason and day; `HistoryStore::record` is the only way in. Every byte kept is
+    deleted when the code arrives), or matched by `detect::looks_secret`, except a count per
+    reason and day; `HistoryStore::record` is the only way in. Every byte kept is
     checked (texts over 1 MiB keep their first 4 KiB only). Errors keep SQLite's result code,
     never its message, which can quote a search. → `core/src/history/record.rs`,
     `core/src/detect.rs` (fuzz target `detect`), tests `secrets_are_kept_out_and_only_counted`
@@ -149,8 +149,9 @@ Each line is a claim to check. "→" points at where it's enforced.
     entries go in one transaction (`secure_delete`, FTS5 secure-delete), the original file
     after the commit, then the free pages and the WAL are emptied. The same goes for an expired
     item (a number that looks like a code): hidden when it expires, deleted at the next
-    retention. Retention never deletes a pinned item. → `core/src/history/retention.rs`, tests `a_deleted_clip_leaves_nothing_behind`
-    and `an_expired_code_is_hidden_then_leaves_nothing_behind`
+    retention. Retention never deletes a pinned item. → `core/src/history/retention.rs`,
+    tests `a_deleted_clip_leaves_nothing_behind` and
+    `an_expired_code_is_hidden_then_leaves_nothing_behind`
 
 ## Known gaps (not bugs to report, but worth an opinion)
 
