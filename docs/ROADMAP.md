@@ -169,12 +169,14 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
   tray runs (`TESTING.md`, T15–T18). The restart also works while a pairing code is shown or
   was shown: stopping the control channel ends its requests, which no longer keep the old
   daemon and its port
-- [x] Windows: a network marked *Public* (the firewall may then keep the phone out) is said
-  once in a notification, and *Settings…* says how to make it Private, with a one-line `netsh`
-  rule that lets paste-get in on private networks only, to run as administrator; the per-user
-  installer can't add it. Only adapters the phone may use count (not those of VMs, WSL or
-  VPNs), and not when the firewall is off there or a rule already lets paste-get in
-  (`desktop/src/firewall.rs`, fuzz target `firewall`; `TESTING.md`, T35–T39)
+- [x] Windows: a network marked *Public* (the firewall may then keep the phone out), or a
+  firewall rule that blocks paste-get (made when Windows' first question was cancelled), is
+  said once in a notification. *Settings…* always says how to make the network Private, with
+  two `netsh` lines that replace paste-get's rules by one that lets it in on private networks
+  only, to run as administrator; the per-user installer can't add it. Only adapters the phone
+  may use count (not those of VMs, WSL or VPNs), and not when the firewall is off there or a
+  rule already lets paste-get in (`desktop/src/firewall.rs`, fuzz target `firewall`;
+  `TESTING.md`, T35–T40)
 - [x] Windows notifications come from "paste-get" with its icon, not "Windows PowerShell": its
   AppUserModelID is registered for the user, and removed by the uninstaller
 - [x] Received clips never go to the Windows cloud clipboard (Microsoft account sync); they stay

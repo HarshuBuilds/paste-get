@@ -94,9 +94,10 @@ The phone connects straight to the PC, on TCP port 47290, and finds it on the ne
 - **Windows firewall.** At the first start, Windows asks whether to let paste-get use the
   network. If your Wi-Fi is marked *Public*, "private networks" isn't enough, and paste-get
   says so in a notification: mark the network *Private* (Settings → Network & internet → Wi-Fi →
-  your network → *Network profile type*). If the phone still can't connect, the tray's
-  *Settings…* gives a one-line command to run in a terminal opened as administrator; it lets
-  paste-get in on private networks only.
+  your network → *Network profile type*). If the phone still can't connect, or if that first
+  question was cancelled (Windows then blocks paste-get, and says nothing), the tray's
+  *Settings…* gives two lines to run in a terminal opened as administrator: they replace
+  paste-get's firewall rules by one that lets it in on private networks only.
 - **Linux firewall.** Arch has none unless you added one. Fedora Workstation's default zone
   allows ports above 1024 and mDNS, so it usually works as is *(not checked)*. With firewalld
   (openSUSE, Fedora with another zone), the .deb and .rpm install a `paste-get` service; turn it

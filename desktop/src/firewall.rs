@@ -2,7 +2,9 @@
 
 //! Windows: whether its firewall may keep a phone from reaching paste-get. On a network Windows
 //! marks *Public*, the firewall lets paste-get in only if one of its rules allows that, and the
-//! rule added at the first start usually covers private networks only.
+//! rule added at the first start usually covers private networks only. Cancelling Windows'
+//! question at the first start adds rules that block paste-get instead, and a block rule wins
+//! over any allow rule.
 //!
 //! The tray runs [`SCRIPT`] in PowerShell, which reads the network profiles and the program's
 //! firewall rules locally (nothing goes on the network), then [`parse`]s what it prints and
@@ -10,7 +12,7 @@
 //! containers and VPNs often show up as Public "Unidentified network" too.
 
 /// Prints one line per fact, tab-separated: `network` (interface index, category, adapter,
-/// name), `firewall` (profile, enabled), `rule` (action, profiles) for each enabled inbound
+/// name), `firewall` (profile, enabled), `rule` (action, profiles, enabled) for each inbound
 /// rule of the program in `PASTEGET_PROGRAM`, then `rules read` once they could all be read.
 /// Control characters in names are replaced: a Wi-Fi's name is chosen by whoever runs it.
 /// One line: PowerShell reads `-Command -` line by line.
@@ -22,8 +24,8 @@ pub const SCRIPT: &str = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; \
     foreach ($filter in @(Get-NetFirewallApplicationFilter -PolicyStore ActiveStore -ErrorAction Stop | \
     Where-Object { $program -and [Environment]::ExpandEnvironmentVariables($_.Program) -ieq $program })) { \
     Get-NetFirewallRule -AssociatedNetFirewallApplicationFilter $filter -ErrorAction Stop | \
-    Where-Object { $_.Direction -eq 'Inbound' -and $_.Enabled -eq 'True' } | \
-    ForEach-Object { \"rule`t$($_.Action)`t$($_.Profile)\" } }; \"rules`tread\" } catch {}\n";
+    Where-Object { $_.Direction -eq 'Inbound' } | \
+    ForEach-Object { \"rule`t$($_.Action)`t$($_.Profile)`t$($_.Enabled)\" } }; \"rules`tread\" } catch {}\n";
 
 /// A network this computer is connected to, as Windows sees it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,21 +40,25 @@ pub struct Network {
     pub name: String,
 }
 
-/// An enabled inbound firewall rule for paste-get's program.
+/// An inbound firewall rule for paste-get's program.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Rule {
     /// `Allow` rather than `Block`.
     pub allow: bool,
     /// The firewall profiles it applies to: "Private", "Domain, Private", "Any".
     pub profiles: String,
+    /// Unticked in *Allow an app through firewall*: the rule stays, and does nothing.
+    pub enabled: bool,
 }
 
 impl Rule {
     fn covers(&self, profile: &str) -> bool {
-        self.profiles
-            .split(',')
-            .map(str::trim)
-            .any(|p| p.eq_ignore_ascii_case("Any") || p.eq_ignore_ascii_case(profile))
+        self.enabled
+            && self
+                .profiles
+                .split(',')
+                .map(str::trim)
+                .any(|p| p.eq_ignore_ascii_case("Any") || p.eq_ignore_ascii_case(profile))
     }
 }
 
@@ -106,10 +112,14 @@ pub fn parse(output: &str) -> Snapshot {
                 }
             }
             "rule" => {
-                if let Some((action, profiles)) = rest.split_once('\t') {
+                let mut fields = rest.splitn(3, '\t').map(str::trim);
+                if let (Some(action), Some(profiles), enabled) =
+                    (fields.next(), fields.next(), fields.next())
+                {
                     rules.push(Rule {
-                        allow: action.trim().eq_ignore_ascii_case("Allow"),
-                        profiles: profiles.trim().to_owned(),
+                        allow: action.eq_ignore_ascii_case("Allow"),
+                        profiles: profiles.to_owned(),
+                        enabled: !enabled.is_some_and(|e| e.eq_ignore_ascii_case("False")),
                     });
                 }
             }
@@ -121,11 +131,14 @@ pub fn parse(output: &str) -> Snapshot {
     snapshot
 }
 
-/// What may keep a phone out, network by network (their names).
+/// What may keep a phone out, network by network (their names). A network may be in both.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Findings {
     /// Marked Public, and no rule lets paste-get in there (or the rules couldn't be read).
     pub public: Vec<String>,
+    /// A rule blocks paste-get there, or, on a private or domain network, paste-get has rules
+    /// but none lets it in.
+    pub blocked: Vec<String>,
 }
 
 /// The firewall profile of a network category.
@@ -158,16 +171,30 @@ pub fn check(snapshot: &Snapshot, lan: &[u32]) -> Findings {
         {
             continue;
         }
-        let allowed = snapshot
-            .rules
-            .iter()
-            .flatten()
-            .any(|rule| rule.allow && rule.covers(profile));
-        if profile == "Public" && !allowed && !findings.public.contains(&network.name) {
-            findings.public.push(network.name.clone());
+        // No rules at all, even unticked ones: Windows hasn't asked yet, or is asking now.
+        let rules = snapshot.rules.as_deref().filter(|rules| !rules.is_empty());
+        let any = |allow: bool| {
+            rules.is_some_and(|rules| {
+                rules
+                    .iter()
+                    .any(|rule| rule.allow == allow && rule.covers(profile))
+            })
+        };
+        if profile == "Public" && !any(true) {
+            add(&mut findings.public, &network.name);
+        }
+        if any(false) || (profile != "Public" && rules.is_some() && !any(true)) {
+            add(&mut findings.blocked, &network.name);
         }
     }
     findings
+}
+
+/// Adds `name` to `names`, once.
+fn add(names: &mut Vec<String>, name: &str) {
+    if !names.iter().any(|n| n == name) {
+        names.push(name.to_owned());
+    }
 }
 
 /// The interface indexes of the adapters a phone may reach this computer through: up, with an
@@ -208,6 +235,7 @@ mod tests {
         Rule {
             allow,
             profiles: profiles.into(),
+            enabled: true,
         }
     }
 
@@ -220,8 +248,9 @@ mod tests {
                       network\t9\tPublic\tWi-Fi\tA\ttab\r\n\
                       firewall\tDomain\tTrue\r\n\
                       firewall\tPublic\tFalse\r\n\
-                      rule\tAllow\tPrivate\r\n\
-                      rule\tBlock\tDomain, Public\r\n\
+                      rule\tAllow\tPrivate\tTrue\r\n\
+                      rule\tBlock\tDomain, Public\tTrue\r\n\
+                      rule\tAllow\tPublic\tFalse\r\n\
                       rules\tread\r\n\
                       \r\n\
                       not a line\r\n";
@@ -241,7 +270,14 @@ mod tests {
         assert_eq!(snapshot.off, ["Public"]);
         assert_eq!(
             snapshot.rules,
-            Some(vec![rule(true, "Private"), rule(false, "Domain, Public")])
+            Some(vec![
+                rule(true, "Private"),
+                rule(false, "Domain, Public"),
+                Rule {
+                    enabled: false,
+                    ..rule(true, "Public")
+                },
+            ])
         );
         // Rules that couldn't all be read are unknown, not "none".
         assert_eq!(parse("rule\tAllow\tAny\n").rules, None);
@@ -311,12 +347,53 @@ mod tests {
         ];
 
         for (snapshot, warned) in cases {
-            assert_eq!(check(&snapshot, &lan).public, warned, "{snapshot:?}");
+            let findings = check(&snapshot, &lan);
+            assert_eq!(findings.public, warned, "{snapshot:?}");
+            assert!(findings.blocked.is_empty(), "{snapshot:?}");
         }
         // The Public firewall turned off (another firewall in charge, say).
-        let mut off = snapshot(&[&cafe], only_private);
+        let mut off = snapshot(&[&cafe], only_private.clone());
         off.off.push("Public".into());
         assert_eq!(check(&off, &lan), Findings::default());
+
+        // Windows' first-start question cancelled: rules that block paste-get, which win over
+        // any rule that allows it.
+        let blocks = |profiles: &str| Some(vec![rule(true, "Private"), rule(false, profiles)]);
+        let unticked = Rule {
+            enabled: false,
+            ..rule(true, "Private")
+        };
+        // The networks, their rules, then which are said Public and which blocked.
+        type Case<'a> = (
+            &'a [&'a Network],
+            Option<Vec<Rule>>,
+            &'a [&'a str],
+            &'a [&'a str],
+        );
+        let cases: [Case<'_>; 8] = [
+            (&[&home], blocks("Private"), &[], &["Home"]),
+            (&[&home], blocks("Public"), &[], &[]),
+            (
+                &[&cafe, &office],
+                blocks("Any"),
+                &["Café"],
+                &["Café", "corp.example"],
+            ),
+            // Allowed on Public only: a Private network keeps it out too.
+            (&[&home], Some(vec![rule(true, "Public")]), &[], &["Home"]),
+            // Unticked in *Allow an app through firewall*: Windows won't ask again.
+            (&[&home], Some(vec![unticked]), &[], &["Home"]),
+            // No rule yet: Windows is still to ask.
+            (&[&home], Some(Vec::new()), &[], &[]),
+            (&[&home], None, &[], &[]),
+            // Virtual adapters still don't count.
+            (&[&wsl], blocks("Any"), &[], &[]),
+        ];
+        for (networks, rules, public, blocked) in cases {
+            let findings = check(&snapshot(networks, rules.clone()), &lan);
+            assert_eq!(findings.public, public, "{networks:?} {rules:?}");
+            assert_eq!(findings.blocked, blocked, "{networks:?} {rules:?}");
+        }
     }
 
     #[test]

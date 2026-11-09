@@ -225,7 +225,8 @@ fn setup<R: Runtime>(app: &AppHandle<R>, tray: Arc<Tray>) -> Result<()> {
         })
         .build(app)?;
     linux_tray::warn_if_no_tray();
-    // Windows: a Public network keeps the phone out. Said once per network.
+    // Windows: a Public network, or a firewall rule, may keep the phone out. Said once per
+    // network.
     #[cfg(windows)]
     tauri::async_runtime::spawn(async {
         let notifier = DesktopNotifier::start();
@@ -577,8 +578,8 @@ fn hyprland_lines(tray: tauri::State<'_, Arc<Tray>>) -> Result<Option<String>, S
     Ok(Some(lines.join("\n")))
 }
 
-/// Windows: what to do about a network marked Public, for the settings window; `None` when
-/// there is none, and elsewhere.
+/// Windows: what may keep the phone out, and what to do when it can't connect, for the settings
+/// window; `None` elsewhere.
 #[tauri::command]
 async fn network_advice() -> Result<Option<network::Advice>, String> {
     if !cfg!(windows) {
@@ -587,7 +588,7 @@ async fn network_advice() -> Result<Option<network::Advice>, String> {
     // The tray runs the daemon: the firewall rules are for this program.
     let program = std::env::current_exe().map_err(|e| e.to_string())?;
     let findings = network::findings_now(program.clone()).await;
-    Ok(network::advice(&findings, &program))
+    Ok(Some(network::advice(&findings, &program)))
 }
 
 /// The settings window asks for the current values.

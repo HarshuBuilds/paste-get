@@ -65,16 +65,7 @@ textarea.lines {
 }
 section .buttons { margin-top: 8px; }
 section.warning { border-color: var(--bad); }
-input.command {
-  width: 100%;
-  margin-top: 8px;
-  font: 12px/1.5 ui-monospace, "Cascadia Mono", "DejaVu Sans Mono", monospace;
-  color: var(--fg);
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 7px 9px;
-}
+.alert { color: var(--bad); font-size: 13px; margin: 6px 0 0; }
 input:focus-visible, button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 input.hotkey { font-family: ui-monospace, "Cascadia Mono", "DejaVu Sans Mono", monospace; caret-color: transparent; }
 fieldset { border: 0; margin: 0 0 6px; padding: 0; }

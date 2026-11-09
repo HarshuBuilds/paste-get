@@ -40,10 +40,11 @@
       <p class="hint" data-i18n="hotkeysHint">Click a field and press the keys, such as Ctrl+Alt+Shift+P. Backspace turns it off.</p>
     </section>
 
-    <section id="network_section" class="warning" hidden>
+    <section id="network_section" hidden>
       <h2 data-i18n="networkTitle">Network</h2>
+      <p id="network_warning" class="alert" hidden></p>
       <p id="network_text" class="hint"></p>
-      <input id="network_command" class="command" readonly spellcheck="false" aria-label="Command to run as administrator" data-i18n-label="networkCommandLabel">
+      <textarea id="network_command" class="lines" rows="2" readonly spellcheck="false" wrap="off" aria-label="Lines to run as administrator" data-i18n-label="networkCommandLabel"></textarea>
       <div class="buttons">
         <button type="button" id="copy_network" data-i18n="copy">Copy</button>
       </div>

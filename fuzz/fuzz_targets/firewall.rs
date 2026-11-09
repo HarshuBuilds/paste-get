@@ -13,9 +13,11 @@ fuzz_target!(|data: &[u8]| {
     let snapshot = firewall::parse(&String::from_utf8_lossy(data));
     let lan: Vec<u32> = snapshot.networks.iter().map(|network| network.index).collect();
     let findings = firewall::check(&snapshot, &lan);
-    // Only networks it was told about are warned about, each once.
-    for (i, name) in findings.public.iter().enumerate() {
-        assert!(snapshot.networks.iter().any(|network| &network.name == name));
-        assert!(!findings.public[..i].contains(name));
+    // Only networks it was told about are warned about, each once per list.
+    for list in [&findings.public, &findings.blocked] {
+        for (i, name) in list.iter().enumerate() {
+            assert!(snapshot.networks.iter().any(|network| &network.name == name));
+            assert!(!list[..i].contains(name));
+        }
     }
 });

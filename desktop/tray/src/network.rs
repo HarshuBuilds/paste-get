@@ -2,8 +2,9 @@
 
 //! Windows: a network marked *Public* may keep the phone from connecting. Windows' firewall then
 //! blocks what comes in to paste-get (TCP 47290 and mDNS, UDP 5353), unless the network is made
-//! *Private*, where the rule added at paste-get's first start (or the one below) lets it in.
-//! The tray says so once in a notice, and the Settings window says how to fix it.
+//! *Private*, where the rule added at paste-get's first start (or the one below) lets it in. A
+//! rule made when Windows' question at the first start was cancelled blocks it everywhere. The
+//! tray says so once in a notice, and the Settings window always says how to fix it.
 //!
 //! What is checked, and how, is in [`pasteget_desktop::firewall`]: PowerShell reads it locally,
 //! nothing goes on the network.
@@ -18,21 +19,28 @@ use serde::Serialize;
 #[cfg_attr(not(windows), allow(dead_code))]
 const CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
-/// What the Settings window shows about a Public network.
+/// What the Settings window's *Network* part shows, always on Windows: what may keep the phone
+/// out now, if anything, and what to do when it can't connect.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Advice {
+    /// What was found, if anything: shown in red.
+    pub warning: Option<String>,
     pub text: String,
-    /// A firewall rule to add from a terminal opened as administrator.
+    /// Lines to run in a terminal opened as administrator.
     pub command: String,
 }
 
-/// The firewall rule that lets `program` (the tray, which runs the daemon) in on private
-/// networks only, for every port it uses: 47290 (or the one set) and mDNS.
+/// The lines that replace every inbound firewall rule of `program` (the tray, which runs the
+/// daemon) by one that lets it in on private networks only, for every port it uses: 47290 (or
+/// the one set) and mDNS. Removing them first also removes the rules that block it, which would
+/// win over the new one. They work pasted in PowerShell or in the Command Prompt, and can be run
+/// again.
 pub fn firewall_command(program: &Path) -> String {
+    let program = program.display();
     format!(
-        "netsh advfirewall firewall add rule name=\"paste-get\" dir=in action=allow \
-         program=\"{}\" enable=yes profile=private",
-        program.display()
+        "netsh advfirewall firewall delete rule name=all dir=in program=\"{program}\"\n\
+         netsh advfirewall firewall add rule name=\"paste-get\" dir=in action=allow \
+         program=\"{program}\" enable=yes profile=private"
     )
 }
 
@@ -57,49 +65,87 @@ fn treated_as_public(networks: &[String]) -> String {
     }
 }
 
-/// The notice, short: details are in Settings.
-pub fn notice(networks: &[String]) -> String {
-    format!(
-        "{}{}",
-        treated_as_public(networks),
-        tr(
-            ": its firewall may keep your phone from reaching paste-get. paste-get's Settings \
-             say what to do.",
-            " : son pare-feu risque d'empêcher ton téléphone de joindre paste-get. Les réglages \
-             de paste-get disent quoi faire.",
-        )
-    )
+/// "Windows' firewall keeps paste-get out on the network “A”", or "the networks “A” and “B”".
+fn kept_out(networks: &[String]) -> String {
+    let names = quoted(networks);
+    match (french(), networks.len() > 1) {
+        (false, false) => format!("Windows' firewall keeps paste-get out on the network {names}"),
+        (false, true) => format!("Windows' firewall keeps paste-get out on the networks {names}"),
+        (true, false) => format!("Le pare-feu de Windows bloque paste-get sur le réseau {names}"),
+        (true, true) => format!("Le pare-feu de Windows bloque paste-get sur les réseaux {names}"),
+    }
 }
 
-/// What Settings says about the `findings`, with the rule for `program`. `None` when no network
-/// is Public.
-pub fn advice(findings: &Findings, program: &Path) -> Option<Advice> {
-    if findings.public.is_empty() {
-        return None;
-    }
-    let text = format!(
-        "{}{}",
-        treated_as_public(&findings.public),
-        tr(
-            ": its firewall may then keep your other devices from connecting to paste-get. If it \
-             is your home or work network, make it Private: Settings → Network & internet → \
-             Wi-Fi or Ethernet → the network's properties → Network profile type → Private \
-             network. If the phone still can't connect, run this line in a terminal opened as \
-             administrator (right-click Start → Terminal (Admin)): it lets paste-get in on \
-             private networks only.",
-            " : son pare-feu risque alors d'empêcher tes autres appareils de se connecter à \
-             paste-get. Si c'est ton réseau à la maison ou au travail, rends-le privé : \
-             Paramètres → Réseau et Internet → Wi-Fi ou Ethernet → les propriétés du réseau → \
-             Type de profil réseau → Réseau privé. Si le téléphone ne se connecte toujours pas, \
-             lance cette ligne dans un terminal ouvert en administrateur (clic droit sur \
-             Démarrer → Terminal (administrateur)) : elle laisse passer paste-get sur les \
-             réseaux privés seulement.",
+/// The notice, short: details are in Settings. `None` when nothing was found.
+pub fn notice(findings: &Findings) -> Option<String> {
+    let found = if !findings.blocked.is_empty() {
+        kept_out(&findings.blocked)
+    } else if !findings.public.is_empty() {
+        format!(
+            "{}{}",
+            treated_as_public(&findings.public),
+            tr(
+                ": its firewall may keep your phone from reaching paste-get",
+                " : son pare-feu risque d'empêcher ton téléphone de joindre paste-get",
+            )
         )
+    } else {
+        return None;
+    };
+    Some(format!(
+        "{found}{}",
+        tr(
+            ". paste-get's Settings say what to do.",
+            ". Les réglages de paste-get disent quoi faire.",
+        )
+    ))
+}
+
+/// What Settings says about the `findings`, with the lines for `program`.
+pub fn advice(findings: &Findings, program: &Path) -> Advice {
+    let mut warnings = Vec::new();
+    if !findings.public.is_empty() {
+        warnings.push(format!(
+            "{}{}",
+            treated_as_public(&findings.public),
+            tr(
+                ": its firewall may keep your phone from reaching paste-get. If it is your home \
+                 or work network, make it Private, as below.",
+                " : son pare-feu risque d'empêcher ton téléphone de joindre paste-get. Si c'est \
+                 ton réseau à la maison ou au travail, rends-le privé, comme ci-dessous.",
+            )
+        ));
+    }
+    if !findings.blocked.is_empty() {
+        warnings.push(format!(
+            "{}{}",
+            kept_out(&findings.blocked),
+            tr(
+                ": run the lines below to let it in.",
+                " : lance les lignes ci-dessous pour le laisser passer.",
+            )
+        ));
+    }
+    let text = tr(
+        "Phone can't connect? Its network must be Private on this computer: Settings → Network & \
+         internet → Wi-Fi or Ethernet → the network's properties → Network profile type → \
+         Private network. If it still can't, run these lines in a terminal opened as \
+         administrator (right-click Start → Terminal (Admin)). They replace paste-get's firewall \
+         rules, including any that block it (made when Windows' question at the first start was \
+         cancelled), by one that lets it in on private networks only.",
+        "Le téléphone ne se connecte pas ? Son réseau doit être privé sur cet ordinateur : \
+         Paramètres → Réseau et Internet → Wi-Fi ou Ethernet → les propriétés du réseau → Type \
+         de profil réseau → Réseau privé. Si ça ne suffit pas, lance ces lignes dans un terminal \
+         ouvert en administrateur (clic droit sur Démarrer → Terminal (administrateur)). Elles \
+         remplacent les règles de pare-feu de paste-get, y compris celles qui le bloquent \
+         (créées quand la question de Windows au premier démarrage a été annulée), par une seule \
+         qui le laisse passer sur les réseaux privés seulement.",
     );
-    Some(Advice {
-        text,
+    Advice {
+        warning: (!warnings.is_empty()).then(|| warnings.join(" ")),
+        text: text.into(),
         command: firewall_command(program),
-    })
+    }
 }
 
 /// What PowerShell says now about the networks and `program`'s rules. `None` if it can't say.
@@ -156,20 +202,27 @@ pub async fn findings_now(program: PathBuf) -> Findings {
 }
 
 /// Checks the networks now and every few minutes, and calls `tell` with the notice when a
-/// network is Public that wasn't the last time. Windows only.
+/// network may keep the phone out that didn't the last time. Windows only.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub async fn watch(tell: impl Fn(String)) {
     let Some(program) = this_program() else {
         return;
     };
-    let mut told: Vec<String> = Vec::new();
+    let mut told = Findings::default();
     loop {
-        let public = findings_now(program.clone()).await.public;
-        if !public.is_empty() && public.iter().any(|n| !told.contains(n)) {
-            tracing::info!(count = public.len(), "a network is marked Public");
-            tell(notice(&public));
+        let findings = findings_now(program.clone()).await;
+        let new = |now: &[String], before: &[String]| now.iter().any(|n| !before.contains(n));
+        if (new(&findings.public, &told.public) || new(&findings.blocked, &told.blocked))
+            && let Some(notice) = notice(&findings)
+        {
+            tracing::info!(
+                public = findings.public.len(),
+                blocked = findings.blocked.len(),
+                "the firewall may keep the phone out"
+            );
+            tell(notice);
         }
-        told = public;
+        told = findings;
         tokio::time::sleep(CHECK_EVERY).await;
     }
 }
@@ -182,40 +235,65 @@ mod tests {
         pasteget_desktop::i18n::force(pasteget_desktop::i18n::Lang::En);
     }
 
-    fn public(names: &[&str]) -> Findings {
+    fn found(public: &[&str], blocked: &[&str]) -> Findings {
+        let names = |names: &[&str]| names.iter().map(|&n| n.into()).collect();
         Findings {
-            public: names.iter().map(|&n| n.into()).collect(),
+            public: names(public),
+            blocked: names(blocked),
         }
     }
 
     #[test]
-    fn the_advice_names_the_network_and_gives_one_command() {
+    fn the_advice_is_always_there_and_says_what_was_found() {
         english();
         let program = Path::new(r"C:\Users\me\AppData\Local\paste-get\pasteget-tray.exe");
 
-        assert_eq!(advice(&Findings::default(), program), None);
-        let advice = advice(&public(&["Livebox-1234"]), program).unwrap();
-        assert!(advice.text.contains("the network “Livebox-1234” as Public"));
-        assert!(advice.text.contains("may then keep"));
-        assert!(advice.text.contains("Private network"));
+        // Nothing found: still the way to fix it, without a warning.
+        let calm = advice(&Findings::default(), program);
+        assert_eq!(calm.warning, None);
+        assert!(calm.text.starts_with("Phone can't connect? "));
+        assert!(calm.text.contains("Private network"));
         assert_eq!(
-            advice.command,
-            r#"netsh advfirewall firewall add rule name="paste-get" dir=in action=allow program="C:\Users\me\AppData\Local\paste-get\pasteget-tray.exe" enable=yes profile=private"#
+            calm.command,
+            "netsh advfirewall firewall delete rule name=all dir=in program=\"C:\\Users\\me\\AppData\\Local\\paste-get\\pasteget-tray.exe\"\n\
+             netsh advfirewall firewall add rule name=\"paste-get\" dir=in action=allow program=\"C:\\Users\\me\\AppData\\Local\\paste-get\\pasteget-tray.exe\" enable=yes profile=private"
         );
-        assert!(!advice.command.contains('\n'));
+        assert_eq!(calm.command.lines().count(), 2);
+
+        let public = advice(&found(&["Livebox-1234"], &[]), program);
+        let warning = public.warning.unwrap();
+        assert!(warning.starts_with("Windows treats the network “Livebox-1234” as Public: "));
+        assert!(warning.contains("may keep"));
+        let blocked = advice(&found(&[], &["Home", "Office"]), program);
+        assert_eq!(
+            blocked.warning.as_deref(),
+            Some(
+                "Windows' firewall keeps paste-get out on the networks “Home” and “Office”: \
+                 run the lines below to let it in."
+            )
+        );
+        assert_eq!(blocked.text, calm.text);
     }
 
     #[test]
     fn the_notice_says_may_and_counts_the_networks() {
         english();
+        assert_eq!(notice(&Findings::default()), None);
         assert_eq!(
-            notice(&["A".into()]),
+            notice(&found(&["A"], &[])).unwrap(),
             "Windows treats the network “A” as Public: its firewall may keep your phone from \
              reaching paste-get. paste-get's Settings say what to do."
         );
         assert!(
-            notice(&["A".into(), "B".into(), "C".into()])
+            notice(&found(&["A", "B", "C"], &[]))
+                .unwrap()
                 .starts_with("Windows treats the networks “A”, “B” and “C” as Public: ")
+        );
+        // A rule that blocks it is the surer cause.
+        assert_eq!(
+            notice(&found(&["A"], &["A"])).unwrap(),
+            "Windows' firewall keeps paste-get out on the network “A”. paste-get's Settings say \
+             what to do."
         );
     }
 }

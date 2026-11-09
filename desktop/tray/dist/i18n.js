@@ -41,7 +41,7 @@ window.pastegetFr = {
   hotkeysHint: "Clique dans un champ et appuie sur les touches, par exemple Ctrl+Alt+Shift+P. Retour arrière le désactive.",
   hotkeyNone: "Aucun",
   networkTitle: "Réseau",
-  networkCommandLabel: "Commande à lancer en administrateur",
+  networkCommandLabel: "Lignes à lancer en administrateur",
   hyprlandTitle: "Hyprland",
   hyprlandHint: "Hyprland lance paste-get à l'ouverture de session et gère ses raccourcis dans sa propre configuration. Ajoute ces lignes à ~/.config/hypr/hyprland.conf, puis lance hyprctl reload. Copie-les à nouveau après avoir changé un raccourci.",
   hyprlandLabel: "Lignes pour hyprland.conf",

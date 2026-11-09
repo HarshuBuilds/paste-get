@@ -43,12 +43,16 @@ function showHyprland() {
     .catch(() => {});
 }
 
-// Windows: what to do about a network marked Public (desktop/tray/src/network.rs).
+// Windows: what may keep the phone out, if anything, and what to do when it can't connect
+// (desktop/tray/src/network.rs). Texts come translated.
 function showNetwork() {
   invoke("network_advice")
     .then((advice) => {
       $("network_section").hidden = !advice;
       if (!advice) return;
+      $("network_section").classList.toggle("warning", !!advice.warning);
+      $("network_warning").hidden = !advice.warning;
+      $("network_warning").textContent = advice.warning || "";
       $("network_text").textContent = advice.text;
       $("network_command").value = advice.command;
     })
