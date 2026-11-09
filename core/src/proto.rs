@@ -46,12 +46,25 @@ mod tests {
                 sensitive: true,
                 kind: ClipKind::OneTimeCode.into(),
                 source_app: "Messages".into(),
+                age_ms: 90_000,
             })),
         };
 
         let decoded = Envelope::decode(original.encode_to_vec().as_slice()).unwrap();
 
         assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn unpaired_round_trips() {
+        let original = Envelope {
+            payload: Some(envelope::Payload::Unpaired(Unpaired {})),
+        };
+
+        let encoded = original.encode_to_vec();
+
+        assert_eq!(encoded, [0x52, 0x00]); // Field 10, length-delimited, empty.
+        assert_eq!(Envelope::decode(encoded.as_slice()).unwrap(), original);
     }
 
     #[test]

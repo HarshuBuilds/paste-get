@@ -3,7 +3,9 @@
 //! Local control channel between the `pasteget` command and a running daemon.
 //!
 //! One JSON object per line. The client sends one [`Request`]; the daemon answers with one or
-//! more [`Response`]s and closes. Only the local user can connect:
+//! more [`Response`]s and closes. Fields are only ever added, with defaults, so that a newer
+//! client still reads an older daemon (that's how a newer tray finds an older daemon to replace,
+//! [`StatusReply::app_version`]). Only the local user can connect:
 //! - Unix: a socket in the profile directory, which is private to the user (0700).
 //! - Windows: a named pipe whose name includes the user name. The daemon creates it with
 //!   `first_pipe_instance`, so it fails rather than share a pipe someone else created, and
@@ -31,6 +33,11 @@ use crate::recent;
 
 /// Longest request line accepted: a 64 MiB clip, base64-encoded, plus some room.
 const MAX_REQUEST_LEN: u64 = 96 * 1024 * 1024;
+
+/// Version of the control channel, in [`StatusReply::control_version`]. Bumped when a client
+/// needs to know what a daemon understands. 1: the first to say it, and to know
+/// [`Request::Quit`].
+pub const CONTROL_VERSION: u32 = 1;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
@@ -61,6 +68,9 @@ pub enum Request {
     },
     /// Reads `settings.toml` again, after it was edited.
     ReloadSettings,
+    /// Stops the daemon, and the tray or `pasteget daemon` running it: a newer version takes
+    /// over. Unknown to daemons without a [`StatusReply::control_version`].
+    Quit,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -91,6 +101,8 @@ pub enum Response {
     SettingsReloaded {
         restart_needed: bool,
     },
+    /// Answer to [`Request::Quit`]: the daemon stops once it has said so.
+    Quitting,
     Error {
         message: String,
     },
@@ -105,6 +117,16 @@ pub struct StatusReply {
     #[serde(default)]
     pub paused: bool,
     pub devices: Vec<DeviceStatusReply>,
+    /// The daemon's paste-get version. `None` from daemons older than this field.
+    #[serde(default)]
+    pub app_version: Option<String>,
+    /// The daemon's [`CONTROL_VERSION`]. `None` from daemons older than this field.
+    #[serde(default)]
+    pub control_version: Option<u32>,
+    /// The ID of the daemon's process (the tray's, when the tray runs it), so that a newer
+    /// version can end it if it doesn't quit. `None` from daemons older than this field.
+    #[serde(default)]
+    pub pid: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -294,6 +316,7 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(daemon: Arc<Daemon>, stream: 
         Ok(_) => serde_json::from_str::<Request>(&line).map_err(|e| anyhow!("bad request: {e}")),
         Err(e) => Err(anyhow!("could not read the request: {e}")),
     };
+    let mut quit = false;
     let result: Result<()> = async {
         match request? {
             Request::Status => {
@@ -313,6 +336,9 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(daemon: Arc<Daemon>, stream: 
                             connected: d.connected,
                         })
                         .collect(),
+                    app_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
+                    control_version: Some(CONTROL_VERSION),
+                    pid: Some(std::process::id()),
                 });
                 write_half.write_all(line_of(response).as_bytes()).await?;
             }
@@ -429,6 +455,12 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(daemon: Arc<Daemon>, stream: 
                 });
                 write_half.write_all(line_of(response).as_bytes()).await?;
             }
+            Request::Quit => {
+                write_half
+                    .write_all(line_of(Response::Quitting).as_bytes())
+                    .await?;
+                quit = true;
+            }
         }
         Ok(())
     }
@@ -441,6 +473,10 @@ async fn handle<S: AsyncRead + AsyncWrite + Unpin>(daemon: Arc<Daemon>, stream: 
         let _ = write_half.write_all(line_of(response).as_bytes()).await;
     }
     let _ = write_half.shutdown().await;
+    // Once the answer is out: the process may end right after.
+    if quit {
+        daemon.request_quit();
+    }
 }
 
 /// The paired device that `query` names: its ID, or its name (any case) if only one device has
@@ -722,6 +758,84 @@ mod tests {
 
         let gone = ask(&pc.endpoint, Request::CopyRecent { id: 999 }).await;
         assert!(matches!(&gone[..], [Response::Error { .. }]));
+    }
+
+    #[tokio::test]
+    async fn status_says_the_version_and_quit_stops_the_daemon() {
+        let pc = run("pc").await;
+        let mut quit = pc.daemon.quit_signal();
+
+        let status = ask(&pc.endpoint, Request::Status).await;
+        let [Response::Status(status)] = &status[..] else {
+            panic!("expected a status");
+        };
+        assert_eq!(
+            status.app_version.as_deref(),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(status.control_version, Some(CONTROL_VERSION));
+        assert_eq!(status.pid, Some(std::process::id()));
+        assert!(!*quit.borrow());
+
+        let answer = ask(&pc.endpoint, Request::Quit).await;
+        assert!(matches!(&answer[..], [Response::Quitting]));
+        tokio::time::timeout(Duration::from_secs(5), quit.wait_for(|quit| *quit))
+            .await
+            .expect("the daemon was not asked to quit")
+            .unwrap();
+    }
+
+    #[test]
+    fn status_replies_round_trip_and_older_ones_still_read() {
+        let reply = Response::Status(StatusReply {
+            device_id: "ID".into(),
+            device_name: "PC".into(),
+            listening_on: "0.0.0.0:47290".into(),
+            pairing_open: false,
+            paused: true,
+            devices: vec![DeviceStatusReply {
+                id: "PHONE".into(),
+                name: "POCO".into(),
+                connected: true,
+            }],
+            app_version: Some("0.2.0".into()),
+            control_version: Some(CONTROL_VERSION),
+            pid: Some(4242),
+        });
+        let Response::Status(read) =
+            serde_json::from_str(&serde_json::to_string(&reply).unwrap()).unwrap()
+        else {
+            panic!("expected a status");
+        };
+        assert_eq!(read.app_version.as_deref(), Some("0.2.0"));
+        assert_eq!(read.control_version, Some(CONTROL_VERSION));
+        assert_eq!(read.pid, Some(4242));
+        assert!(read.paused && read.devices[0].connected);
+
+        // What a daemon from before the versions were sent answers.
+        let older = r#"{"status":{"device_id":"ID","device_name":"PC","listening_on":"0.0.0.0:47290","pairing_open":false,"paused":false,"devices":[]}}"#;
+        let Response::Status(older) = serde_json::from_str(older).unwrap() else {
+            panic!("expected a status");
+        };
+        assert_eq!(older.app_version, None);
+        assert_eq!(older.control_version, None);
+        assert_eq!(older.pid, None);
+        assert_eq!(older.device_name, "PC");
+    }
+
+    #[test]
+    fn quit_messages_round_trip() {
+        let request = serde_json::to_string(&Request::Quit).unwrap();
+        assert_eq!(request, r#"{"cmd":"quit"}"#);
+        assert!(matches!(
+            serde_json::from_str::<Request>(&request).unwrap(),
+            Request::Quit
+        ));
+        let answer = serde_json::to_string(&Response::Quitting).unwrap();
+        assert!(matches!(
+            serde_json::from_str::<Response>(&answer).unwrap(),
+            Response::Quitting
+        ));
     }
 
     #[test]

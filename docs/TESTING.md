@@ -93,7 +93,9 @@ Watch terminal 2 (the fake phone): each clip it receives logs `clip received …
 | 7 | Stop terminal 2 (Ctrl+C), start it again | Terminal 1 logs `connected` again within ~30 s |
 | 8 | `pasteget pause`, copy some text, then `pasteget --profile phone send "hi"` | Terminal 1 logs `local copy not sent: paused` and `clip dropped: paused`; `Ctrl+V` doesn't paste `hi`. `pasteget resume` brings syncing back |
 | 9 | `pasteget recent` | The last clips, newest first, with where they came from |
-| 10 | Last: `pasteget forget phone` | `Unpaired phone.` Terminal 1 logs `unpaired`; terminal 2 logs `the device unpaired this one: no longer dialing it` and forgets the PC too (`pasteget --profile phone status` lists no device). Pair again (section 2) to go on |
+| 12 | Stop terminal 1 and start it on another port: `pasteget daemon --port 47295`, as if its address had changed | Within about 30 s terminal 2 finds it by mDNS and logs `connected` (and `reached at a new address`); the fake phone's `devices.toml` lists the `…:47295` address first. Start terminal 1 again as before afterwards |
+| 11 | Stop terminal 1. Copy the PC's `devices.toml` (`%APPDATA%\paste-get\default\` on Windows, `~/.config/paste-get/default/` on Linux) somewhere safe, replace it with a line of garbage, start terminal 1 again | It starts, logs `the paired devices could not be read: starting with none` and shows a notice; the garbage is now in `devices.toml.bad`. Terminal 2 keeps retrying and doesn't forget the PC: `pasteget --profile phone status` still lists it. Stop terminal 1, put the safe copy back as `devices.toml`, start terminal 1: terminal 2 connects again |
+| 10 | Last: `pasteget forget phone` | `Unpaired phone.` Terminal 1 logs `unpaired`; terminal 2 logs `the device unpaired this one` and forgets the PC too (`pasteget --profile phone status` lists no device). Pair again (section 2) to go on |
 
 Screenshot to clipboard:
 - **Windows:** `Win+Shift+S`
@@ -143,12 +145,12 @@ The phone and the PC must be on the **same Wi-Fi**. On the PC, run `pasteget dae
 | P7 | Lock the phone for 5 minutes, unlock, repeat P3 | Still works, without opening the app |
 | P8 | Restart the phone, wait a minute, repeat P3 | Still works (the app restarts on boot) |
 | P9 | Scan the PC's pairing QR code with the **normal camera app** (only if it offers to open the link; not every camera does) | paste-get opens and asks first, as in P2; it pairs only on **Pair**. Rotating the phone doesn't ask again |
-| P10 | On the phone only, forget the computer (the PC still lists it). PC: `pasteget pair`, scan the new code | Phone: "Paired with …", then "Connected to 1 computer". The PC lists the phone once |
+| P10 | Quit paste-get on the PC, forget the computer on the phone, start the PC again (it still lists the phone: it wasn't told). PC: `pasteget pair`, scan the new code | Phone: "Paired with …", then "Connected to 1 computer". The PC lists the phone once |
 | P11 | Turn the phone's Wi-Fi off (mobile data on), scan a pairing code | Within about 10 s, an error that lists each address of the code with its reason, the PC's Wi-Fi or Ethernet address first |
 | P12 | Rename the phone (Settings → About phone → Device name), then force-stop paste-get and open it again | Within seconds `pasteget status` on the PC shows the new name, also after the PC restarts |
 | P13 | Turn on dark mode, close paste-get (swipe it away in recents), open it again | The start screen and the app are dark from the first frame, with no white flash |
 | P14 | PC: `pasteget pair`, then quit the daemon. Phone: scan the code, **Pair** | After a few seconds: "Pairing didn't work" and what to check (same Wi-Fi, paste-get open on the PC), in the phone's language. **Details** shows the technical error |
-| P15 | Last: under Paired computers, tap **Forget…** next to the PC, then **Cancel**; tap it again, then **Forget** | Cancel keeps the PC. Forget removes it from the list, and the phone stops connecting to it. The PC still lists the phone (forget it there too, or pair again) |
+| P15 | Last, with the phone connected: under Paired computers, tap **Forget…** next to the PC, then **Cancel**; tap it again, then **Forget** | Cancel keeps the PC. Forget removes it from the list and the phone stops connecting to it. Within 2 s the PC's tray no longer lists the phone and shows "<phone> unpaired this computer"; `pasteget status` lists no device. Pair again to go on |
 
 Phone logs never contain clipboard contents either. To get them: `adb logcat -s paste-get`.
 
@@ -312,7 +314,14 @@ see its log). Keep the fake phone of section 2 running.
 | T20 | Quit, then open paste-get from the Start menu (a phone is paired) | A notification says where its icon is. At login (*Start at login* on), no such notification |
 | T21 | Open `%LOCALAPPDATA%\paste-get\logs\pasteget-tray.log` (Linux: `~/.local/share/paste-get/logs/`) | The tray's log, with "tray starting" for each start. Attach it to any report |
 | T14 | Windows: get a notification (an image from the phone, or a hotkey's) | It says it comes from **paste-get**, with its icon, not "Windows PowerShell". After uninstalling, paste-get is gone from Settings → System → Notifications |
-| T13 | Last: menu → the phone → *Forget this device* | The phone disappears from the menu within 2 s and can't reconnect. Within a few seconds the real phone shows "<PC> unpaired this phone" and drops the computer from its list. Pair again to go on |
+| T22 | `pasteget quit` while the tray runs its daemon | The icon disappears; `pasteget status` says the daemon is not running |
+| T23 | Run an older paste-get (a build from before this row existed, or with a lower `version` in `Cargo.toml`), then start this one | The older icon disappears and this one's shows, without the "already running" notice; the log says "an older paste-get runs for this profile: asking it to quit". With the same version, T19 instead |
+| T24 | Windows: with paste-get running (tray, and `pasteget daemon` in a terminal), run the installer of a newer version | No "paste-get is running" question: both are stopped before the files are copied. After *Finish*, one icon, and `pasteget status` shows the new version |
+| T25 | Windows: tick *Start at login*, also in a second profile's tray (`pasteget-tray --profile work`), then uninstall paste-get (Settings → Apps) | Neither is in Task Manager → *Startup apps* any more (`reg query HKCU\Software\Microsoft\Windows\CurrentVersion\Run` lists no `paste-get` value). Updating with the installer (T24) keeps them there |
+| T26 | Developers: build paste-get with another `PROTOCOL_VERSION` (`core/src/proto.rs`) for the phone or the PC, and let the phone connect | One notification on the PC: "<phone> runs another version of paste-get: update both", not repeated while the phone retries |
+| T27 | With other profiles running (`pasteget-tray --profile work`, this version, and `pasteget --profile test daemon --memory-clipboard --port 47299` in a terminal), run an older paste-get for the default profile, then start this one | The older default one makes way as in T23. The `work` icon stays, and the `test` daemon keeps running |
+| T28 | Developers: with two builds that both know `pasteget quit` (the older one with a lower `version` in `Cargo.toml`), run the older `pasteget daemon` in a terminal, then the older tray (it only shows that daemon), then start the newer tray | The terminal's daemon quits; the older tray starts a daemon of its own, which is asked to quit too, and the older icon disappears. One icon is left, the newer one's; the log says "the older paste-get quit", nothing was ended |
+| T13 | Last: menu → the phone → *Forget this device* | The phone disappears from the menu within 2 s and can't reconnect. Right away (or, if it was not connected, when it next connects) the real phone shows "<PC> unpaired this phone" and drops the computer from its list. Pair again to go on |
 
 If paste-get doesn't start at all, Windows shows a box saying why, and the log has the details.
 
@@ -467,25 +476,39 @@ can learn it.
 ## 15. Copies made while a device is off (v0.2)
 
 A copy made while the other side is off or out of range waits, and arrives as soon as it
-connects again. Only the last one waits (text or image), in memory only. Passwords and 2FA codes
-never wait: a code would be stale by then.
+connects again. That includes a connection that died without closing (a PC asleep, a phone that
+just left the Wi-Fi), which still looks alive for up to 90 s: a copy waits until the other side
+confirms it got it. Only the last one waits (text or image), in memory only. Passwords and 2FA
+codes never wait: a code would be stale by then. Nor does the copy made before one, which would
+land over it.
 
 | # | Do this | Expected |
 |---|---|---|
 | Q1 | Quit paste-get on the PC (tray → *Quit*). On the phone, copy a line | The phone says it went to 0 computers |
 | Q2 | Start paste-get on the PC again | Within a few seconds the line is in the PC's clipboard; the log says "sending the clip it missed" |
 | Q3 | PC off, copy two lines on the phone one after the other, start the PC | Only the second one arrives |
-| Q4 | Phone's Wi-Fi off, copy something on the PC, turn Wi-Fi back on | The copy is in the phone's clipboard once it reconnects |
-| Q5 | PC off, copy a password from a password manager on the phone (or get a 2FA code), start the PC | Nothing arrives |
+| Q4 | Phone's Wi-Fi off, and right away copy something on the PC (the tray may still show the phone connected), turn Wi-Fi back on | The copy is in the phone's clipboard once it reconnects, once |
+| Q5 | PC off, copy a line on the phone, then a password from a password manager (or get a 2FA code), start the PC | Nothing arrives, not even the line |
 | Q6 | PC off, copy on the phone, force-stop paste-get on the phone, start both | Nothing arrives: the copy was only in memory |
+| Q7 | Put the PC to sleep. Within a minute, copy a line on the phone (it may still say it went to 1 computer), then wake the PC | The line is in the PC's clipboard once the phone reconnects |
+| Q8 | With both connected, copy a line on the PC; once it's on the phone, turn the phone's Wi-Fi off and on | The line is not sent a second time when the phone reconnects |
+| Q9 | Turn the phone's Wi-Fi off. Right away copy a line on the PC, then a few seconds later another line on the phone, and turn Wi-Fi back on | Once the phone reconnects, both paste the phone's line: the PC's log says "clip received", the phone keeps its own |
+| Q10 | Same as Q9, but copy on the phone first, then on the PC | Both paste the PC's line; the PC's log says "clip dropped: a newer copy from here is on its way to the device" |
 
 ## Known limitations
 
-- If the PC changes address while the phone is connected, the phone notices only when the old
-  connection times out (up to 90 s), then finds it again by mDNS. Phones that can't receive
-  mDNS (some guest or office networks block it) still need a new pairing.
+- If the PC changes address while the phone (or a PC that joined it) is connected, the other
+  side notices only when the old connection times out (up to 90 s), then finds it again by
+  mDNS. Devices that can't receive mDNS (some guest or office networks block it) still need a
+  new pairing.
 - Only the last copy made while a device is away waits for it, in memory: it's lost if the
-  sending side restarts first. Passwords and 2FA codes never wait.
+  sending side restarts first. Passwords and 2FA codes never wait, nor does the copy made
+  before one.
+- When the PC can't read its paired devices (`devices.toml`), devices it no longer knows are
+  refused but not told they were unpaired, so they keep the PC, until paste-get restarts.
+  After a restart without the file, they are told, and forget it.
+- When both sides copied while apart, the newer copy wins on both. Copies made within a few
+  milliseconds of each other (less than the network delay) can still end up crossed.
 - The phone shows nothing of its own when a clip from the PC arrives (Android 13 and later may
   show their clipboard preview); its home screen says what came last.
 - Only text copied on the phone is sent automatically, not images or files: share those.

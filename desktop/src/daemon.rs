@@ -9,9 +9,10 @@
 //! ```
 //!
 //! Devices that paired with us (phones) connect in. Devices we paired with by scanning their
-//! code (`pasteget join`) are dialed out and redialed after disconnects.
+//! code (`pasteget join`) are dialed out and redialed after disconnects, also at the addresses
+//! mDNS finds them at, since their address may change.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -35,8 +36,10 @@ use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::{sleep, timeout};
 
 use crate::clipboard::{ClipboardBackend, ClipboardWatcher, Content, DEFAULT_POLL_INTERVAL};
-use crate::config::{KnownDevice, KnownDevices, NotifyFor, Profile, Settings};
-use crate::discovery::Advertiser;
+use crate::config::{
+    KnownDevice, KnownDevices, LoadedDevices, MAX_ADDRESSES, NotifyFor, Profile, Settings,
+};
+use crate::discovery::{self, Advertiser, Announced};
 use crate::hotkeys::{self, Action, Hotkeys};
 use crate::i18n::{french, tr};
 use crate::notify::{Notifier, Received};
@@ -44,6 +47,8 @@ use crate::recent::{RecentClip, RecentClips};
 
 /// Time a not-yet-paired device has to send its pairing request.
 const PAIRING_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// Time a session has to tell a device it was unpaired before its dialer is stopped.
+const UNPAIR_FAREWELL: Duration = Duration::from_secs(3);
 
 /// How to run a daemon.
 #[derive(Clone, Debug)]
@@ -53,7 +58,8 @@ pub struct DaemonOptions {
     /// Addresses put in pairing QR codes. `None` uses this machine's network interfaces.
     pub advertised_ips: Option<Vec<IpAddr>>,
     pub poll_interval: Duration,
-    /// Announce the daemon on the local network with mDNS.
+    /// Announce the daemon on the local network with mDNS, and look there for the computers it
+    /// joined.
     pub announce: bool,
     /// Shows "Image from … ✓" when a clip lands on the clipboard, as `settings.toml` asks.
     pub notifier: Option<Arc<dyn Notifier>>,
@@ -105,6 +111,8 @@ pub struct Daemon {
     local_addr: SocketAddr,
     _advertiser: Option<Advertiser>,
     _hotkeys: Option<Hotkeys>,
+    /// Set by [`Daemon::request_quit`].
+    quit: watch::Sender<bool>,
 }
 
 struct Shared {
@@ -130,7 +138,21 @@ struct Shared {
     events: broadcast::Sender<Event>,
     tasks: Mutex<JoinSet<()>>,
     /// The redial loops of devices we joined, to stop when one is unpaired.
-    dialers: Mutex<HashMap<DeviceId, AbortHandle>>,
+    dialers: Mutex<HashMap<DeviceId, Dialer>>,
+    /// Devices the user was told run another protocol version, once each while this runs.
+    told_other_version: Mutex<HashSet<DeviceId>>,
+    /// Some paired devices couldn't be read at start ([`LoadedDevices::set_aside`]): a device
+    /// this one doesn't know may be one of them, so it isn't told it was unpaired, unless it was
+    /// forgotten while this runs.
+    devices_set_aside: bool,
+    forgotten: Mutex<HashSet<DeviceId>>,
+}
+
+/// Keeps a session with a device we joined.
+struct Dialer {
+    task: AbortHandle,
+    /// Where it dials. Any update also makes it dial now rather than after its backoff.
+    addresses: watch::Sender<Vec<SocketAddr>>,
 }
 
 impl Daemon {
@@ -142,7 +164,10 @@ impl Daemon {
     ) -> Result<Self> {
         let identity = profile.identity()?;
         let settings = profile.settings()?;
-        let known = profile.known_devices()?;
+        let LoadedDevices {
+            devices: known,
+            set_aside,
+        } = profile.load_known_devices()?;
         let listener = TcpListener::bind(options.listen)
             .await
             .with_context(|| format!("could not listen on {}", options.listen))?;
@@ -177,7 +202,19 @@ impl Daemon {
             events,
             tasks: Mutex::new(JoinSet::new()),
             dialers: Mutex::new(HashMap::new()),
+            told_other_version: Mutex::new(HashSet::new()),
+            devices_set_aside: set_aside,
+            forgotten: Mutex::new(HashSet::new()),
         });
+        if set_aside && let Some(notifier) = &shared.notifier {
+            notifier.notice(
+                tr(
+                    "paste-get couldn't read all its paired devices: the file is kept as devices.toml.bad. Pair the missing ones again, or fix it and rename it devices.toml before paste-get restarts",
+                    "paste-get n'a pas pu lire tous ses appareils appairés : le fichier est gardé sous le nom devices.toml.bad. Appaire à nouveau ceux qui manquent, ou corrige-le et renomme-le devices.toml avant que paste-get redémarre",
+                )
+                .to_owned(),
+            );
+        }
 
         shared.spawn(accept_loop(Arc::clone(&shared), listener));
         shared.spawn(local_changes_loop(Arc::clone(&shared), changes));
@@ -205,6 +242,15 @@ impl Daemon {
                 tracing::warn!(error = %e, "not announcing on the network");
                 None
             });
+        // The computers this one joined may have moved since.
+        if let Some(advertiser) = &advertiser {
+            match advertiser.browse() {
+                Ok(events) => {
+                    shared.spawn(found_loop(Arc::clone(&shared), events));
+                }
+                Err(e) => tracing::warn!(error = %format!("{e:#}"), "not looking for devices"),
+            }
+        }
 
         tracing::info!(
             device_id = %shared.identity.device_id(),
@@ -226,7 +272,21 @@ impl Daemon {
             local_addr,
             _advertiser: advertiser,
             _hotkeys: hotkeys,
+            quit: watch::channel(false).0,
         })
+    }
+
+    /// Asks whatever runs this daemon (`pasteget daemon`, the tray) to stop it and exit: a newer
+    /// paste-get takes over. See [`Daemon::quit_signal`].
+    pub fn request_quit(&self) {
+        tracing::info!("asked to quit");
+        self.quit.send_replace(true);
+    }
+
+    /// Turns `true` once [`Daemon::request_quit`] was called. Holding it doesn't keep the daemon
+    /// alive.
+    pub fn quit_signal(&self) -> watch::Receiver<bool> {
+        self.quit.subscribe()
     }
 
     pub fn local_addr(&self) -> SocketAddr {
@@ -289,7 +349,7 @@ impl Daemon {
     }
 
     /// Unpairs a device: it's no longer trusted, its connection ends now, and it can only come
-    /// back by pairing again.
+    /// back by pairing again. If it's connected, it's told, and forgets this computer too.
     pub fn forget(&self, id: &DeviceId) -> Result<KnownDevice> {
         let device = {
             let mut known = lock(&self.shared.known);
@@ -297,12 +357,23 @@ impl Daemon {
             self.shared.profile.save_known_devices(&known)?;
             device
         };
-        if let Some(dialer) = lock(&self.shared.dialers).remove(id) {
-            dialer.abort();
-        }
+        lock(&self.shared.forgotten).insert(*id);
         self.shared.peers.unexpect(id);
-        self.shared.peers.disconnect(id);
-        tracing::info!(device = %device.name, id = %device.id, "unpaired");
+        let dialer = lock(&self.shared.dialers).remove(id);
+        let told = self.shared.peers.unpair(id);
+        if let Some(dialer) = dialer {
+            if told {
+                // Its session says so, then ends, and the dialer with it. Stopped anyway in case
+                // the session ended first for another reason.
+                self.shared.spawn(async move {
+                    sleep(UNPAIR_FAREWELL).await;
+                    dialer.task.abort();
+                });
+            } else {
+                dialer.task.abort();
+            }
+        }
+        tracing::info!(device = %device.name, id = %device.id, told, "unpaired");
         Ok(device)
     }
 
@@ -398,9 +469,39 @@ impl Shared {
 
     fn start_dialer(self: &Arc<Self>, device: KnownDevice) {
         let id = device.id;
-        let handle = self.spawn(dial_loop(Arc::clone(self), device));
-        if let Some(previous) = lock(&self.dialers).insert(id, handle) {
-            previous.abort();
+        let (addresses, watched) = watch::channel(device.addresses);
+        let task = self.spawn(dial_loop(Arc::clone(self), id, watched));
+        if let Some(previous) = lock(&self.dialers).insert(id, Dialer { task, addresses }) {
+            previous.task.abort();
+        }
+    }
+
+    /// `announced` on the network: if it's a computer this one joined, it's dialed there now,
+    /// then at the addresses it had. Returns whether it is one.
+    ///
+    /// Found addresses are only tried: one is remembered once a connection through it proved
+    /// the device's identity ([`SessionEvents::reached`]), so a forged announcement can't push
+    /// the real addresses out.
+    fn found(&self, announced: &Announced) -> bool {
+        let Some(known) = lock(&self.known)
+            .get(&announced.id)
+            .map(|device| device.addresses.clone())
+        else {
+            return false;
+        };
+        let found = announced
+            .ips
+            .iter()
+            .take(MAX_ADDRESSES)
+            .map(|ip| SocketAddr::new(*ip, announced.port));
+        match lock(&self.dialers).get(&announced.id) {
+            Some(dialer) => {
+                dialer
+                    .addresses
+                    .send_replace(session::found_first(found, known));
+                true
+            }
+            None => false,
         }
     }
 
@@ -578,6 +679,18 @@ impl Shared {
 
 /// Received clips go to the clipboard and on to the other devices.
 impl SessionEvents for Shared {
+    /// A computer this one joined answered at `address`: it's dialed there first from now on,
+    /// also after a restart.
+    fn reached(&self, peer: DeviceId, address: SocketAddr) {
+        let mut known = lock(&self.known);
+        if known.reached(&peer, address) {
+            tracing::info!(id = %peer, %address, "reached at a new address");
+            if let Err(e) = self.profile.save_known_devices(&known) {
+                tracing::warn!(error = %format!("{e:#}"), "could not save the paired devices");
+            }
+        }
+    }
+
     fn connected(&self, peer: DeviceId, hello: &Hello) {
         {
             let mut known = lock(&self.known);
@@ -585,7 +698,7 @@ impl SessionEvents for Shared {
             // to end it.
             if !known.contains(&peer) {
                 drop(known);
-                self.peers.disconnect(&peer);
+                self.peers.unpair(&peer);
                 return;
             }
             // Renamed there since it last connected.
@@ -603,8 +716,25 @@ impl SessionEvents for Shared {
         tracing::info!(id = %peer, "disconnected");
     }
 
-    /// A computer this one joined unpaired it: forget it too. Its dialer is the caller, and
-    /// ends by itself.
+    /// Says so once per device: it retries every few seconds, and nothing changes until one of
+    /// them is updated.
+    fn version_mismatch(&self, peer: DeviceId, _version: u32) {
+        if !lock(&self.told_other_version).insert(peer) {
+            return;
+        }
+        let name = self.name_of(&peer);
+        if let Some(notifier) = &self.notifier {
+            notifier.notice(if french() {
+                format!("{name} utilise une autre version de paste-get : mets les deux à jour")
+            } else {
+                format!("{name} runs another version of paste-get: update both")
+            });
+        }
+    }
+
+    /// A device unpaired this computer: forget it too. A phone or a computer that joined this one
+    /// says so in its session; a computer this one joined refuses its dialer, or says so too. Its
+    /// dialer, if any, ends by itself. The tray shows the device gone at its next refresh.
     fn unpaired_by(&self, peer: DeviceId) {
         let removed = {
             let mut known = lock(&self.known);
@@ -679,7 +809,7 @@ impl SessionEvents for Shared {
         if let Err(e) = self.clipboard.write(content, applied) {
             tracing::warn!(error = %e, "received clip not applied");
         }
-        self.peers.broadcast(&clip, Some(peer));
+        self.peers.relay(&clip, peer);
     }
 }
 
@@ -733,12 +863,14 @@ async fn handle_incoming(shared: Arc<Shared>, socket: TcpStream) -> Result<()> {
     }
 
     if !shared.pairing_open() {
-        // Said, so that a phone unpaired here stops dialing and tells its user.
-        let _ = timeout(
-            HANDSHAKE_TIMEOUT,
-            unverified.refuse(RefusalReason::NotPaired),
-        )
-        .await;
+        // Said, so that a phone unpaired here stops dialing and tells its user. Not to one that
+        // may be among the paired devices that couldn't be read: it would forget this computer.
+        let reason = if shared.devices_set_aside && !lock(&shared.forgotten).contains(&peer) {
+            RefusalReason::Unspecified
+        } else {
+            RefusalReason::NotPaired
+        };
+        let _ = timeout(HANDSHAKE_TIMEOUT, unverified.refuse(reason)).await;
         bail!("refused device {peer}: not paired and no pairing code is shown");
     }
     // Nothing is locked while waiting: a device that stays silent holds up no other.
@@ -843,20 +975,27 @@ fn check_secret(slot: &mut Option<PairingWindow>, secret: &[u8]) -> Result<(), P
     verdict
 }
 
-/// Keeps a connection to a device we joined, redialing with backoff.
-async fn dial_loop(shared: Arc<Shared>, device: KnownDevice) {
+/// Keeps a connection to a device we joined, redialing with backoff, at `addresses`.
+async fn dial_loop(shared: Arc<Shared>, id: DeviceId, addresses: watch::Receiver<Vec<SocketAddr>>) {
     let hello = shared.hello();
-    // The addresses from the pairing code, which never change here.
-    let (_, addresses) = watch::channel(device.addresses.clone());
     session::keep_connected(
         &shared.identity,
-        device.id,
+        id,
         addresses,
         &hello,
         &shared.peers,
         &*shared,
     )
     .await;
+}
+
+/// Tells the dialers where mDNS finds their computers.
+async fn found_loop(shared: Arc<Shared>, events: mdns_sd::Receiver<mdns_sd::ServiceEvent>) {
+    while let Some(announced) = discovery::next_announced(&events).await {
+        if shared.found(&announced) {
+            tracing::debug!(id = %announced.id, "found on the network");
+        }
+    }
 }
 
 async fn hotkey_loop(shared: Arc<Shared>, mut presses: mpsc::Receiver<Action>) {
@@ -931,6 +1070,18 @@ mod tests {
             format!("device_name = \"{name}\"\n"),
         )
         .unwrap();
+        start_in(home, profile).await
+    }
+
+    /// Stops the daemon and starts it again from the same profile, on a new port.
+    async fn restart(test: TestDaemon) -> TestDaemon {
+        let profile = test.daemon.shared.profile.clone();
+        let home = test._home;
+        drop(test.daemon);
+        start_in(home, profile).await
+    }
+
+    async fn start_in(home: tempfile::TempDir, profile: Profile) -> TestDaemon {
         let clipboard = MemoryClipboard::default();
         let notifications = Arc::new(Notifications::default());
         let options = DaemonOptions {
@@ -1043,6 +1194,80 @@ mod tests {
         assert!(laptop.notifications.2.lock().unwrap().is_empty());
     }
 
+    /// The joined computer comes back at another address, as after its IP address changed, and
+    /// mDNS finds it there.
+    #[tokio::test]
+    async fn a_joined_computer_found_at_a_new_address_is_redialed_and_remembered() {
+        let pc = start("pc").await;
+        let laptop = start("laptop").await;
+        let pc_id = pc.daemon.device_id();
+        let invite = pc.daemon.open_pairing().await.unwrap();
+        laptop.daemon.join(&invite).await.unwrap();
+        assert!(wait_for_async(|| connected(&laptop.daemon)).await);
+        let old = pc.daemon.local_addr();
+
+        let pc = restart(pc).await;
+        let new = pc.daemon.local_addr();
+        assert_ne!(new, old);
+        assert!(wait_for_async(|| async { !connected(&laptop.daemon).await }).await);
+        let at_new_address = Announced {
+            id: pc_id,
+            ips: vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+            port: new.port(),
+        };
+        assert!(laptop.daemon.shared.found(&at_new_address));
+
+        assert!(wait_for_async(|| connected(&laptop.daemon)).await);
+        // The address that worked goes first, also in the file, for the next start.
+        let saved = laptop.daemon.shared.profile.known_devices().unwrap();
+        assert_eq!(saved.get(&pc_id).unwrap().addresses, [new, old]);
+        assert_eq!(
+            laptop.daemon.status().await.devices[0].device.addresses,
+            [new, old]
+        );
+        // Announcements of devices it doesn't dial change nothing.
+        let phone = Identity::generate().unwrap().device_id();
+        assert!(!laptop.daemon.shared.found(&Announced {
+            id: phone,
+            ..at_new_address.clone()
+        }));
+        assert!(!pc.daemon.shared.found(&Announced {
+            id: laptop.daemon.device_id(),
+            ..at_new_address
+        }));
+    }
+
+    /// A forged announcement is tried, but doesn't replace the addresses that work.
+    #[tokio::test]
+    async fn a_forged_announcement_is_not_remembered() {
+        let pc = start("pc").await;
+        let laptop = start("laptop").await;
+        let pc_id = pc.daemon.device_id();
+        let invite = pc.daemon.open_pairing().await.unwrap();
+        laptop.daemon.join(&invite).await.unwrap();
+        assert!(wait_for_async(|| connected(&laptop.daemon)).await);
+        // Another paste-get answers there: the TLS handshake fails, as it isn't the PC.
+        let impostor = start("impostor").await;
+
+        assert!(laptop.daemon.shared.found(&Announced {
+            id: pc_id,
+            ips: vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+            port: impostor.daemon.local_addr().port(),
+        }));
+        pc.daemon
+            .shared
+            .peers
+            .disconnect(&laptop.daemon.device_id());
+
+        assert!(wait_for_async(|| connected(&laptop.daemon)).await);
+        sleep(Duration::from_millis(100)).await;
+        let saved = laptop.daemon.shared.profile.known_devices().unwrap();
+        assert_eq!(
+            saved.get(&pc_id).unwrap().addresses,
+            [pc.daemon.local_addr()]
+        );
+    }
+
     #[tokio::test]
     async fn pairing_persists_and_status_reports_it() {
         let pc = start("pc").await;
@@ -1112,11 +1337,22 @@ mod tests {
 
         laptop.daemon.forget(&pc.daemon.device_id()).unwrap();
 
-        // Its dialer stopped: the PC sees no connection coming back.
-        assert!(wait_for_async(|| async { !connected(&pc.daemon).await }).await);
-        sleep(Duration::from_millis(300)).await;
+        // The PC is told: it forgets the laptop too, and says so.
+        assert!(wait_for_async(|| async { pc.daemon.status().await.devices.is_empty() }).await);
+        assert!(
+            pc.notifications
+                .1
+                .lock()
+                .unwrap()
+                .contains(&"laptop unpaired this computer".to_owned())
+        );
+        let known = pc.daemon.shared.profile.known_devices().unwrap();
+        assert!(!known.contains(&laptop.daemon.device_id()));
+        // Its dialer stopped: no connection comes back.
+        sleep(Duration::from_millis(1500)).await;
         assert!(!connected(&pc.daemon).await);
         assert!(laptop.daemon.status().await.devices.is_empty());
+        assert!(laptop.notifications.1.lock().unwrap().is_empty());
     }
 
     async fn pair_as(
@@ -1133,6 +1369,71 @@ mod tests {
 
     impl SessionEvents for NoEvents {
         fn clip_received(&self, _peer: DeviceId, _clip: Clip) {}
+    }
+
+    /// Records who unpaired this side.
+    #[derive(Default)]
+    struct UnpairedBy(Mutex<Vec<DeviceId>>);
+
+    impl SessionEvents for UnpairedBy {
+        fn clip_received(&self, _peer: DeviceId, _clip: Clip) {}
+
+        fn unpaired_by(&self, peer: DeviceId) {
+            self.0.lock().unwrap().push(peer);
+        }
+    }
+
+    /// Forgotten while its connection was being set up (after the TLS handshake checked it was
+    /// paired, before the session started), where [`Daemon::forget`] can't end it yet: the
+    /// session tells the device itself.
+    #[tokio::test]
+    async fn a_device_forgotten_while_it_connects_is_told() {
+        let pc = start("pc").await;
+        let shared = Arc::clone(&pc.daemon.shared);
+        let phone = Identity::generate().unwrap();
+        let (phone_io, pc_io) = tokio::io::duplex(64 * 1024);
+        let (client, server) = tokio::join!(
+            transport::connect(phone_io, &phone, pc.daemon.device_id()),
+            async {
+                // Still paired when its key was checked.
+                transport::accept(pc_io, &shared.identity)
+                    .await?
+                    .authorize(|_| true)
+            }
+        );
+        let phone_hello = Hello {
+            protocol_version: PROTOCOL_VERSION,
+            device_name: "POCO".into(),
+            ..Hello::default()
+        };
+        let (phone_peers, phone_events) = (Peers::new(), UnpairedBy::default());
+
+        let phone_side =
+            session::run_session(client.unwrap(), phone_hello, &phone_peers, &phone_events);
+        let pc_side = async {
+            let Ok(Opening::Hello(connection, hello)) =
+                pairing::read_opening(server.unwrap()).await
+            else {
+                panic!("expected a Hello");
+            };
+            session::answer_session(connection, hello, shared.hello(), &shared.peers, &*shared)
+                .await
+        };
+        let sessions = async { tokio::join!(phone_side, pc_side) };
+        let (phone_ended, pc_ended) = timeout(Duration::from_secs(5), sessions)
+            .await
+            .expect("both sessions should end");
+
+        assert!(matches!(pc_ended, Err(session::SessionError::Unpaired)));
+        assert!(matches!(
+            phone_ended,
+            Err(session::SessionError::UnpairedByPeer)
+        ));
+        assert_eq!(*phone_events.0.lock().unwrap(), [pc.daemon.device_id()]);
+        // It never counted as connected, nor came back as a device.
+        assert!(!shared.peers.is_connected(&phone.device_id()));
+        assert!(pc.daemon.status().await.devices.is_empty());
+        assert!(pc.notifications.1.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1205,6 +1506,46 @@ mod tests {
         );
         let saved = pc.daemon.shared.profile.known_devices().unwrap();
         assert_eq!(saved.get(&phone.device_id()).unwrap().name, "Mon téléphone");
+    }
+
+    #[tokio::test]
+    async fn a_device_of_another_protocol_version_is_shown_once() {
+        let pc = start("pc").await;
+        let phone = Identity::generate().unwrap();
+        let invite = pc.daemon.open_pairing().await.unwrap();
+        pair_as(&pc.daemon, &phone, &invite, "POCO").await.unwrap();
+
+        // It retries, as phones do.
+        for _ in 0..3 {
+            let socket = TcpStream::connect(pc.daemon.local_addr()).await.unwrap();
+            let mut connection = transport::connect(socket, &phone, pc.daemon.device_id())
+                .await
+                .unwrap();
+            let newer = Hello {
+                protocol_version: PROTOCOL_VERSION + 1,
+                device_name: "POCO".into(),
+                ..Hello::default()
+            };
+            let theirs = connection.exchange_hello(newer).await.unwrap();
+            assert_eq!(theirs.protocol_version, PROTOCOL_VERSION);
+            // The PC closes the connection.
+            assert!(
+                timeout(Duration::from_secs(5), connection.recv())
+                    .await
+                    .is_ok()
+            );
+        }
+
+        assert!(
+            wait_for(|| !pc.notifications.1.lock().unwrap().is_empty()).await,
+            "no notice"
+        );
+        sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            *pc.notifications.1.lock().unwrap(),
+            ["POCO runs another version of paste-get: update both"]
+        );
+        assert!(!connected(&pc.daemon).await);
     }
 
     #[tokio::test]
@@ -1394,8 +1735,47 @@ mod tests {
             .unwrap();
         let result = connection.exchange_hello(Hello::default()).await;
 
-        assert!(result.is_err());
+        // Told, so that it stops dialing.
+        assert!(matches!(result, Err(transport::TransportError::NotPaired)));
         assert!(pc.daemon.status().await.devices.is_empty());
+    }
+
+    /// Whether `device` is refused as not paired, or only refused.
+    async fn refusal(pc: &Daemon, device: &Identity) -> transport::TransportError {
+        let socket = TcpStream::connect(pc.local_addr()).await.unwrap();
+        let mut connection = transport::connect(socket, device, pc.device_id())
+            .await
+            .unwrap();
+        connection
+            .exchange_hello(Hello::default())
+            .await
+            .unwrap_err()
+    }
+
+    /// The paired devices couldn't be read: a device it doesn't know may be one of them, and is
+    /// refused without being told it was unpaired, so that it doesn't forget this computer.
+    #[tokio::test]
+    async fn unknown_devices_are_not_told_they_were_unpaired_while_pairings_are_set_aside() {
+        let home = tempfile::tempdir().unwrap();
+        let profile = Profile::open_in(home.path(), "pc").unwrap();
+        std::fs::write(profile.dir().join("devices.toml"), "[[device]\nid = ").unwrap();
+        let pc = start_in(home, profile).await;
+
+        assert_eq!(pc.notifications.1.lock().unwrap().len(), 1);
+        let phone = Identity::generate().unwrap();
+        assert!(matches!(
+            refusal(&pc.daemon, &phone).await,
+            transport::TransportError::Refused
+        ));
+
+        // One forgotten while it runs is told.
+        let invite = pc.daemon.open_pairing().await.unwrap();
+        pair_as(&pc.daemon, &phone, &invite, "POCO").await.unwrap();
+        pc.daemon.forget(&phone.device_id()).unwrap();
+        assert!(matches!(
+            refusal(&pc.daemon, &phone).await,
+            transport::TransportError::NotPaired
+        ));
     }
 
     #[tokio::test]

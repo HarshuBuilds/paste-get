@@ -20,6 +20,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time"] }
+tracing = "0.1"
 uniffi = "0.32"
 
 # The built-in shell mode: a small ADB client for the phone's own wireless debugging
@@ -38,4 +39,4 @@ boring-sys = "5"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 pasteget-desktop = { path = "../desktop" }
 tempfile = "3"
-tokio = { version = "1", features = ["rt-multi-thread"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "sync"] }

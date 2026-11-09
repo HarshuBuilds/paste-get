@@ -85,6 +85,8 @@ enum Command {
         /// Its name, as `pasteget status` shows it, or its ID.
         device: String,
     },
+    /// Stop the running daemon, and the tray if it runs it.
+    Quit,
 }
 
 #[tokio::main]
@@ -118,6 +120,14 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Resume => pause(&endpoint, Some(false)).await,
         Command::Recent => recent(&endpoint).await,
         Command::Forget { device } => forget(&endpoint, device).await,
+        Command::Quit => {
+            expect_one(&endpoint, &Request::Quit, |response| {
+                matches!(response, Response::Quitting)
+            })
+            .await?;
+            println!("Stopped.");
+            Ok(())
+        }
     }
 }
 
@@ -166,9 +176,12 @@ async fn daemon(
     }
     println!("Press Ctrl+C to stop.");
 
-    tokio::signal::ctrl_c()
-        .await
-        .context("could not wait for Ctrl+C")?;
+    let mut quit = daemon.quit_signal();
+    tokio::select! {
+        stopped = tokio::signal::ctrl_c() => stopped.context("could not wait for Ctrl+C")?,
+        // `pasteget quit`, or a newer tray taking over.
+        _ = quit.wait_for(|quit| *quit) => {}
+    }
     server.abort();
     control::cleanup(endpoint);
     println!("Stopped.");
@@ -290,6 +303,9 @@ async fn status(endpoint: &Endpoint) -> Result<()> {
         println!("{}", status.device_name);
         println!("  ID:        {}", status.device_id);
         println!("  Listening: {}", status.listening_on);
+        if let Some(version) = &status.app_version {
+            println!("  Version:   {version}");
+        }
         if status.pairing_open {
             println!("  Pairing:   a pairing code is being shown");
         }

@@ -3111,6 +3111,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
  "uniffi",
 ]
 
@@ -3123,6 +3124,7 @@ dependencies = [
  "dirs",
  "pasteget-desktop",
  "qrcode",
+ "semver",
  "serde",
  "serde_json",
  "tauri",

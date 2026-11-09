@@ -20,11 +20,13 @@ clap = { version = "4", features = ["derive"] }
 dirs = "7"
 pasteget-desktop = { path = ".." }
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+# Which of two paste-get versions is older, when a newer tray replaces a running one.
+semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # No window, no webview content: only the tray icon and its menu.
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
-tokio = { version = "1", features = ["sync", "time"] }
+tokio = { version = "1", features = ["macros", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
@@ -33,6 +35,7 @@ windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { version = "1", features = ["io-util", "net", "rt"] }
 
 [lints]
 workspace = true

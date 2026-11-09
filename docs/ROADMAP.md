@@ -110,8 +110,10 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
 - [x] Pairing from the tray: a *Pair a phone* window with the QR code, opened by itself on the
   first start, so no terminal is needed
 - [x] PC side can revoke a paired phone: `pasteget forget <name>`, or the tray menu → the phone
-  → *Forget this device*; its session ends at once. The phone is told (`Refusal`, `NOT_PAIRED`),
-  forgets the PC too and shows "<PC> unpaired this phone"
+  → *Forget this device*; its session ends at once. The phone is told (`Unpaired` in the
+  session, or `Refusal`, `NOT_PAIRED`, when it next dials), forgets the PC too and shows "<PC>
+  unpaired this phone". Forgetting a connected PC on the phone tells the PC the same way
+  (`TESTING.md`, P15)
 - [x] The phone asks before pairing: a scanned code or a `pasteget://` link (which any web page
   or message can open) shows the name and addresses it gives and pairs only on *Pair*. Pairing
   errors are explained in the phone's language, with the technical message under *Details*
@@ -123,6 +125,15 @@ Goal: take a screenshot on the POCO, press `Ctrl+V` on Windows or Arch, and it's
   AppUserModelID is registered for the user, and removed by the uninstaller
 - [x] Received clips never go to the Windows cloud clipboard (Microsoft account sync); they stay
   in the local `Win+V` history unless sensitive
+- [x] A PC that joined another finds it again by mDNS after its address changed, like the phone
+  does, and remembers the address that worked (`TESTING.md`, section 3, row 12)
+- [x] A device that speaks another protocol version gets a notification on the PC, once:
+  "<device> runs another version of paste-get: update both" (`TESTING.md`, T26)
+- [x] Updates replace the running version: the installer stops paste-get first, and a newer
+  tray asks an older running one to quit (control request `quit`, `pasteget quit`), or ends
+  its processes if it's too old to know it: only those of its profile, the tray and `pasteget
+  daemon` (`TESTING.md`, T22–T25, T27, T28). The uninstaller also removes *Start at login*,
+  for every profile
 
 ## v0.2 — "smart"
 History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart actions.
@@ -133,7 +144,10 @@ History + search, 2FA codes, PC-side OCR, sensitive filters, auto-crop, smart ac
   protocol). Notification access and Android 15's hidden codes are granted in one tap through
   the built-in mode or Shizuku (`TESTING.md`, section 14)
 - [x] A copy made while a paired device is away waits for it and is sent when it connects
-  again: the last one only, in memory, never a sensitive clip (`TESTING.md`, section 15)
+  again: the last one only, in memory, never a sensitive clip (`TESTING.md`, section 15). Also
+  when the connection died without closing: a copy waits until the device acknowledges it.
+  Copies made on both sides meanwhile cross on reconnection, and both keep the newer one (each
+  offer says how old its clip is, `ClipOffer.age_ms`)
 - [ ] Clipboard history, on the phone first, then on each PC. Off by default; passwords, codes,
   keys and card numbers never reach the disk. The store is in the core, so both sides share it:
   - [x] Shelves and secrets: `detect::category` (link, email, phone number, colour, code,

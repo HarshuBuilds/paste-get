@@ -17,6 +17,8 @@ use pasteget_desktop::clipboard::{Content, MemoryClipboard, Raw, RgbaImage};
 use pasteget_desktop::config::Profile;
 use pasteget_desktop::daemon::{Daemon, DaemonOptions};
 use pasteget_ffi::{ClipDelivery, PairedComputer, PastegetError, PhoneClient, PhoneListener};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::oneshot;
 
 /// A real 1×1 PNG.
 const PNG_1X1: &[u8] = &[
@@ -267,18 +269,21 @@ fn forgetting_a_computer_disconnects_it() {
     ));
 }
 
-/// The phone forgot the PC, which still knows it: scanning a new code pairs them again.
+/// The phone forgot the PC while not connected to it, so the PC still knows it: scanning a new
+/// code pairs them again.
 #[test]
 fn a_phone_that_forgot_the_pc_pairs_again() {
     let pc = start_pc();
     let phone = connected_phone(&pc, "POCO");
     let pc_id = pc.daemon.device_id().to_string();
-    phone.client.forget(pc_id.clone()).unwrap();
+    phone.client.stop();
     wait_until("the PC to see the phone leave", || {
         let status = pc.runtime.block_on(pc.daemon.status());
         status.devices.iter().all(|d| !d.connected)
     });
+    phone.client.forget(pc_id.clone()).unwrap();
     assert_eq!(pc.runtime.block_on(pc.daemon.status()).devices.len(), 1);
+    phone.client.start(phone.listener.clone());
 
     let qr_code = pc
         .runtime
@@ -342,7 +347,28 @@ fn renames_reach_the_other_side() {
     assert_eq!(again.paired_computers()[0].name, "Bureau");
 }
 
-/// The PC unpairs the phone: the phone hears it on its next dial, forgets the PC and says so.
+/// The phone forgets the PC while connected: the PC is told, and forgets the phone too.
+#[test]
+fn a_pc_forgotten_on_the_phone_forgets_it_too() {
+    let pc = start_pc();
+    let phone = connected_phone(&pc, "POCO");
+    let pc_id = pc.daemon.device_id().to_string();
+
+    phone.client.forget(pc_id).unwrap();
+
+    wait_until("the PC to forget the phone", || {
+        pc.runtime.block_on(pc.daemon.status()).devices.is_empty()
+    });
+    let profile = Profile::open_in(pc._home.path(), "pc").unwrap();
+    assert_eq!(profile.known_devices().unwrap().iter().count(), 0);
+    // The phone doesn't dial it again, and wasn't told it was unpaired: it did that itself.
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(phone.client.connected_count(), 0);
+    assert!(phone.listener.unpaired.lock().unwrap().is_empty());
+    assert!(phone.client.paired_computers().is_empty());
+}
+
+/// The PC unpairs the phone: the phone hears it at once, forgets the PC and says so.
 #[test]
 fn a_phone_unpaired_on_the_pc_forgets_it_and_says_so() {
     let pc = start_pc();
@@ -393,6 +419,183 @@ fn a_copy_made_while_the_pc_is_off_waits_for_it() {
     wait_until("the waiting copy on the PC", || {
         pc.clipboard.get() == Some(Raw::Text("copied while off".into()))
     });
+}
+
+/// Forwards TCP connections to the PC. It can go silent like a network that drops a device
+/// without closing its connections (a phone that leaves the Wi-Fi, a PC that goes to sleep).
+struct Proxy {
+    address: SocketAddr,
+    /// One per connection forwarded so far: fired, it stops forwarding, both ways.
+    freezes: Arc<Mutex<Vec<oneshot::Sender<()>>>>,
+    frozen: Frozen,
+}
+
+/// The frozen connections, still open: phone side, PC side.
+type Frozen = Arc<Mutex<Vec<(Option<TcpStream>, TcpStream)>>>;
+
+impl Proxy {
+    fn start(pc: &Pc) -> Self {
+        let target = pc.daemon.local_addr();
+        let listener = pc
+            .runtime
+            .block_on(TcpListener::bind((Ipv4Addr::LOCALHOST, 0)))
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let freezes = Arc::new(Mutex::new(Vec::new()));
+        let frozen = Arc::new(Mutex::new(Vec::new()));
+        let (accepted, held) = (Arc::clone(&freezes), Arc::clone(&frozen));
+        pc.runtime.spawn(async move {
+            while let Ok((phone, _)) = listener.accept().await {
+                let Ok(pc) = TcpStream::connect(target).await else {
+                    continue;
+                };
+                let (freeze, frozen) = oneshot::channel();
+                accepted.lock().unwrap().push(freeze);
+                tokio::spawn(forward(phone, pc, frozen, Arc::clone(&held)));
+            }
+        });
+        Self {
+            address,
+            freezes,
+            frozen,
+        }
+    }
+
+    /// The connections open now carry nothing more, either way, and stay open.
+    fn freeze(&self) {
+        let frozen_before = self.frozen.lock().unwrap().len();
+        let fired = self
+            .freezes
+            .lock()
+            .unwrap()
+            .drain(..)
+            .filter_map(|freeze| freeze.send(()).ok())
+            .count();
+        wait_until("the connections to freeze", || {
+            self.frozen.lock().unwrap().len() == frozen_before + fired
+        });
+    }
+
+    /// The frozen connections close on the phone's side only: the PC still sees them open.
+    fn hang_up_phone_side(&self) {
+        for (phone, _) in self.frozen.lock().unwrap().iter_mut() {
+            phone.take();
+        }
+    }
+}
+
+async fn forward(
+    mut phone: TcpStream,
+    mut pc: TcpStream,
+    freeze: oneshot::Receiver<()>,
+    frozen: Frozen,
+) {
+    {
+        let (mut from_phone, mut to_phone) = phone.split();
+        let (mut from_pc, mut to_pc) = pc.split();
+        tokio::select! {
+            _ = tokio::io::copy(&mut from_phone, &mut to_pc) => return,
+            _ = tokio::io::copy(&mut from_pc, &mut to_phone) => return,
+            _ = freeze => {}
+        }
+    }
+    frozen.lock().unwrap().push((Some(phone), pc));
+}
+
+/// A session that died without closing looks alive until it times out (90 s): copies made
+/// meanwhile, on either side, go into it for nothing. They are sent again once the device
+/// reconnects, and both sides end with the newer one. What the old session delivered isn't
+/// delivered again.
+#[test]
+fn copies_made_while_a_session_is_silently_dead_arrive_when_it_reconnects() {
+    let pc = start_pc();
+    let proxy = Proxy::start(&pc);
+    let mut invite: PairingInvite = pc
+        .runtime
+        .block_on(pc.daemon.open_pairing())
+        .unwrap()
+        .to_uri()
+        .parse()
+        .unwrap();
+    invite.addresses = vec![proxy.address];
+    let phone_dir = tempfile::tempdir().unwrap();
+    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    phone.pair(invite.to_uri()).unwrap();
+    let listener = Arc::new(Recorder::default());
+    phone.start(listener.clone());
+    let connections = || listener.connections.lock().unwrap().len();
+    wait_until("the connection", || connections() == 1);
+    let text = |text: &str| Content {
+        mime_type: mime::TEXT.into(),
+        data: text.as_bytes().to_vec(),
+        sensitive: false,
+    };
+    let received_on_the_phone = || {
+        listener
+            .clips
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, data)| String::from_utf8(data.clone()).unwrap())
+            .collect::<Vec<_>>()
+    };
+    // Ids change each time a clip goes through, even the same one again.
+    let recent_on_the_pc = || {
+        pc.daemon
+            .recent()
+            .iter()
+            .map(|clip| clip.id)
+            .collect::<Vec<_>>()
+    };
+
+    // Delivered both ways, and acknowledged, while the network works.
+    assert_eq!(pc.daemon.send(text("before, from the PC")), 1);
+    assert_eq!(
+        phone.copied_text("before, from the phone".into(), false),
+        Some(1)
+    );
+    wait_until("both clips", || {
+        received_on_the_phone().len() == 1
+            && pc.clipboard.get() == Some(Raw::Text("before, from the phone".into()))
+    });
+    std::thread::sleep(Duration::from_millis(300));
+
+    // The session dies silently, and the phone reconnects: nothing is sent again.
+    proxy.freeze();
+    proxy.hang_up_phone_side();
+    let before = recent_on_the_pc();
+    wait_until("the reconnection", || connections() == 3);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(received_on_the_phone(), ["before, from the PC"]);
+    assert_eq!(recent_on_the_pc(), before);
+
+    // Copies made while it's dead go into it, on both sides, for nothing: the PC's first, then
+    // the phone's.
+    proxy.freeze();
+    assert_eq!(pc.daemon.send(text("copied on the PC meanwhile")), 1);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        phone.copied_text("copied on the phone meanwhile".into(), false),
+        Some(1)
+    );
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(received_on_the_phone().len(), 1);
+
+    // Once the phone reconnects, they cross. Both sides keep the newer one, the phone's: the PC
+    // takes it, the phone drops the PC's (it came before the PC's ack of the phone's).
+    proxy.hang_up_phone_side();
+    let delivered = || listener.deliveries.lock().unwrap().len();
+    wait_until("the copies made meanwhile", || {
+        delivered() == 2
+            && pc.clipboard.get() == Some(Raw::Text("copied on the phone meanwhile".into()))
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(received_on_the_phone(), ["before, from the PC"]);
+    assert_eq!(
+        pc.clipboard.get(),
+        Some(Raw::Text("copied on the phone meanwhile".into()))
+    );
+    assert_eq!(pc.daemon.recent().len(), 4);
 }
 
 #[test]
@@ -701,6 +904,33 @@ fn pairing_says_why_each_address_failed() {
         computer.addresses,
         [address, closed, other].map(|a| a.to_string())
     );
+}
+
+/// A saved list of computers that can't be read is set aside: the app starts with none.
+#[test]
+fn an_unreadable_computer_list_is_set_aside() {
+    let pc = start_pc();
+    let phone_dir = tempfile::tempdir().unwrap();
+    let saved = phone_dir.path().join("computers.json");
+    std::fs::write(&saved, b"[{\"device_id\": \"ABC\", \"na").unwrap();
+
+    let phone = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+
+    assert!(phone.paired_computers().is_empty());
+    assert_eq!(
+        std::fs::read(phone_dir.path().join("computers.json.bad")).unwrap(),
+        b"[{\"device_id\": \"ABC\", \"na"
+    );
+    // Pairing again works, and is saved.
+    let qr_code = pc
+        .runtime
+        .block_on(pc.daemon.open_pairing())
+        .unwrap()
+        .to_uri();
+    let computer = phone.pair(qr_code).unwrap();
+    drop(phone);
+    let again = PhoneClient::new(path_of(&phone_dir), "POCO".into()).unwrap();
+    assert_eq!(again.paired_computers(), [computer]);
 }
 
 #[test]

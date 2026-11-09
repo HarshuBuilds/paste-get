@@ -19,8 +19,14 @@ message Envelope {
     PairRequest pair_request = 7;
     PairResponse pair_response = 8;
     Refusal refusal = 9;
+    Unpaired unpaired = 10;
   }
 }
+
+// Sent in a session by a device that just unpaired the other, right before it closes the
+// connection. The receiver forgets the sender too, as after a Refusal with NOT_PAIRED, stops
+// dialing it and tells the user. Devices that don't know it ignore it.
+message Unpaired {}
 
 // Sent by the accepting device, instead of anything else, to a device it won't talk to; the
 // connection is closed right after. The connecting device has pinned the sender's key, so it
@@ -94,6 +100,11 @@ message ClipOffer {
   // For CLIP_KIND_ONE_TIME_CODE: the app whose notification held the code, e.g. "Messages",
   // shown to the user. Untrusted: receivers clean it up like a device name.
   string source_app = 8;
+  // How long ago the clip was copied on its origin device, in milliseconds, as far as the
+  // sender knows: 0 for a copy it just made. An age, not a time, so that clocks don't need to
+  // agree. A receiver whose own clip for the sender, not acknowledged yet, was copied more
+  // recently keeps its own (docs/PROTOCOL.md, section 4.2).
+  uint64 age_ms = 9;
 }
 
 enum ClipKind {

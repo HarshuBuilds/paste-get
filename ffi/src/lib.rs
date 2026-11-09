@@ -21,13 +21,14 @@ use std::io::Write;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use pasteget_core::clip::{Clip, Kind, mime};
 use pasteget_core::echo::EchoGuard;
 use pasteget_core::identity::{DeviceId, Identity};
 use pasteget_core::pairing::{self, PairingInvite, sanitize_device_name};
 use pasteget_core::proto::{AckStatus, Hello, PROTOCOL_VERSION, Platform};
-use pasteget_core::session::{self, Delivery, Peers, SessionEvents};
+use pasteget_core::session::{self, Delivery, Peers, SessionEvents, found_first};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Runtime;
 use tokio::sync::watch;
@@ -42,6 +43,8 @@ const IDENTITY_FILE: &str = "identity.key";
 const COMPUTERS_FILE: &str = "computers.json";
 /// Addresses remembered per computer, and found addresses tried per announcement.
 const MAX_ADDRESSES: usize = 8;
+/// Time a session has to tell a computer it was forgotten before its dialer is stopped.
+const UNPAIR_FAREWELL: Duration = Duration::from_secs(3);
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 #[uniffi(flat_error)]
@@ -134,7 +137,8 @@ struct State {
 #[uniffi::export]
 impl PhoneClient {
     /// Loads this phone's identity and pairings from `data_dir` (the app's private files
-    /// directory), creating the identity on first use.
+    /// directory), creating the identity on first use. Pairings that can't be read are set
+    /// aside (`computers.json.bad`): the phone then starts with none.
     #[uniffi::constructor]
     pub fn new(data_dir: String, device_name: String) -> Result<Arc<Self>, PastegetError> {
         let data_dir = PathBuf::from(data_dir);
@@ -218,7 +222,8 @@ impl PhoneClient {
         Ok(computer)
     }
 
-    /// Unpairs a computer and drops its connection.
+    /// Unpairs a computer and drops its connection. If it's connected, it's told, and forgets
+    /// this phone too. Doesn't wait for the network.
     pub fn forget(&self, device_id: String) -> Result<(), PastegetError> {
         {
             let mut computers = lock(&self.state.computers);
@@ -231,8 +236,20 @@ impl PhoneClient {
         }
         if let Ok(id) = device_id.parse::<DeviceId>() {
             self.state.peers.unexpect(&id);
-            if let Some(dialer) = lock(&self.dialers).remove(&id) {
-                dialer.task.abort();
+            let dialer = lock(&self.dialers).remove(&id);
+            let told = self.state.peers.unpair(&id);
+            if let Some(dialer) = dialer {
+                if told {
+                    // Its session says so, then ends, and the dialer with it. Stopped anyway in
+                    // case the session ended first for another reason.
+                    let task = dialer.task;
+                    self.runtime.spawn(async move {
+                        tokio::time::sleep(UNPAIR_FAREWELL).await;
+                        task.abort();
+                    });
+                } else {
+                    dialer.task.abort();
+                }
             }
         }
         Ok(())
@@ -421,8 +438,8 @@ impl State {
 }
 
 impl SessionEvents for State {
-    /// The computer unpaired this phone: forget it too. Its dialer is the caller, and ends by
-    /// itself.
+    /// The computer unpaired this phone, and refused its dialer or said so in their session:
+    /// forget it too. Its dialer ends by itself.
     fn unpaired_by(&self, peer: DeviceId) {
         let id = peer.to_string();
         let removed = {
@@ -461,6 +478,12 @@ impl SessionEvents for State {
     }
 
     fn connected(&self, peer: DeviceId, hello: &Hello) {
+        // Forgotten while this connection was being set up: `forget` came too early to end it.
+        let id = peer.to_string();
+        if !lock(&self.computers).iter().any(|c| c.device_id == id) {
+            self.peers.unpair(&peer);
+            return;
+        }
         self.renamed(peer, &hello.device_name);
         if let Some(listener) = self.listener() {
             listener.on_connection_changed(peer.to_string(), true);
@@ -503,20 +526,6 @@ fn parse_addresses(addresses: &[String]) -> Vec<SocketAddr> {
     addresses.iter().filter_map(|a| a.parse().ok()).collect()
 }
 
-/// `first`, then the addresses of `then` that aren't in it.
-fn found_first(
-    first: impl IntoIterator<Item = SocketAddr>,
-    then: impl IntoIterator<Item = SocketAddr>,
-) -> Vec<SocketAddr> {
-    let mut merged: Vec<SocketAddr> = Vec::new();
-    for address in first.into_iter().chain(then) {
-        if !merged.contains(&address) {
-            merged.push(address);
-        }
-    }
-    merged
-}
-
 fn load_or_create_identity(dir: &Path) -> Result<Identity, PastegetError> {
     let path = dir.join(IDENTITY_FILE);
     match fs::read(&path) {
@@ -533,13 +542,33 @@ fn load_or_create_identity(dir: &Path) -> Result<Identity, PastegetError> {
     }
 }
 
+/// The saved computers. A file that doesn't read as such (a write cut short, a bug) is moved
+/// aside to `computers.json.bad` and none are loaded: the app still starts, and the user pairs
+/// again.
 fn load_computers(dir: &Path) -> Result<Vec<PairedComputer>, PastegetError> {
-    match fs::read(dir.join(COMPUTERS_FILE)) {
-        Ok(json) => {
-            serde_json::from_slice(&json).map_err(|e| PastegetError::Storage(e.to_string()))
+    let path = dir.join(COMPUTERS_FILE);
+    let json = match fs::read(&path) {
+        Ok(json) => json,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+    match serde_json::from_slice(&json) {
+        Ok(computers) => Ok(computers),
+        Err(e) => {
+            let aside = dir.join(format!("{COMPUTERS_FILE}.bad"));
+            // Where it failed, not the message: that can quote the file.
+            tracing::warn!(
+                category = ?e.classify(),
+                line = e.line(),
+                column = e.column(),
+                len = json.len(),
+                "the saved computers could not be read: moved to {COMPUTERS_FILE}.bad, starting with none"
+            );
+            if let Err(e) = fs::rename(&path, &aside) {
+                tracing::warn!(error = %e, "could not move the unreadable file aside");
+            }
+            Ok(Vec::new())
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(e) => Err(e.into()),
     }
 }
 
@@ -567,24 +596,80 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pasteget_core::session::SessionError;
+    use pasteget_core::transport;
 
     fn addr(s: &str) -> SocketAddr {
         s.parse().unwrap()
     }
 
-    #[test]
-    fn found_addresses_come_first_without_duplicates() {
-        let found = [addr("192.168.1.30:47290"), addr("10.0.0.2:47290")];
-        let known = [addr("192.168.1.20:47290"), addr("10.0.0.2:47290")];
+    /// Records whether the app was told a computer connected.
+    #[derive(Default)]
+    struct Connections(Mutex<Vec<bool>>);
 
-        assert_eq!(
-            found_first(found, known),
-            [
-                addr("192.168.1.30:47290"),
-                addr("10.0.0.2:47290"),
-                addr("192.168.1.20:47290")
-            ]
-        );
+    impl PhoneListener for Connections {
+        fn on_connection_changed(&self, _device_id: String, connected: bool) {
+            self.0.lock().unwrap().push(connected);
+        }
+
+        fn on_clip_received(&self, _mime_type: String, _data: Vec<u8>, _sensitive: bool) {}
+
+        fn on_clip_delivered(&self, _delivery: ClipDelivery) {}
+
+        fn on_unpaired(&self, _computer: PairedComputer) {}
+    }
+
+    /// Records who unpaired the computer.
+    #[derive(Default)]
+    struct UnpairedBy(Mutex<Vec<DeviceId>>);
+
+    impl SessionEvents for UnpairedBy {
+        fn clip_received(&self, _peer: DeviceId, _clip: Clip) {}
+
+        fn unpaired_by(&self, peer: DeviceId) {
+            self.0.lock().unwrap().push(peer);
+        }
+    }
+
+    /// Forgotten while its connection was being set up, where `forget` can't end it yet: the
+    /// session tells the computer itself, and the app never hears it connected.
+    #[test]
+    fn a_computer_forgotten_while_it_connects_is_told() {
+        let dir = tempfile::tempdir().unwrap();
+        let phone = PhoneClient::new(dir.path().to_str().unwrap().into(), "POCO".into()).unwrap();
+        let connections = Arc::new(Connections::default());
+        phone.start(connections.clone());
+        let state = Arc::clone(&phone.state);
+        let pc = Identity::generate().unwrap();
+        let (pc_peers, pc_events) = (Peers::new(), UnpairedBy::default());
+        let pc_hello = Hello {
+            protocol_version: PROTOCOL_VERSION,
+            device_name: "PC".into(),
+            ..Hello::default()
+        };
+
+        let (phone_ended, pc_ended) = phone.runtime.block_on(async {
+            let (phone_io, pc_io) = tokio::io::duplex(64 * 1024);
+            let (client, server) = tokio::join!(
+                transport::connect(phone_io, &state.identity, pc.device_id()),
+                async { transport::accept(pc_io, &pc).await?.authorize(|_| true) }
+            );
+            let sessions = async {
+                tokio::join!(
+                    session::run_session(client.unwrap(), state.hello(), &state.peers, &*state),
+                    session::run_session(server.unwrap(), pc_hello, &pc_peers, &pc_events)
+                )
+            };
+            tokio::time::timeout(Duration::from_secs(5), sessions)
+                .await
+                .expect("both sessions should end")
+        });
+
+        assert!(matches!(phone_ended, Err(SessionError::Unpaired)));
+        assert!(matches!(pc_ended, Err(SessionError::UnpairedByPeer)));
+        assert_eq!(*pc_events.0.lock().unwrap(), [state.identity.device_id()]);
+        assert!(!connections.0.lock().unwrap().contains(&true));
+        assert!(phone.paired_computers().is_empty());
     }
 
     #[test]

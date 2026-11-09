@@ -99,14 +99,9 @@ impl Autostart {
     /// The entry for `profile` under another key of `HKEY_CURRENT_USER`. For tests.
     #[cfg(windows)]
     pub fn in_key(key: &str, profile: &str) -> Self {
-        let value = if profile == DEFAULT_PROFILE {
-            "paste-get".to_owned()
-        } else {
-            format!("paste-get ({profile})")
-        };
         Self {
             key: key.to_owned(),
-            value,
+            value: run_value(profile),
         }
     }
 
@@ -242,6 +237,17 @@ fn exec_argument(arg: &str) -> Result<String> {
     Ok(out)
 }
 
+/// The name of `profile`'s value in the `Run` key. The uninstaller removes every profile's
+/// (`desktop/tray/installer-hooks.nsh`), by these names.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn run_value(profile: &str) -> String {
+    if profile == DEFAULT_PROFILE {
+        "paste-get".to_owned()
+    } else {
+        format!("paste-get ({profile})")
+    }
+}
+
 /// The command line stored in the `Run` key. Arguments are profile names and flags, which
 /// never need quoting; the program's path may have spaces, so it is quoted.
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -299,6 +305,21 @@ mod tests {
             r#""C:\Program Files\paste-get\pasteget-tray.exe" --profile default"#
         );
         assert!(windows_command(&launch(r#"C:\a"b.exe"#)).is_err());
+    }
+
+    #[test]
+    fn the_windows_uninstaller_removes_the_login_entries_of_every_profile() {
+        let hooks = include_str!("../tray/installer-hooks.nsh");
+        let default = format!(r#"${{If}} $1 == "{}""#, run_value(DEFAULT_PROFILE));
+        // What the other profiles' names start with, and its length.
+        let prefix = run_value("work").strip_suffix("work)").unwrap().to_owned();
+        let others = format!(r#"${{OrIf}} $2 == "{prefix}""#);
+        let cut = format!("StrCpy $2 $1 {}", prefix.chars().count());
+
+        for expected in [default, others, cut] {
+            assert!(hooks.contains(&expected), "{expected}");
+        }
+        assert!(hooks.contains("!insertmacro PASTEGET_REMOVE_LOGIN_ENTRIES"));
     }
 
     #[test]

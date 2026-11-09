@@ -51,10 +51,12 @@ Each line is a claim to check. "→" points at where it's enforced.
 6. A peer that is no longer paired (forgotten on the phone or on the PC) can't keep or reopen a
    session; one being set up while it is forgotten is closed too. It is sent a `Refusal`
    (`NOT_PAIRED`) and nothing it sent is acted on; a client forgets the refusing device only
-   after the TLS handshake proved that device's pinned key, so a refusal can't be forged.
-   → `session.rs` (`Peers::disconnect`, `keep_connected`), `transport.rs`
+   after the TLS handshake proved that device's pinned key, so a refusal can't be forged. A
+   connected peer is told with `Unpaired` in its session instead; a device forgets the sender
+   of an `Unpaired` only inside a session with it, whose handshake proved its key.
+   → `session.rs` (`Peers::unpair`, `read_loop`, `keep_connected`), `transport.rs`
    (`UnverifiedConnection::refuse`), `desktop/src/daemon.rs` (`Daemon::forget`, `connected`,
-   `handle_incoming`), `ffi/src/lib.rs` (`forget`, `unpaired_by`)
+   `unpaired_by`, `handle_incoming`), `ffi/src/lib.rs` (`forget`, `connected`, `unpaired_by`)
 
 ### Pairing
 7. An unknown device can do nothing but send one `PairRequest`, and only while a window is

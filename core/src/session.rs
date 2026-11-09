@@ -11,7 +11,11 @@
 //! [`SessionEvents::clip_delivered`] reports, to measure latency.
 //!
 //! [`Peers`] holds the outgoing queue of every connected device, so the app can send to all of
-//! them. What to do with received clips (clipboard, relay, notification) is up to the app.
+//! them, and the last clip each paired device hasn't acknowledged, to send again when it
+//! reconnects. What to do with received clips (clipboard, relay, notification) is up to the app.
+//!
+//! Each offer says how long ago its clip was copied. When copies made on both sides while they
+//! were apart cross on the way, each side keeps the newer one, so that both end with it.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -21,13 +25,13 @@ use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
-use tokio::sync::{Notify, mpsc, watch};
+use tokio::sync::{mpsc, watch};
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep, sleep_until, timeout};
 
 use crate::clip::{self, Clip, ClipReceiver, Received};
 use crate::identity::{DeviceId, Identity};
 use crate::proto::envelope::Payload;
-use crate::proto::{Ack, AckStatus, Envelope, Hello, Ping, Pong};
+use crate::proto::{Ack, AckStatus, Envelope, Hello, Ping, Pong, Unpaired};
 use crate::transport::{self, Connection, EnvelopeReader, EnvelopeWriter, TransportError};
 
 /// Time allowed for the TLS handshake, and separately for the Hello exchange.
@@ -43,6 +47,9 @@ pub const RECONNECT_MAX: Duration = Duration::from_secs(30);
 pub const OUTGOING_QUEUE: usize = 16;
 /// Sent clips still waiting for their [`Ack`]. Beyond that, the oldest is no longer timed.
 const AWAITING_ACK: usize = 32;
+/// How long a session's writer has, once the session ends, to send what's left ([`Unpaired`]
+/// included) and close the connection.
+const WRITER_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
@@ -54,6 +61,12 @@ pub enum SessionError {
     Protocol(&'static str),
     #[error("the session was closed")]
     Closed,
+    /// This device unpaired the other ([`Peers::unpair`]) and told it so.
+    #[error("this device unpaired the other one")]
+    Unpaired,
+    /// The other device unpaired this one and said so ([`Unpaired`]).
+    #[error("the device unpaired this one")]
+    UnpairedByPeer,
 }
 
 /// What a session reports to the app. Called from session tasks: keep it quick.
@@ -68,14 +81,19 @@ pub trait SessionEvents: Send + Sync {
     /// newer session with the same device already replaced this one.
     fn disconnected(&self, _peer: DeviceId) {}
 
+    /// `peer` speaks protocol `version`, not this one's, so their session ended after the Hello
+    /// exchange: one of them must be updated. Reported at each attempt.
+    fn version_mismatch(&self, _peer: DeviceId, _version: u32) {}
+
     /// A complete clip whose hash and type were verified.
     fn clip_received(&self, peer: DeviceId, clip: Clip);
 
     /// `peer` acknowledged a clip this side sent.
     fn clip_delivered(&self, _peer: DeviceId, _delivery: &Delivery) {}
 
-    /// `peer` refused [`keep_connected`] because it unpaired this device, which has then
-    /// stopped dialing it. The place to forget it and tell the user.
+    /// `peer` unpaired this device: it refused [`keep_connected`], or said so in a session
+    /// ([`Unpaired`]), which then ended, after [`SessionEvents::disconnected`]. Its dialer, if any,
+    /// has stopped. The place to forget it and tell the user.
     fn unpaired_by(&self, _peer: DeviceId) {}
 }
 
@@ -91,26 +109,71 @@ pub struct Delivery {
 }
 
 /// The devices currently connected, and their outgoing queues.
+///
+/// Lock order: `queues`, then `waiting`.
 #[derive(Debug, Default)]
 pub struct Peers {
     queues: Mutex<HashMap<DeviceId, PeerQueue>>,
     /// The paired devices, connected or not ([`Peers::expect`]), and the last clip each one
-    /// missed while it was away.
-    waiting: Mutex<HashMap<DeviceId, Option<Clip>>>,
+    /// hasn't acknowledged yet.
+    waiting: Mutex<HashMap<DeviceId, Option<Numbered>>>,
+    /// When the last clip received from each device was copied, for [`Peers::relay`].
+    received: Mutex<HashMap<DeviceId, Copied>>,
     next_session: AtomicU64,
+    next_clip: AtomicU64,
+}
+
+/// A broadcast clip, numbered so that the device's ack can be matched with the clip waiting for
+/// it. Shared by every queue and every device it waits for.
+#[derive(Clone, Debug)]
+struct Numbered {
+    number: u64,
+    clip: Arc<Clip>,
+    copied: Copied,
+}
+
+/// When a clip was copied: `age` before `seen`, the moment it was copied here or reached this
+/// device. Kept as an age, like on the wire, so it never needs a time before this device started.
+#[derive(Clone, Copy, Debug)]
+struct Copied {
+    seen: Instant,
+    age: Duration,
+}
+
+impl Copied {
+    fn now() -> Self {
+        Self {
+            seen: Instant::now(),
+            age: Duration::ZERO,
+        }
+    }
+
+    /// How long ago the clip was copied.
+    fn age(&self) -> Duration {
+        self.seen.elapsed().saturating_add(self.age)
+    }
 }
 
 #[derive(Debug)]
 struct PeerQueue {
     session: u64,
     sender: mpsc::Sender<Outgoing>,
-    /// Ends the session: the device was unpaired.
-    kick: Arc<Notify>,
+    /// Ends the session, and says how.
+    kick: watch::Sender<Option<Ending>>,
+}
+
+/// Why this side ends a session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ending {
+    /// [`Peers::disconnect`].
+    Disconnect,
+    /// [`Peers::unpair`]: the device is told first.
+    Unpair,
 }
 
 #[derive(Debug)]
 enum Outgoing {
-    Clip { clip: Clip, queued_at: Instant },
+    Clip { clip: Numbered, queued_at: Instant },
     Envelope(Envelope),
 }
 
@@ -120,6 +183,8 @@ struct Sent {
     mime_type: String,
     len: usize,
     queued_at: Instant,
+    /// Its [`Numbered::number`].
+    number: u64,
 }
 
 /// Shared by a session's writer, which adds sent clips, and its reader, which matches acks.
@@ -130,8 +195,8 @@ impl Peers {
         Self::default()
     }
 
-    /// A paired device: when it isn't connected, the last clip it misses waits for it (in memory
-    /// only) and is sent when it comes back. Call it for every paired device, and after pairing.
+    /// A paired device: the last clip it hasn't acknowledged waits for it (in memory only) and is
+    /// sent again when it connects. Call it for every paired device, and after pairing.
     pub fn expect(&self, peer: DeviceId) {
         lock(&self.waiting).entry(peer).or_insert(None);
     }
@@ -139,19 +204,44 @@ impl Peers {
     /// The device was unpaired: nothing waits for it any more.
     pub fn unexpect(&self, peer: &DeviceId) {
         lock(&self.waiting).remove(peer);
+        lock(&self.received).remove(peer);
     }
 
     /// Queues `clip` for every connected device except `except`. Returns how many.
     ///
-    /// Paired devices that aren't connected get it when they come back, if it's still the last
-    /// clip by then. Secrets don't wait: a password or a code shouldn't turn up hours later.
+    /// Until it acknowledges the clip, a paired device gets it again when it connects, if it's
+    /// still the last clip by then: one that isn't connected, and one whose session is dead but
+    /// hasn't timed out yet (a PC asleep, a phone that just left the Wi-Fi), which queues it for
+    /// nothing. Secrets don't wait: a password or a code shouldn't turn up hours later. The clip
+    /// before a secret doesn't wait either: it would land over the secret.
     pub fn broadcast(&self, clip: &Clip, except: Option<DeviceId>) -> usize {
+        self.queue(clip, except, Copied::now())
+    }
+
+    /// Like [`Peers::broadcast`], for a clip `from` just sent ([`SessionEvents::clip_received`])
+    /// and passed on to the other devices: it keeps the time it was copied there, not the time
+    /// it reached this one.
+    pub fn relay(&self, clip: &Clip, from: DeviceId) -> usize {
+        let copied = lock(&self.received)
+            .get(&from)
+            .copied()
+            .unwrap_or_else(Copied::now);
+        self.queue(clip, Some(from), copied)
+    }
+
+    fn queue(&self, clip: &Clip, except: Option<DeviceId>, copied: Copied) -> usize {
+        let clip = Numbered {
+            number: self.next_clip.fetch_add(1, Ordering::Relaxed),
+            clip: Arc::new(clip.clone()),
+            copied,
+        };
+        // Held throughout, so that a session starting meanwhile gets the clip exactly once:
+        // queued, or waiting for it.
         let queues = self.lock();
-        if !clip.sensitive {
-            for (id, missed) in lock(&self.waiting).iter_mut() {
-                if !queues.contains_key(id) && Some(*id) != except && *id != clip.origin {
-                    *missed = Some(clip.clone());
-                }
+        let waits = (!clip.clip.sensitive).then(|| clip.clone());
+        for (id, unacknowledged) in lock(&self.waiting).iter_mut() {
+            if Some(*id) != except && *id != clip.clip.origin {
+                unacknowledged.clone_from(&waits);
             }
         }
         let mut queued = 0;
@@ -179,41 +269,83 @@ impl Peers {
         self.lock().contains_key(peer)
     }
 
-    /// Ends the session with `peer`, if one runs: call it after unpairing the device, so it
-    /// doesn't stay connected until it hangs up. Returns whether a session was ended.
+    /// Ends the session with `peer`, if one runs, without saying why (it paired again, say).
+    /// Returns whether a session was ended.
     pub fn disconnect(&self, peer: &DeviceId) -> bool {
+        self.end(peer, Ending::Disconnect)
+    }
+
+    /// Tells `peer` it was unpaired ([`Unpaired`]) and ends the session with it, if one runs:
+    /// call it after unpairing the device, so that it forgets this one too, at once. It's told
+    /// before anything still queued for it, which is dropped. Returns whether a session runs; it
+    /// then ends with [`SessionError::Unpaired`], which also stops [`keep_connected`].
+    pub fn unpair(&self, peer: &DeviceId) -> bool {
+        self.end(peer, Ending::Unpair)
+    }
+
+    fn end(&self, peer: &DeviceId, ending: Ending) -> bool {
         match self.lock().get(peer) {
             Some(queue) => {
-                // Stored if the session isn't waiting yet.
-                queue.kick.notify_one();
+                // Kept if the session isn't waiting yet.
+                queue.kick.send_replace(Some(ending));
                 true
             }
             None => false,
         }
     }
 
-    fn register(&self, peer: DeviceId, sender: mpsc::Sender<Outgoing>) -> (u64, Arc<Notify>) {
+    fn register(
+        &self,
+        peer: DeviceId,
+        sender: mpsc::Sender<Outgoing>,
+    ) -> (u64, watch::Receiver<Option<Ending>>) {
         let session = self.next_session.fetch_add(1, Ordering::Relaxed);
-        let kick = Arc::new(Notify::new());
-        // What it missed while away goes first.
-        let missed = lock(&self.waiting).get_mut(&peer).and_then(Option::take);
-        if let Some(clip) = missed {
-            tracing::info!(%peer, mime_type = %clip.mime_type, len = clip.data.len(), "sending the clip it missed");
+        let (kick, kicked) = watch::channel(None);
+        let mut queues = self.lock();
+        // What it missed goes first. It keeps waiting until the device acknowledges it, in case
+        // this session dies too.
+        let missed = lock(&self.waiting).get(&peer).cloned().flatten();
+        if let Some(missed) = missed {
+            tracing::info!(%peer, mime_type = %missed.clip.mime_type, len = missed.clip.data.len(), "sending the clip it missed");
             let _ = sender.try_send(Outgoing::Clip {
-                clip,
+                clip: missed,
                 queued_at: Instant::now(),
             });
         }
         // A newer session replaces an older one that hasn't noticed it's dead yet.
-        self.lock().insert(
+        queues.insert(
             peer,
             PeerQueue {
                 session,
                 sender,
-                kick: Arc::clone(&kick),
+                kick,
             },
         );
-        (session, kick)
+        (session, kicked)
+    }
+
+    /// Whether the clip waiting for `peer` was copied after a clip `peer` just sent, copied at
+    /// `theirs`: both were copied while they were apart, and crossed on the way. Then this side
+    /// keeps its own, and `peer`, which gets it, takes it: both end with the newer one.
+    fn has_newer_for(&self, peer: &DeviceId, theirs: &Copied) -> bool {
+        lock(&self.waiting)
+            .get(peer)
+            .and_then(Option::as_ref)
+            .is_some_and(|ours| ours.copied.age() < theirs.age())
+    }
+
+    /// `peer` sent a clip copied at `copied`, which the app may pass on ([`Peers::relay`]).
+    fn received_from(&self, peer: DeviceId, copied: Copied) {
+        lock(&self.received).insert(peer, copied);
+    }
+
+    /// `peer` acknowledged the clip `number`: if it's the one waiting for it, it waits no more.
+    fn acknowledged(&self, peer: &DeviceId, number: u64) {
+        if let Some(waiting) = lock(&self.waiting).get_mut(peer)
+            && waiting.as_ref().is_some_and(|w| w.number == number)
+        {
+            *waiting = None;
+        }
     }
 
     /// Forgets `session`. Returns `false` if a newer session with the device replaced it.
@@ -244,7 +376,8 @@ where
 {
     let their_hello = timeout(HANDSHAKE_TIMEOUT, connection.exchange_hello(hello))
         .await
-        .map_err(|_| SessionError::Timeout("Hello exchange"))??;
+        .map_err(|_| SessionError::Timeout("Hello exchange"))?;
+    let their_hello = reported(their_hello, connection.peer(), events)?;
     run(connection, their_hello, peers, events).await
 }
 
@@ -267,8 +400,25 @@ where
     timeout(HANDSHAKE_TIMEOUT, connection.send(&ours))
         .await
         .map_err(|_| SessionError::Timeout("Hello exchange"))??;
-    let their_hello = transport::checked_hello(their_hello)?;
+    let their_hello = reported(
+        transport::checked_hello(their_hello),
+        connection.peer(),
+        events,
+    )?;
     run(connection, their_hello, peers, events).await
+}
+
+/// Reports a device that speaks another protocol version.
+fn reported(
+    hello: Result<Hello, TransportError>,
+    peer: DeviceId,
+    events: &dyn SessionEvents,
+) -> Result<Hello, TransportError> {
+    if let Err(TransportError::VersionMismatch(version)) = &hello {
+        tracing::warn!(%peer, version, "the device speaks another protocol version");
+        events.version_mismatch(peer, *version);
+    }
+    hello
 }
 
 /// A session once both Hellos went through.
@@ -285,7 +435,8 @@ where
     let (reader, writer) = connection.into_split();
     let (sender, queue) = mpsc::channel(OUTGOING_QUEUE);
     let awaiting = AwaitingAck::default();
-    let (session, kick) = peers.register(peer, sender.clone());
+    let (session, mut kick) = peers.register(peer, sender.clone());
+    let (unpaired, unpaired_seen) = watch::channel(false);
     let mut guard = SessionGuard {
         peers,
         events,
@@ -296,15 +447,25 @@ where
             writer,
             queue,
             Arc::clone(&awaiting),
+            unpaired_seen,
         ))),
     };
     events.connected(peer, &their_hello);
 
     let result = tokio::select! {
-        result = read_loop(peer, reader, &sender, &awaiting, events) => result,
-        () = kick.notified() => {
-            tracing::info!(%peer, "session ended: the device was unpaired");
-            Err(SessionError::Closed)
+        result = read_loop(peer, reader, &sender, &awaiting, peers, events) => result,
+        ending = kicked(&mut kick) => match ending {
+            Ending::Disconnect => {
+                tracing::info!(%peer, "session ended by this device");
+                Err(SessionError::Closed)
+            }
+            Ending::Unpair => {
+                tracing::info!(%peer, "session ended: this device unpaired it");
+                // No more clips for it. The writer drops those still queued and says Unpaired.
+                guard.unregister();
+                unpaired.send_replace(true);
+                Err(SessionError::Unpaired)
+            }
         }
     };
 
@@ -312,12 +473,30 @@ where
     guard.unregister();
     drop(sender);
     if let Some(mut writer) = guard.writer.take()
-        && timeout(Duration::from_secs(1), &mut writer).await.is_err()
+        && timeout(WRITER_TIMEOUT, &mut writer).await.is_err()
     {
         tracing::debug!(%peer, "writer did not stop in time");
         writer.abort();
     }
+    // Reports the disconnection first.
+    drop(guard);
+    if matches!(result, Err(SessionError::UnpairedByPeer)) {
+        tracing::info!(%peer, "the device unpaired this one");
+        events.unpaired_by(peer);
+    }
     result
+}
+
+/// Resolves once the session is kicked; never if its queue was replaced by a newer session's.
+async fn kicked(kick: &mut watch::Receiver<Option<Ending>>) -> Ending {
+    let ending = kick
+        .wait_for(Option::is_some)
+        .await
+        .map(|ending| ending.unwrap_or(Ending::Disconnect));
+    match ending {
+        Ok(ending) => ending,
+        Err(_) => std::future::pending().await,
+    }
 }
 
 /// Tears a session down even if `run_session` is cancelled: forgets the device, stops the
@@ -353,8 +532,9 @@ impl Drop for SessionGuard<'_> {
     }
 }
 
-/// Keeps a connection to `peer` open forever: dials its addresses in turn, runs a session, and
-/// redials with backoff when it ends. Cancel by dropping or aborting the task.
+/// Keeps a connection to `peer` open: dials its addresses in turn, runs a session, and redials
+/// with backoff when it ends. Stops once either side unpaired the other; otherwise cancel by
+/// dropping or aborting the task.
 ///
 /// `addresses` may change while it runs, for example when the device is found at a new address.
 /// Every update, even one with the same addresses, also cuts short the wait before the next
@@ -391,6 +571,13 @@ pub async fn keep_connected(
                             events.unpaired_by(peer);
                             return;
                         }
+                        // Said in the session, as genuine; the session reported it.
+                        Err(SessionError::UnpairedByPeer) => {
+                            tracing::info!(%peer, "no longer dialing it");
+                            return;
+                        }
+                        // This device unpaired it.
+                        Err(SessionError::Unpaired) => return,
                         Err(e) => tracing::info!(%peer, error = %e, "session ended"),
                     }
                     break;
@@ -411,16 +598,32 @@ pub async fn keep_connected(
     }
 }
 
+/// Where to dial a device just found at `found` (by mDNS): there first, then at the addresses it
+/// had (`known`) that aren't among them.
+pub fn found_first(
+    found: impl IntoIterator<Item = SocketAddr>,
+    known: impl IntoIterator<Item = SocketAddr>,
+) -> Vec<SocketAddr> {
+    let mut merged: Vec<SocketAddr> = Vec::new();
+    for address in found.into_iter().chain(known) {
+        if !merged.contains(&address) {
+            merged.push(address);
+        }
+    }
+    merged
+}
+
 async fn read_loop<R: AsyncRead + Unpin>(
     peer: DeviceId,
     mut reader: EnvelopeReader<R>,
     replies: &mpsc::Sender<Outgoing>,
     awaiting: &AwaitingAck,
+    peers: &Peers,
     events: &dyn SessionEvents,
 ) -> Result<(), SessionError> {
     let mut receiver = ClipReceiver::default();
-    // When the offer of the clip being received arrived.
-    let mut offered_at = Instant::now();
+    // When the offer of the clip being received arrived, and how long ago it was copied by then.
+    let mut offered = Copied::now();
     loop {
         let Some(envelope) = timeout(IDLE_TIMEOUT, reader.recv())
             .await
@@ -430,7 +633,10 @@ async fn read_loop<R: AsyncRead + Unpin>(
         };
         let received = match envelope.payload {
             Some(Payload::ClipOffer(offer)) => {
-                offered_at = Instant::now();
+                offered = Copied {
+                    seen: Instant::now(),
+                    age: Duration::from_millis(offer.age_ms),
+                };
                 receiver.on_offer(offer)
             }
             Some(Payload::ClipChunk(chunk)) => receiver.on_chunk(chunk),
@@ -439,9 +645,10 @@ async fn read_loop<R: AsyncRead + Unpin>(
                 continue;
             }
             Some(Payload::Ack(ack)) => {
-                acknowledged(peer, &ack, awaiting, events);
+                acknowledged(peer, &ack, awaiting, peers, events);
                 continue;
             }
+            Some(Payload::Unpaired(Unpaired {})) => return Err(SessionError::UnpairedByPeer),
             // Pongs only prove the peer is alive; unknown payloads come from newer peers.
             Some(Payload::Pong(_)) | None => continue,
             Some(
@@ -461,13 +668,23 @@ async fn read_loop<R: AsyncRead + Unpin>(
             }
             Received::Clip { clip, ack } => {
                 reply(replies, Payload::Ack(ack)).await?;
+                if peers.has_newer_for(&peer, &offered) {
+                    tracing::info!(
+                        %peer,
+                        mime_type = %clip.mime_type,
+                        len = clip.data.len(),
+                        "clip dropped: a newer copy from here is on its way to the device"
+                    );
+                    continue;
+                }
                 tracing::info!(
                     %peer,
                     mime_type = %clip.mime_type,
                     len = clip.data.len(),
-                    ms = offered_at.elapsed().as_millis(),
+                    ms = offered.seen.elapsed().as_millis(),
                     "clip received"
                 );
+                peers.received_from(peer, offered);
                 events.clip_received(peer, clip);
             }
         }
@@ -475,11 +692,19 @@ async fn read_loop<R: AsyncRead + Unpin>(
 }
 
 /// Reports the delivery of the clip `ack` answers. Acks for unknown clips are ignored.
-fn acknowledged(peer: DeviceId, ack: &Ack, awaiting: &AwaitingAck, events: &dyn SessionEvents) {
+fn acknowledged(
+    peer: DeviceId,
+    ack: &Ack,
+    awaiting: &AwaitingAck,
+    peers: &Peers,
+    events: &dyn SessionEvents,
+) {
     let Some(sent) = lock(awaiting).remove(&ack.clip_id) else {
         tracing::debug!(%peer, "ack for a clip that isn't waiting for one");
         return;
     };
+    // Accepted or refused, the device has it: sending it again would change nothing.
+    peers.acknowledged(&peer, sent.number);
     let delivery = Delivery {
         mime_type: sent.mime_type,
         len: sent.len,
@@ -514,7 +739,7 @@ async fn reply(replies: &mpsc::Sender<Outgoing>, payload: Payload) -> Result<(),
         .map_err(|_| SessionError::Closed)
 }
 
-fn await_ack(awaiting: &AwaitingAck, clip_id: Vec<u8>, clip: &Clip, queued_at: Instant) {
+fn await_ack(awaiting: &AwaitingAck, clip_id: Vec<u8>, clip: &Numbered, queued_at: Instant) {
     let mut awaiting = lock(awaiting);
     if awaiting.len() >= AWAITING_ACK
         && let Some(oldest) = awaiting
@@ -527,33 +752,52 @@ fn await_ack(awaiting: &AwaitingAck, clip_id: Vec<u8>, clip: &Clip, queued_at: I
     awaiting.insert(
         clip_id,
         Sent {
-            mime_type: clip.mime_type.clone(),
-            len: clip.data.len(),
+            mime_type: clip.clip.mime_type.clone(),
+            len: clip.clip.data.len(),
             queued_at,
+            number: clip.number,
         },
     );
 }
 
+/// Sends what's queued, and pings. Once `unpaired` turns true, sends [`Unpaired`] instead of
+/// anything still queued, and stops.
 async fn write_loop<W: AsyncWrite + Unpin>(
     mut writer: EnvelopeWriter<W>,
     mut queue: mpsc::Receiver<Outgoing>,
     awaiting: AwaitingAck,
+    mut unpaired: watch::Receiver<bool>,
 ) {
     let mut ping = interval(PING_INTERVAL);
     ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
     ping.tick().await;
     let mut nonce = 0u64;
+    // Read between a clip's chunks, while the select below waits on `unpaired`.
+    let unpaired_now = unpaired.clone();
 
     let result: Result<(), SessionError> = async {
         loop {
             tokio::select! {
+                biased;
+                // Before the queue: what's in it was for a device that is no longer paired.
+                Ok(()) = async { unpaired.wait_for(|unpaired| *unpaired).await.map(drop) } => {
+                    let farewell = Envelope { payload: Some(Payload::Unpaired(Unpaired {})) };
+                    writer.send(&farewell).await?;
+                    return Ok(());
+                }
                 next = queue.recv() => match next {
                     Some(Outgoing::Clip { clip, queued_at }) => {
-                        let envelopes = clip::outgoing(&clip)
+                        let envelopes = clip::outgoing(&clip.clip)
                             .map_err(|_| SessionError::Protocol("no randomness for a clip ID"))?;
-                        for envelope in envelopes {
+                        for mut envelope in envelopes {
+                            // Unpaired meanwhile: the rest of the clip isn't sent.
+                            if *unpaired_now.borrow() {
+                                break;
+                            }
                             // Recorded before the offer leaves, so its ack can't come first.
-                            if let Some(Payload::ClipOffer(offer)) = &envelope.payload {
+                            if let Some(Payload::ClipOffer(offer)) = &mut envelope.payload {
+                                offer.age_ms =
+                                    u64::try_from(clip.copied.age().as_millis()).unwrap_or(u64::MAX);
                                 await_ack(&awaiting, offer.clip_id.clone(), &clip, queued_at);
                             }
                             writer.send(&envelope).await?;
@@ -593,9 +837,14 @@ mod tests {
         disconnected: Mutex<Vec<DeviceId>>,
         deliveries: Mutex<Vec<(DeviceId, Delivery)>>,
         unpaired_by: Mutex<Vec<DeviceId>>,
+        mismatches: Mutex<Vec<(DeviceId, u32)>>,
     }
 
     impl SessionEvents for Recorder {
+        fn version_mismatch(&self, peer: DeviceId, version: u32) {
+            self.mismatches.lock().unwrap().push((peer, version));
+        }
+
         fn unpaired_by(&self, peer: DeviceId) {
             self.unpaired_by.lock().unwrap().push(peer);
         }
@@ -718,6 +967,163 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_unpaired_device_is_told_and_forgets_this_one() {
+        let (phone, pc) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (phone_io, pc_io) = duplex(64 * 1024);
+        let (client, server) = tokio::join!(
+            transport::connect(phone_io, &phone, pc.device_id()),
+            async { transport::accept(pc_io, &pc).await?.authorize(|_| true) }
+        );
+        let (phone_peers, pc_peers) = (Arc::new(Peers::new()), Arc::new(Peers::new()));
+        let (phone_events, pc_events) =
+            (Arc::new(Recorder::default()), Arc::new(Recorder::default()));
+        let phone_session = tokio::spawn({
+            let (peers, events) = (Arc::clone(&phone_peers), Arc::clone(&phone_events));
+            async move { run_session(client.unwrap(), hello("phone"), &peers, &*events).await }
+        });
+        let pc_session = tokio::spawn({
+            let (peers, events) = (Arc::clone(&pc_peers), Arc::clone(&pc_events));
+            async move { run_session(server.unwrap(), hello("pc"), &peers, &*events).await }
+        });
+        until(|| {
+            phone_peers.is_connected(&pc.device_id()) && pc_peers.is_connected(&phone.device_id())
+        })
+        .await;
+
+        assert!(pc_peers.unpair(&phone.device_id()));
+
+        let pc_ended = timeout(Duration::from_secs(5), pc_session).await.unwrap();
+        assert!(matches!(pc_ended.unwrap(), Err(SessionError::Unpaired)));
+        let phone_ended = timeout(Duration::from_secs(5), phone_session)
+            .await
+            .unwrap();
+        assert!(matches!(
+            phone_ended.unwrap(),
+            Err(SessionError::UnpairedByPeer)
+        ));
+        assert_eq!(*phone_events.unpaired_by.lock().unwrap(), [pc.device_id()]);
+        assert_eq!(*phone_events.disconnected.lock().unwrap(), [pc.device_id()]);
+        // The side that unpaired isn't told it was.
+        assert!(pc_events.unpaired_by.lock().unwrap().is_empty());
+        assert!(!pc_peers.unpair(&phone.device_id()));
+    }
+
+    /// The farewell goes before a backlog of clips, which the unpaired device no longer gets.
+    #[tokio::test]
+    async fn an_unpaired_device_is_told_before_the_clips_still_queued() {
+        let (phone, pc) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (phone_id, pc_id) = (phone.device_id(), pc.device_id());
+        let (phone_io, pc_io) = duplex(64 * 1024);
+        let (client, server) = tokio::join!(transport::connect(phone_io, &phone, pc_id), async {
+            transport::accept(pc_io, &pc).await?.authorize(|_| true)
+        });
+        let (phone_peers, pc_peers) = (Arc::new(Peers::new()), Arc::new(Peers::new()));
+        let phone_events = Arc::new(Recorder::default());
+        let phone_session = tokio::spawn({
+            let (peers, events) = (Arc::clone(&phone_peers), Arc::clone(&phone_events));
+            async move { run_session(client.unwrap(), hello("phone"), &peers, &*events).await }
+        });
+        let _pc_session = tokio::spawn({
+            let peers = Arc::clone(&pc_peers);
+            async move { run_session(server.unwrap(), hello("pc"), &peers, &Recorder::default()).await }
+        });
+        until(|| phone_peers.is_connected(&pc_id) && pc_peers.is_connected(&phone_id)).await;
+
+        // As many 1 MiB images as the queue holds.
+        let mut image = b"\x89PNG\r\n\x1a\n".to_vec();
+        image.resize(1024 * 1024, 0);
+        for _ in 0..OUTGOING_QUEUE {
+            assert_eq!(
+                pc_peers.broadcast(&Clip::png(image.clone(), pc_id), None),
+                1
+            );
+        }
+        assert!(pc_peers.unpair(&phone_id));
+
+        let phone_ended = timeout(Duration::from_secs(5), phone_session)
+            .await
+            .unwrap();
+        assert!(matches!(
+            phone_ended.unwrap(),
+            Err(SessionError::UnpairedByPeer)
+        ));
+        // At most the one being written when it was unpaired.
+        assert!(phone_events.clips.lock().unwrap().len() <= 1);
+        // Nothing is queued for it any more.
+        assert_eq!(pc_peers.broadcast(&Clip::text("later", pc_id), None), 0);
+    }
+
+    /// Accepts any device on `listener` and runs a session with it.
+    fn serve(listener: TcpListener, pc: Identity, peers: Arc<Peers>, events: Arc<Recorder>) {
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                let Ok(unverified) = transport::accept(socket, &pc).await else {
+                    continue;
+                };
+                let connection = unverified.authorize(|_| true).unwrap();
+                let _ = run_session(connection, hello("pc"), &peers, &*events).await;
+            }
+        });
+    }
+
+    #[tokio::test]
+    async fn keep_connected_stops_when_this_side_unpairs() {
+        let (phone, pc) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (phone_id, pc_id) = (phone.device_id(), pc.device_id());
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let (_addresses, watched) = watch::channel(vec![listener.local_addr().unwrap()]);
+        let (pc_peers, pc_events) = (Arc::new(Peers::new()), Arc::new(Recorder::default()));
+        serve(listener, pc, Arc::clone(&pc_peers), Arc::clone(&pc_events));
+        let phone_peers = Arc::new(Peers::new());
+        let phone_events = Arc::new(Recorder::default());
+        let dialer = tokio::spawn({
+            let (peers, events) = (Arc::clone(&phone_peers), Arc::clone(&phone_events));
+            async move {
+                keep_connected(&phone, pc_id, watched, &hello("phone"), &peers, &*events).await;
+            }
+        });
+        until(|| phone_peers.is_connected(&pc_id)).await;
+
+        assert!(phone_peers.unpair(&pc_id));
+
+        timeout(Duration::from_secs(5), dialer)
+            .await
+            .expect("keep_connected should stop")
+            .unwrap();
+        until(|| !pc_events.unpaired_by.lock().unwrap().is_empty()).await;
+        assert_eq!(*pc_events.unpaired_by.lock().unwrap(), [phone_id]);
+        assert!(phone_events.unpaired_by.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn keep_connected_stops_when_the_other_side_unpairs() {
+        let (phone, pc) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (phone_id, pc_id) = (phone.device_id(), pc.device_id());
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let (_addresses, watched) = watch::channel(vec![listener.local_addr().unwrap()]);
+        let pc_peers = Arc::new(Peers::new());
+        serve(listener, pc, Arc::clone(&pc_peers), Arc::default());
+        let phone_events = Arc::new(Recorder::default());
+        let dialer = tokio::spawn({
+            let events = Arc::clone(&phone_events);
+            async move {
+                let peers = Peers::new();
+                keep_connected(&phone, pc_id, watched, &hello("phone"), &peers, &*events).await;
+            }
+        });
+        until(|| pc_peers.is_connected(&phone_id)).await;
+
+        assert!(pc_peers.unpair(&phone_id));
+
+        timeout(Duration::from_secs(5), dialer)
+            .await
+            .expect("keep_connected should stop")
+            .unwrap();
+        // Reported once, by the session.
+        assert_eq!(*phone_events.unpaired_by.lock().unwrap(), [pc_id]);
+    }
+
+    #[tokio::test]
     async fn sessions_deliver_broadcast_clips_both_ways() {
         let (phone, pc) = (Identity::generate().unwrap(), Identity::generate().unwrap());
         let (phone_io, pc_io) = duplex(64 * 1024);
@@ -786,6 +1192,7 @@ mod tests {
         let mut newer = hello("phone");
         newer.protocol_version = PROTOCOL_VERSION + 1;
         let peers = Peers::new();
+        let events = Recorder::default();
 
         let (theirs, ended) = tokio::join!(client.exchange_hello(newer), async {
             let Ok(crate::pairing::Opening::Hello(connection, read_first)) =
@@ -793,14 +1200,7 @@ mod tests {
             else {
                 panic!("expected a Hello");
             };
-            answer_session(
-                connection,
-                read_first,
-                hello("pc"),
-                &peers,
-                &Recorder::default(),
-            )
-            .await
+            answer_session(connection, read_first, hello("pc"), &peers, &events).await
         });
 
         // A newer device still learns this one's version, to talk down if it can.
@@ -810,6 +1210,39 @@ mod tests {
             Err(SessionError::Transport(TransportError::VersionMismatch(v))) if v == PROTOCOL_VERSION + 1
         ));
         assert!(peers.connected().is_empty());
+        assert_eq!(
+            *events.mismatches.lock().unwrap(),
+            [(phone.device_id(), PROTOCOL_VERSION + 1)]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_dialing_side_reports_a_device_of_another_version() {
+        let (phone, pc) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (phone_io, pc_io) = duplex(64 * 1024);
+        let (client, server) = tokio::join!(
+            transport::connect(phone_io, &phone, pc.device_id()),
+            async { transport::accept(pc_io, &pc).await?.authorize(|_| true) }
+        );
+        let (client, mut server) = (client.unwrap(), server.unwrap());
+        let mut newer = hello("pc");
+        newer.protocol_version = PROTOCOL_VERSION + 1;
+        let (peers, events) = (Peers::new(), Recorder::default());
+
+        let (ended, _) = tokio::join!(
+            run_session(client, hello("phone"), &peers, &events),
+            server.exchange_hello(newer)
+        );
+
+        assert!(matches!(
+            ended,
+            Err(SessionError::Transport(TransportError::VersionMismatch(_)))
+        ));
+        assert_eq!(
+            *events.mismatches.lock().unwrap(),
+            [(pc.device_id(), PROTOCOL_VERSION + 1)]
+        );
+        assert!(events.connected.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -873,6 +1306,22 @@ mod tests {
         assert!(dialed.is_ok(), "the new address was not dialed in time");
     }
 
+    #[test]
+    fn found_addresses_come_first_without_duplicates() {
+        let address = |s: &str| s.parse::<SocketAddr>().unwrap();
+        let found = [address("192.168.1.30:47290"), address("10.0.0.2:47290")];
+        let known = [address("192.168.1.20:47290"), address("10.0.0.2:47290")];
+
+        assert_eq!(
+            found_first(found, known),
+            [
+                address("192.168.1.30:47290"),
+                address("10.0.0.2:47290"),
+                address("192.168.1.20:47290")
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn broadcast_skips_the_excluded_device() {
         let peers = Peers::new();
@@ -898,28 +1347,216 @@ mod tests {
         );
         peers.expect(pc);
 
-        // While the PC is off: only the last copy waits, secrets don't.
+        // While the PC is off: only the last copy waits.
         assert_eq!(peers.broadcast(&Clip::text("first", origin), None), 0);
         assert_eq!(peers.broadcast(&Clip::text("last", origin), None), 0);
-        let mut secret = Clip::text("hunter2", origin);
-        secret.sensitive = true;
-        peers.broadcast(&secret, None);
 
         let (sender, mut received) = mpsc::channel(4);
         peers.register(pc, sender);
-        let Some(Outgoing::Clip { clip, .. }) = received.try_recv().ok() else {
-            panic!("the waiting clip was not sent");
-        };
-        assert_eq!(clip.data, b"last");
+        let missed = next_clip(&mut received).expect("the waiting clip was not sent");
+        assert_eq!(missed.clip.data, b"last");
         assert!(received.try_recv().is_err());
 
-        // Sent once; a device that isn't paired gets nothing.
-        let (again, mut nothing) = mpsc::channel(4);
+        // Sent again until the PC acknowledges it: that session may have died too.
+        let (again, mut received) = mpsc::channel(4);
         peers.register(pc, again);
+        assert_eq!(next_clip(&mut received).unwrap().number, missed.number);
+        peers.acknowledged(&pc, missed.number);
+        let (acknowledged, mut nothing) = mpsc::channel(4);
+        peers.register(pc, acknowledged);
         assert!(nothing.try_recv().is_err());
+
+        // A device that isn't paired gets nothing.
         let (other, mut none) = mpsc::channel(4);
         peers.register(stranger, other);
         assert!(none.try_recv().is_err());
+    }
+
+    /// Both clips reached the PC, but neither ack came back: the copy before the secret must not
+    /// be sent again over it.
+    #[tokio::test]
+    async fn a_secret_stops_the_clip_before_it_from_waiting() {
+        let peers = Peers::new();
+        let origin = Identity::generate().unwrap().device_id();
+        let pc = Identity::generate().unwrap().device_id();
+        peers.expect(pc);
+        let (dead, _lost) = mpsc::channel(4);
+        peers.register(pc, dead);
+
+        assert_eq!(peers.broadcast(&Clip::text("copied", origin), None), 1);
+        let mut secret = Clip::text("hunter2", origin);
+        secret.sensitive = true;
+        assert_eq!(peers.broadcast(&secret, None), 1);
+
+        let (sender, mut received) = mpsc::channel(4);
+        peers.register(pc, sender);
+        assert!(received.try_recv().is_err());
+        // The next copy waits as usual.
+        peers.broadcast(&Clip::text("next", origin), None);
+        let (sender, mut received) = mpsc::channel(4);
+        peers.register(pc, sender);
+        assert_eq!(next_clip(&mut received).unwrap().clip.data, b"next");
+    }
+
+    fn next_clip(queue: &mut mpsc::Receiver<Outgoing>) -> Option<Numbered> {
+        match queue.try_recv() {
+            Ok(Outgoing::Clip { clip, .. }) => Some(clip),
+            _ => None,
+        }
+    }
+
+    /// A PC asleep, or a phone that just left the Wi-Fi: its session looks alive until it times
+    /// out, and what's queued for it meanwhile goes nowhere.
+    #[tokio::test]
+    async fn a_clip_queued_into_a_dead_session_is_sent_again_when_the_device_reconnects() {
+        let peers = Peers::new();
+        let origin = Identity::generate().unwrap().device_id();
+        let pc = Identity::generate().unwrap().device_id();
+        peers.expect(pc);
+        let (dead, mut lost) = mpsc::channel(4);
+        peers.register(pc, dead);
+
+        assert_eq!(peers.broadcast(&Clip::text("copied", origin), None), 1);
+        let first = next_clip(&mut lost).unwrap();
+        // The device reconnects without having acknowledged it.
+        let (sender, mut received) = mpsc::channel(4);
+        peers.register(pc, sender);
+
+        let again = next_clip(&mut received).expect("the clip was not sent again");
+        assert_eq!(again.number, first.number);
+        assert_eq!(again.clip.data, b"copied");
+    }
+
+    #[tokio::test]
+    async fn only_the_ack_of_the_last_clip_stops_it_waiting() {
+        let peers = Peers::new();
+        let origin = Identity::generate().unwrap().device_id();
+        let pc = Identity::generate().unwrap().device_id();
+        peers.expect(pc);
+        let (sender, mut queue) = mpsc::channel(4);
+        peers.register(pc, sender);
+        peers.broadcast(&Clip::text("older", origin), None);
+        peers.broadcast(&Clip::text("newer", origin), None);
+        let older = next_clip(&mut queue).unwrap();
+        let newer = next_clip(&mut queue).unwrap();
+
+        // The older one's ack comes first: the newer one still waits.
+        peers.acknowledged(&pc, older.number);
+        let (sender, mut received) = mpsc::channel(4);
+        peers.register(pc, sender);
+        assert_eq!(next_clip(&mut received).unwrap().clip.data, b"newer");
+
+        peers.acknowledged(&pc, newer.number);
+        let (sender, mut received) = mpsc::channel(4);
+        peers.register(pc, sender);
+        assert!(received.try_recv().is_err());
+    }
+
+    /// Through real sessions: the device's ack clears what waits for it, so a clip it got is never
+    /// sent twice.
+    #[tokio::test]
+    async fn a_delivered_clip_is_not_sent_again() {
+        let (phone, pc) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (phone_io, pc_io) = duplex(64 * 1024);
+        let (client, server) = tokio::join!(
+            transport::connect(phone_io, &phone, pc.device_id()),
+            async { transport::accept(pc_io, &pc).await?.authorize(|_| true) }
+        );
+        let (phone_peers, pc_peers) = (Arc::new(Peers::new()), Arc::new(Peers::new()));
+        pc_peers.expect(phone.device_id());
+        let (phone_events, pc_events) =
+            (Arc::new(Recorder::default()), Arc::new(Recorder::default()));
+        let _phone_session = tokio::spawn({
+            let (peers, events) = (Arc::clone(&phone_peers), Arc::clone(&phone_events));
+            async move { run_session(client.unwrap(), hello("phone"), &peers, &*events).await }
+        });
+        let _pc_session = tokio::spawn({
+            let (peers, events) = (Arc::clone(&pc_peers), Arc::clone(&pc_events));
+            async move { run_session(server.unwrap(), hello("pc"), &peers, &*events).await }
+        });
+        until(|| pc_peers.is_connected(&phone.device_id())).await;
+
+        assert_eq!(
+            pc_peers.broadcast(&Clip::text("delivered", pc.device_id()), None),
+            1
+        );
+        until(|| !pc_events.deliveries.lock().unwrap().is_empty()).await;
+
+        let (sender, mut received) = mpsc::channel(4);
+        pc_peers.register(phone.device_id(), sender);
+        assert!(received.try_recv().is_err());
+        assert_eq!(phone_events.clips.lock().unwrap().len(), 1);
+    }
+
+    /// Each side copied something while they were apart, and sends it once they reconnect: both
+    /// end with the newer copy, not with each other's.
+    #[tokio::test]
+    async fn copies_that_cross_end_with_the_newer_one_on_both_sides() {
+        let (phone, pc) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let (phone_peers, pc_peers) = (Arc::new(Peers::new()), Arc::new(Peers::new()));
+        phone_peers.expect(pc.device_id());
+        pc_peers.expect(phone.device_id());
+        pc_peers.broadcast(&Clip::text("older, from the PC", pc.device_id()), None);
+        sleep(Duration::from_millis(50)).await;
+        let newer = Clip::text("newer, from the phone", phone.device_id());
+        phone_peers.broadcast(&newer, None);
+
+        let (phone_io, pc_io) = duplex(64 * 1024);
+        let (client, server) = tokio::join!(
+            transport::connect(phone_io, &phone, pc.device_id()),
+            async { transport::accept(pc_io, &pc).await?.authorize(|_| true) }
+        );
+        let (phone_events, pc_events) =
+            (Arc::new(Recorder::default()), Arc::new(Recorder::default()));
+        let _phone_session = tokio::spawn({
+            let (peers, events) = (Arc::clone(&phone_peers), Arc::clone(&phone_events));
+            async move { run_session(client.unwrap(), hello("phone"), &peers, &*events).await }
+        });
+        let _pc_session = tokio::spawn({
+            let (peers, events) = (Arc::clone(&pc_peers), Arc::clone(&pc_events));
+            async move { run_session(server.unwrap(), hello("pc"), &peers, &*events).await }
+        });
+        // Both were acknowledged: the phone has seen the PC's, and the PC the phone's.
+        until(|| {
+            !phone_events.deliveries.lock().unwrap().is_empty()
+                && !pc_events.deliveries.lock().unwrap().is_empty()
+        })
+        .await;
+
+        assert_eq!(
+            *pc_events.clips.lock().unwrap(),
+            [(phone.device_id(), newer)]
+        );
+        assert!(phone_events.clips.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_relayed_clip_keeps_the_time_it_was_copied() {
+        let peers = Peers::new();
+        let (phone, other) = (
+            Identity::generate().unwrap().device_id(),
+            Identity::generate().unwrap().device_id(),
+        );
+        peers.expect(other);
+        let an_hour = Duration::from_secs(3600);
+        peers.received_from(
+            phone,
+            Copied {
+                seen: Instant::now(),
+                age: an_hour,
+            },
+        );
+
+        peers.relay(&Clip::text("copied an hour ago", phone), phone);
+        let (sender, mut received) = mpsc::channel(4);
+        peers.register(other, sender);
+        assert!(next_clip(&mut received).unwrap().copied.age() >= an_hour);
+
+        // A copy made here is new.
+        peers.broadcast(&Clip::text("just copied", phone), None);
+        let (sender, mut received) = mpsc::channel(4);
+        peers.register(other, sender);
+        assert!(next_clip(&mut received).unwrap().copied.age() < an_hour);
     }
 
     #[tokio::test]

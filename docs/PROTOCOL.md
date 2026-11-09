@@ -56,11 +56,15 @@ ignored, and the certificate may be regenerated at any time without changing the
     acting on anything the client sent. (It reads and discards what arrives for a moment before
     closing, so that TCP doesn't reset the connection and lose the refusal.)
 - **Unpairing**: the device that forgets a peer deletes its ID, closes any session with it at
-  once and stops dialing it. When the peer, which still trusts it, connects again, it gets the
-  `Refusal` above: it then forgets that device too, stops dialing it and tells the user "<device>
-  unpaired this phone". The refusal can't be forged: the connecting side pinned the refusing
-  side's key during the TLS handshake. A client that doesn't know `Refusal` (an older version)
-  sees an unexpected message and keeps retrying, as before.
+  once and stops dialing it. If a session with it is open, it first sends `Unpaired` in it
+  (section 4.4): the peer forgets that device too, at once, whichever side dialed. Otherwise,
+  when the peer, which still trusts it, connects again, it gets the `Refusal` above, with the
+  same effect. Either way the peer stops dialing it and tells the user "<device> unpaired this
+  phone". Neither can be forged: the connecting side pinned the other's key during the TLS
+  handshake, and the accepting side only reads `Unpaired` in a session with a device whose key
+  it knows. A device that doesn't know `Refusal` or `Unpaired` (an older version) ignores
+  `Unpaired` and sees the `Refusal` as an unexpected message, and keeps retrying, as before. A
+  peer that is not connected when it is forgotten, and doesn't dial, isn't told.
 
 In version 0, the PC accepts connections and the phone connects.
 
@@ -76,6 +80,11 @@ Devices that accept connections announce themselves with mDNS / DNS-SD:
 | TXT `v` | Protocol version: `0` |
 | TXT `id` | Full device ID |
 | TXT `name` | Device name, for display (untrusted, sanitize as in section 5.1) |
+
+Devices that connect (phones, and a PC that joined another with `pasteget join`) look for the
+devices they paired with among these announcements, by `id`, and dial them at the announced
+addresses first, then at the ones they knew: the accepting device's address may have changed
+since pairing.
 
 Discovery only helps find an address. Trust still comes from the pinned device ID: a forged
 announcement can make a device connect to the wrong address, but the TLS handshake then fails.
@@ -117,7 +126,9 @@ side reads it first (section 2.3), then answers with its own.
 
 If the versions differ, the side with the higher version decides whether it can talk down;
 otherwise it closes the connection. Version 0 implementations close on any mismatch, after
-sending their own `Hello`, so that the other side learns their version.
+sending their own `Hello`, so that the other side learns their version. The PC then tells the
+user, once per device while it runs: "<device> runs another version of paste-get: update
+both".
 
 `device_name` is untrusted: receivers sanitize it as in section 5.1. It is the name the device
 goes by now: a receiver that stored another name for it at pairing (or at an earlier `Hello`)
@@ -180,10 +191,31 @@ say that it arrived, never what it holds.
   characters are removed and it is cut to 64 characters. A one-time code offer that isn't text is
   treated as a copy.
 
+**`age_ms`** is how long ago the clip was copied on its origin device, in milliseconds, as far as
+the sender knows: 0 for a copy it just made, and for a clip it passes on, the age it arrived with
+plus the time since. An age rather than a time, so that the devices' clocks don't need to agree.
+Copies made on both sides while they couldn't reach each other cross when they reconnect (each
+sends the clip still waiting for the other). A receiver whose own clip for the sender, not
+acknowledged yet, was copied more recently answers `OK` but doesn't apply the received clip; the
+sender gets the receiver's clip and applies it, so both end with the newer copy. A missing field
+reads as 0: clips from older senders are always applied, as before.
+
 ### 4.3 `Ping` / `Pong`
 
 Either side may send `Ping` at any time; the peer answers with a `Pong` carrying the same
 `nonce`. Used to detect dead connections.
+
+### 4.4 `Unpaired`
+
+Sent in a session, after the `Hello` exchange, by a device that just unpaired the other (section
+2.3). It has no fields. It goes before anything the sender still had queued for the receiver,
+which is dropped: a clip being sent may stop midway, and the receiver discards it as the
+connection closes. The sender closes the connection right after. The receiver:
+1. ends the session;
+2. forgets the sender: deletes its ID and anything waiting for it, stops dialing it;
+3. tells the user "<device> unpaired this phone" (or "this computer").
+
+It never answers, and never sends `Unpaired` back.
 
 ## 5. Pairing
 
