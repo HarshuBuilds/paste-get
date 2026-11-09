@@ -736,6 +736,11 @@ fn any_query_works_and_errors_never_quote_it() {
         "'; DROP TABLE item; --",
         "%_",
         "\u{0}",
+        "\u{0}\u{0}\u{0}",
+        "ab\u{0}cd",
+        "abc\u{0}def",
+        "\"x\u{0}yz\"",
+        "from:a\u{0}b",
         "\u{1}\u{7f}",
         "👋🏽",
         "e\u{301}",
@@ -1007,7 +1012,7 @@ fn search_speed_at_20000_items() {
 proptest::proptest! {
     // The `history_query` fuzz target's checks, on queries made of what the parser looks at.
     #[test]
-    fn any_query_works_and_highlights_fit(text in "[ a-zé\"*:()^\\-_.%'\\\\]{0,40}|(site|from|type|is|after|before):[ -~]{0,12}") {
+    fn any_query_works_and_highlights_fit(text in "[ a-zé\"*:()^\\-_.%'\\\\\\x00\\x01]{0,40}|(site|from|type|is|after|before):[ -~]{0,12}") {
         let mut test = Test::new();
         test.added("Code de vérification : 482913 \"quoted\" (x) *");
         test.added("https://github.com/Nexoryx-business/paste-get");

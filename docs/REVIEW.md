@@ -142,8 +142,8 @@ Each line is a claim to check. "→" points at where it's enforced.
     never its message, which can quote a search. → `core/src/history/record.rs`,
     `core/src/detect.rs` (fuzz target `detect`), tests `secrets_are_kept_out_and_only_counted`
     and `logs_never_hold_contents`. A search is parsed in Rust and reaches FTS5 only as quoted
-    phrases, so no query can fail or be read as FTS5 syntax. → `core/src/history/query.rs`
-    (fuzz target `history_query`)
+    phrases, with control characters (NUL included) read as spaces, so no query can fail or be
+    read as FTS5 syntax. → `core/src/history/query.rs` (fuzz target `history_query`)
 31. Deleting from the history leaves nothing of the clip: rows, body, thumbnail and search
     entries go in one transaction (`secure_delete`, FTS5 secure-delete), the original file
     after the commit, then the free pages and the WAL are emptied. Retention never deletes a

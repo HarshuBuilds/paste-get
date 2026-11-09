@@ -56,9 +56,14 @@ impl fmt::Debug for Parsed {
     }
 }
 
-/// Reads a query. Never fails: whatever isn't understood is searched for as it is.
+/// Reads a query. Never fails: whatever isn't understood is searched for as it is. Control
+/// characters separate words like spaces: FTS5 stops reading a phrase at a NUL.
 pub fn parse(text: &str) -> Parsed {
-    let chars: Vec<char> = text.chars().take(MAX_QUERY_CHARS).collect();
+    let chars: Vec<char> = text
+        .chars()
+        .take(MAX_QUERY_CHARS)
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
     let mut parsed = Parsed::default();
     let mut at = 0;
     while at < chars.len() {
@@ -322,6 +327,15 @@ mod tests {
         );
         assert_eq!(fts_match(&["a\"b\"c".into()]).unwrap(), r#""a""b""c""#);
         assert_eq!(fts_match(&["ab".into()]), None);
+    }
+
+    #[test]
+    fn control_characters_separate_words() {
+        assert_eq!(terms("abc\0def \u{1}x\u{7f}"), ["abc", "def", "x"]);
+        assert_eq!(terms("\"ab\0cd\""), ["ab cd"]);
+        assert_eq!(parse("from:a\0b").from.as_deref(), Some("a"));
+        let parsed = parse("\0\0\0 xyz\0");
+        assert_eq!(fts_match(&parsed.terms).unwrap(), r#""xyz""#);
     }
 
     #[test]
