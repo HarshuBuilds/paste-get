@@ -8,9 +8,12 @@ Section 9 is the tray app (with a Waybar module), section 10 starting at login, 
 hotkeys. Sections 13–15 are links, 2FA codes, and copies made while a device is away. Section 16
 is GNOME, which is tier 2.
 
-To test a release instead of a build, install its packages (see the README) and skip section 1:
-`pasteget` is then on the `PATH` (with the AppImage, use the .deb, .rpm or AUR package for the
-terminal rows).
+To test a release instead of a build, install its packages (see the README) and skip section 1.
+On Linux, `pasteget` is then on the `PATH` (with the AppImage, use the .deb, .rpm or AUR package
+for the terminal rows). The Windows installer puts `pasteget.exe` in `%LOCALAPPDATA%\paste-get`
+without changing the `PATH`: in each PowerShell window, first run
+`Set-Alias pasteget "$env:LOCALAPPDATA\paste-get\pasteget.exe"`, and below, `pasteget` means
+that file.
 
 The trick: on one computer, run the real daemon (system clipboard) **and** a second "fake phone"
 daemon with a private in-memory clipboard. Whatever reaches the fake phone came out of your real
