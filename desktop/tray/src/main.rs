@@ -584,9 +584,10 @@ async fn network_advice() -> Result<Option<network::Advice>, String> {
     if !cfg!(windows) {
         return Ok(None);
     }
-    // The tray runs the daemon: the firewall rule is for this program.
+    // The tray runs the daemon: the firewall rules are for this program.
     let program = std::env::current_exe().map_err(|e| e.to_string())?;
-    Ok(network::advice(&network::public_now().await, &program))
+    let findings = network::findings_now(program.clone()).await;
+    Ok(network::advice(&findings, &program))
 }
 
 /// The settings window asks for the current values.

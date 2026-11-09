@@ -924,7 +924,7 @@ fn likelihood_rank(address: &LocalAddress) -> u8 {
 /// Interfaces of virtual machines, containers and VPNs, by the names they get on Linux
 /// (`docker0`, `virbr0`, `wg0`…) and on Windows (`vEthernet (WSL)`, `VMware Network Adapter
 /// VMnet8`…).
-fn looks_virtual(interface: &str) -> bool {
+pub(crate) fn looks_virtual(interface: &str) -> bool {
     const PREFIXES: &[&str] = &[
         "docker",
         "br-",

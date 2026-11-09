@@ -9,6 +9,7 @@ pub mod config;
 pub mod control;
 pub mod daemon;
 pub mod discovery;
+pub mod firewall;
 pub mod hotkeys;
 pub mod i18n;
 pub mod notify;
