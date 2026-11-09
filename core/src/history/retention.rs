@@ -144,29 +144,28 @@ impl HistoryStore {
         )?;
 
         // Originals that could go, oldest first: unpinned, with their thumbnail made (or failed).
+        // `kept` is written in the SQL, not bound, so SQLite can use the `item_originals` index.
+        let kept = Kept::Original.code();
         let removable: Vec<(i64, i64, i64, Vec<u8>, i64)> = {
-            let mut statement = tx.prepare(
+            let mut statement = tx.prepare(&format!(
                 "SELECT id, last_at, size, sha256, format FROM item
-                 WHERE kept = ?1 AND pinned_at IS NULL AND thumb != ?2
-                 ORDER BY last_at, id",
-            )?;
-            let rows = statement.query_map(
-                params![Kept::Original.code(), Thumb::Pending.code()],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                    ))
-                },
-            )?;
+                 WHERE kept = {kept} AND pinned_at IS NULL AND thumb != ?1
+                 ORDER BY last_at, id"
+            ))?;
+            let rows = statement.query_map([Thumb::Pending.code()], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })?;
             rows.collect::<Result<_, _>>()?
         };
         let mut total: i64 = tx.query_row(
-            "SELECT coalesce(sum(size), 0) FROM item WHERE kept = ?1",
-            [Kept::Original.code()],
+            &format!("SELECT coalesce(sum(size), 0) FROM item WHERE kept = {kept}"),
+            [],
             |row| row.get(0),
         )?;
         let old = now.saturating_sub(policy.originals_for_ms);
@@ -186,8 +185,10 @@ impl HistoryStore {
             swept.originals_removed += 1;
         }
 
+        // All, less the pinned: both counted on an index, without reading the rows.
         let unpinned: i64 = tx.query_row(
-            "SELECT count(*) FROM item WHERE pinned_at IS NULL",
+            "SELECT (SELECT count(*) FROM item)
+                    - (SELECT count(*) FROM item WHERE pinned_at IS NOT NULL)",
             [],
             |row| row.get(0),
         )?;

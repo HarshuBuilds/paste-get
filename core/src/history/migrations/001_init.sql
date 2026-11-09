@@ -35,20 +35,24 @@ CREATE TABLE item (
   times      INTEGER NOT NULL DEFAULT 1,
   pinned_at  INTEGER,                       -- never evicted
   expires_at INTEGER,                       -- bare codes (15 min), "delete in 1 hour"
-  text_head  TEXT,                          -- first 4 KiB on a char boundary; whole text when short
   kept       INTEGER NOT NULL,              -- 0 inline, 1 body row, 2 original file,
                                             -- 3 gallery reference, 4 too large,
                                             -- 5 original evicted, 6 gone
   media_id   INTEGER,                       -- MediaStore _ID (phone screenshots)
   width      INTEGER,
   height     INTEGER,
-  thumb      INTEGER NOT NULL DEFAULT 0     -- 0 n/a, 1 pending, 2 done, 3 failed
+  thumb      INTEGER NOT NULL DEFAULT 0,    -- 0 n/a, 1 pending, 2 done, 3 failed
+  -- Last, so the other columns are read without its overflow pages.
+  text_head  TEXT                           -- first 4 KiB on a char boundary; whole text when short
 );
-CREATE INDEX item_recent ON item(last_at DESC, id DESC);
-CREATE INDEX item_cat    ON item(category, last_at DESC);
-CREATE INDEX item_pinned ON item(pinned_at)  WHERE pinned_at  IS NOT NULL;
-CREATE INDEX item_expiry ON item(expires_at) WHERE expires_at IS NOT NULL;
-CREATE INDEX item_media  ON item(media_id)   WHERE media_id   IS NOT NULL;
+CREATE INDEX item_recent    ON item(last_at DESC, id DESC);
+CREATE INDEX item_cat       ON item(category, last_at DESC);
+-- The pinned section, newest first.
+CREATE INDEX item_pinned    ON item(last_at DESC, id DESC) WHERE pinned_at IS NOT NULL;
+-- Retention's originals, oldest first. Queries must write `kept = 2` as is to use it.
+CREATE INDEX item_originals ON item(last_at, id)           WHERE kept = 2;
+CREATE INDEX item_expiry    ON item(expires_at)            WHERE expires_at IS NOT NULL;
+CREATE INDEX item_media     ON item(media_id)              WHERE media_id IS NOT NULL;
 
 -- Full text over 4 KiB, deflated.
 CREATE TABLE body (

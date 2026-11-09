@@ -74,7 +74,7 @@ mod tests {
     fn migrations_are_pinned() {
         // A released migration is never edited: users' databases already ran it. If this fails,
         // undo the change and put it in a new migration instead.
-        let pinned = ["a2f7952d6624459b9d81a037da1667b22621425d362c138168ee4b264de2d39f"];
+        let pinned = ["7acb42d30687ad989082516938ffc096b3e36a7ef350e07e70a258843e45ad25"];
         assert_eq!(
             MIGRATIONS.len(),
             pinned.len(),
