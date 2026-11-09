@@ -171,7 +171,8 @@ impl HistoryStore {
         &self.policy
     }
 
-    /// Applies new settings from the next clip on.
+    /// Applies new settings from the next clip on; call [`Self::retain`] to apply new limits
+    /// at once.
     pub fn set_policy(&mut self, policy: Policy) {
         self.policy = policy;
     }

@@ -376,9 +376,20 @@ fn pausing_keeps_everything_out() {
         ..Policy::default()
     });
     assert_eq!(test.copy("hello"), Recorded::KeptOut(Reason::Paused));
+    // A code seen during the pause is still remembered after it.
+    let code = Clip::one_time_code("482913", "Messages", PC);
+    let context = Context::received_from(PC);
+    assert_eq!(
+        test.store.record(&code, &context).unwrap(),
+        Recorded::KeptOut(Reason::OneTimeCode)
+    );
     test.advance(60_000);
     assert!(matches!(test.copy("hello"), Recorded::Added(_)));
-    assert_eq!(test.store.kept_out(T0).unwrap(), [(Reason::Paused, 1)]);
+    assert_eq!(test.copy("482913"), Recorded::KeptOut(Reason::OneTimeCode));
+    assert_eq!(
+        test.store.kept_out(T0).unwrap(),
+        [(Reason::OneTimeCode, 2), (Reason::Paused, 1)]
+    );
 }
 
 #[test]

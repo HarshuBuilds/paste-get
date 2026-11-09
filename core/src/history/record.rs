@@ -228,11 +228,9 @@ impl HistoryStore {
 
     /// What to do with a clip, before anything is written.
     fn decide<'a>(&mut self, clip: &'a Clip, now: i64) -> Decision<'a> {
-        if self.policy.paused_until.is_some_and(|until| now < until) {
-            return Decision::KeptOut(Reason::Paused);
-        }
         if let Kind::OneTimeCode { .. } = clip.kind {
-            // Remembered, in memory only, so a copy of the same digits is refused too.
+            // Remembered, in memory only, so a copy of the same digits is refused too, even
+            // after a pause.
             self.recent_codes
                 .retain(|(_, at)| now - at < BARE_CODE_TTL_MS && *at <= now);
             if self.recent_codes.len() == RECENT_CODES {
@@ -240,6 +238,9 @@ impl HistoryStore {
             }
             self.recent_codes.push((clip.sha256(), now));
             return Decision::KeptOut(Reason::OneTimeCode);
+        }
+        if self.policy.paused_until.is_some_and(|until| now < until) {
+            return Decision::KeptOut(Reason::Paused);
         }
         if clip.sensitive {
             return Decision::KeptOut(Reason::Sensitive);
