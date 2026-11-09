@@ -12,6 +12,9 @@ import uniffi.pasteget_ffi.PairedComputer
 interface Computers {
     fun paired(): List<PairedComputer>
 
+    /** This phone's name and device ID. */
+    fun thisPhone(): ThisPhone
+
     /** Throws `PastegetException` if pairing fails. */
     fun pair(code: String): PairedComputer
 
@@ -22,6 +25,8 @@ interface Computers {
 /** The app's own client. */
 class NativeComputers(private val app: PasteGetApp) : Computers {
     override fun paired(): List<PairedComputer> = app.client.pairedComputers()
+
+    override fun thisPhone() = ThisPhone(app.deviceName(), app.client.deviceId())
 
     override fun pair(code: String): PairedComputer = app.client.pair(code)
 

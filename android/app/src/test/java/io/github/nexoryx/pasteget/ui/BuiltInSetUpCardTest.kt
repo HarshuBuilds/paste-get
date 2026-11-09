@@ -27,14 +27,14 @@ class BuiltInSetUpCardTest {
 
     private val app: Application = RuntimeEnvironment.getApplication()
 
-    private fun show(state: HomeState, actions: HomeActions) {
+    private fun show(state: AppState, actions: AppActions) {
         compose.setContent { MaterialTheme { HomeScreen(state, actions) } }
     }
 
     @Test
     fun withNotificationsTheSetUpIsOffered() {
         var setUps = 0
-        show(HomeFixtures.state(copiesOn = true), HomeActions(autoCopy = AutoCopyActions(onSetUpBuiltIn = { setUps++ })))
+        show(AppFixtures.state(copiesOn = true), AppActions(autoCopy = AutoCopyActions(onSetUpBuiltIn = { setUps++ })))
 
         compose.onNodeWithText(app.getString(R.string.builtin_set_up)).performScrollTo().performClick()
         assertEquals(1, setUps)
@@ -46,8 +46,8 @@ class BuiltInSetUpCardTest {
         var setUps = 0
         var opened = 0
         show(
-            HomeFixtures.state(copiesOn = true, canNotify = false),
-            HomeActions(autoCopy = AutoCopyActions(onSetUpBuiltIn = { setUps++ }, onOpenNotificationSettings = { opened++ })),
+            AppFixtures.state(copiesOn = true, canNotify = false),
+            AppActions(autoCopy = AutoCopyActions(onSetUpBuiltIn = { setUps++ }, onOpenNotificationSettings = { opened++ })),
         )
 
         compose.onNodeWithText(app.getString(R.string.builtin_needs_notifications)).performScrollTo()
@@ -59,8 +59,8 @@ class BuiltInSetUpCardTest {
     @Test
     fun alsoWhileWaitingForTheCode() {
         show(
-            HomeFixtures.state(copiesOn = true, builtInStatus = BuiltInStatus.PAIRING, canNotify = false),
-            HomeActions(),
+            AppFixtures.state(copiesOn = true, builtInStatus = BuiltInStatus.PAIRING, canNotify = false),
+            AppActions(),
         )
 
         compose.onNodeWithText(app.getString(R.string.builtin_needs_notifications)).performScrollTo()

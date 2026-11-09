@@ -23,7 +23,7 @@ class PairingFlowTest {
     private val app: Application = RuntimeEnvironment.getApplication()
     private val fake = FakeComputers()
 
-    private fun model(io: CoroutineDispatcher = Dispatchers.Unconfined) = HomeViewModel(app, fake, io).also { it.refresh() }
+    private fun model(io: CoroutineDispatcher = Dispatchers.Unconfined) = AppViewModel(app, fake, io).also { it.refresh() }
 
     @Test
     fun aLinkWaitsForConfirmation() {
@@ -40,7 +40,7 @@ class PairingFlowTest {
         assertEquals(listOf(LINK), fake.pairCalls)
         assertEquals(PairingState.Idle, model.pairing)
         assertEquals(app.getString(R.string.paired_with, "HP-AIO"), model.message)
-        assertEquals(listOf(HomeFixtures.hp), model.paired)
+        assertEquals(listOf(AppFixtures.hp), model.paired)
         // Nothing left to confirm: a second yes does nothing.
         model.confirmPairing()
         assertEquals(1, fake.pairCalls.size)

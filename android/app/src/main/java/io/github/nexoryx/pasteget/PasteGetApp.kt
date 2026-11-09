@@ -55,7 +55,7 @@ class PasteGetApp : Application() {
     val activity = ActivityLog()
 
     /** The name the user gave the phone, e.g. "POCO M8 5G". */
-    private fun deviceName(): String =
+    fun deviceName(): String =
         Settings.Global.getString(contentResolver, Settings.Global.DEVICE_NAME)
             ?: "${Build.MANUFACTURER} ${Build.MODEL}"
 }

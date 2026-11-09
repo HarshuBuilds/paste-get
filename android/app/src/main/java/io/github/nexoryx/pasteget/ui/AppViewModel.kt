@@ -31,11 +31,11 @@ import uniffi.pasteget_ffi.PairedComputer
 import uniffi.pasteget_ffi.PastegetException
 
 /**
- * The home screen's state, kept while the screen rotates. What may block (the Rust client) is
+ * The app's state, shared by its screens and kept while the activity rotates. What may block (the Rust client) is
  * read on [io]; the rest is read again each time the screen comes back ([refresh]), since the
  * user may have changed it in the system settings meanwhile.
  */
-class HomeViewModel(
+class AppViewModel(
     private val app: Application,
     private val computers: Computers,
     private val io: CoroutineDispatcher = Dispatchers.IO,
@@ -50,6 +50,10 @@ class HomeViewModel(
 
     /** The computer that unpaired this phone, for the status line once none is left. */
     var unpaired by mutableStateOf<PairedComputer?>(null)
+        private set
+
+    /** `null` until read. */
+    var thisPhone by mutableStateOf<ThisPhone?>(null)
         private set
     var screenshots by mutableStateOf(ScreenshotSetting(wanted = false, access = PhotoAccess.NONE))
         private set
@@ -94,7 +98,15 @@ class HomeViewModel(
     }
 
     private fun refreshComputers() {
-        viewModelScope.launch { paired = withContext(io) { computers.paired() } }
+        viewModelScope.launch {
+            paired = withContext(io) { computers.paired() }
+            if (thisPhone == null) thisPhone = withContext(io) { computers.thisPhone() }
+        }
+    }
+
+    /** The user closed "<PC> unpaired this phone". */
+    fun dismissUnpaired() {
+        unpaired = null
     }
 
     /** The built-in mode grants the permission that lets the app hide the notices. */

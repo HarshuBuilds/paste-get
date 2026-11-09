@@ -14,10 +14,11 @@ import io.github.nexoryx.pasteget.ShizukuState
 import io.github.nexoryx.pasteget.ShizukuStatus
 import uniffi.pasteget_ffi.PairedComputer
 
-/** Home screen states for the Compose tests, without the app or its native library. */
-object HomeFixtures {
+/** The app's states for the Compose tests, without the app or its native library. */
+object AppFixtures {
     val hp = PairedComputer("a1", "HP-AIO", listOf("192.168.1.20:47290"))
     val arch = PairedComputer("b2", "Arch-PC", listOf("192.168.1.21:47290"))
+    val phone = ThisPhone("POCO M8 5G", "3F2A9C11ABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKL")
 
     fun state(
         computers: List<PairedComputer> = emptyList(),
@@ -29,7 +30,7 @@ object HomeFixtures {
         builtInStatus: BuiltInStatus = if (copiesOn) BuiltInStatus.NOT_SET_UP else BuiltInStatus.OFF,
         canNotify: Boolean = true,
         activity: List<Activity> = emptyList(),
-    ): HomeState {
+    ): AppState {
         val builtIn = BuiltInState(builtInStatus)
         val shizuku = ShizukuState(if (copiesOn) ShizukuStatus.NOT_INSTALLED else ShizukuStatus.OFF)
         val logs = if (copiesOn) LogStatus.NEEDS_PERMISSIONS else LogStatus.OFF
@@ -45,7 +46,7 @@ object HomeFixtures {
                 codesHealth(codesOn, codeAccess, shellReady = false),
             ),
         )
-        return HomeState(
+        return AppState(
             status = status,
             computers = computers,
             connected = connected,
@@ -65,6 +66,7 @@ object HomeFixtures {
                 canNotify,
             ),
             codes = CodesCardState(codesOn, codeAccess, shellReady = false, last = null),
+            thisPhone = phone,
         )
     }
 }

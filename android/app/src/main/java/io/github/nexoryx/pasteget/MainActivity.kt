@@ -26,17 +26,19 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import androidx.navigation3.runtime.rememberNavBackStack
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import io.github.nexoryx.pasteget.ui.AppActions
+import io.github.nexoryx.pasteget.ui.AppState
+import io.github.nexoryx.pasteget.ui.AppViewModel
 import io.github.nexoryx.pasteget.ui.AutoCopyActions
 import io.github.nexoryx.pasteget.ui.AutoCopyCardState
 import io.github.nexoryx.pasteget.ui.CodesActions
 import io.github.nexoryx.pasteget.ui.CodesCardState
-import io.github.nexoryx.pasteget.ui.HomeActions
-import io.github.nexoryx.pasteget.ui.HomeScreen
-import io.github.nexoryx.pasteget.ui.HomeState
-import io.github.nexoryx.pasteget.ui.HomeViewModel
 import io.github.nexoryx.pasteget.ui.NativeComputers
+import io.github.nexoryx.pasteget.ui.PasteGetUi
+import io.github.nexoryx.pasteget.ui.Route
 import io.github.nexoryx.pasteget.ui.appStatus
 import io.github.nexoryx.pasteget.ui.codesHealth
 import io.github.nexoryx.pasteget.ui.copiesHealth
@@ -45,12 +47,12 @@ import io.github.nexoryx.pasteget.ui.shellReady
 import io.github.nexoryx.pasteget.ui.theme.PasteGetTheme
 
 /**
- * The home screen. Its state lives in [HomeViewModel]; this activity asks for permissions and
- * opens the system settings and other apps.
+ * The app's only activity: its screens ([PasteGetUi]) draw [AppViewModel]'s state; the activity
+ * asks for permissions and opens the system settings and other apps.
  */
 class MainActivity : ComponentActivity() {
-    private val model: HomeViewModel by viewModels {
-        viewModelFactory { initializer { HomeViewModel(application, NativeComputers(pasteGet)) } }
+    private val model: AppViewModel by viewModels {
+        viewModelFactory { initializer { AppViewModel(application, NativeComputers(pasteGet)) } }
     }
 
     private val photoPermission =
@@ -76,7 +78,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            PasteGetTheme { Home() }
+            PasteGetTheme { App() }
         }
         startSyncService()
         // Not again when the activity is recreated (a rotation): its intent is still the link.
@@ -84,7 +86,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Home() {
+    private fun App() {
         val connected by pasteGet.connected.collectAsStateWithLifecycle()
         val activity by pasteGet.activity.entries.collectAsStateWithLifecycle()
         val builtIn by pasteGet.autoCopy.builtIn.state.collectAsStateWithLifecycle()
@@ -107,9 +109,11 @@ class MainActivity : ComponentActivity() {
                 codesHealth(model.codesOn, model.codeAccess, shellReady),
             ),
         )
-        val actions = remember { homeActions() }
-        HomeScreen(
-            state = HomeState(
+        val actions = remember { appActions() }
+        // Saved with the activity, so the user comes back to the same screen.
+        val backStack = rememberNavBackStack(Route.Home)
+        PasteGetUi(
+            state = AppState(
                 status = status,
                 computers = computers,
                 connected = connected,
@@ -129,17 +133,21 @@ class MainActivity : ComponentActivity() {
                     model.canNotify,
                 ),
                 codes = CodesCardState(model.codesOn, model.codeAccess, shellReady, lastCode),
+                thisPhone = model.thisPhone,
+                unpairedBy = model.unpaired,
             ),
             actions = actions,
+            backStack = backStack,
         )
     }
 
-    private fun homeActions() = HomeActions(
+    private fun appActions() = AppActions(
         onPair = ::scan,
         onConfirmPairing = model::confirmPairing,
         onCancelPairing = model::cancelPairing,
         onSendClipboard = ::sendClipboard,
         onForget = model::forget,
+        onDismissUnpaired = model::dismissUnpaired,
         onScreenshotsChange = ::toggleScreenshots,
         onOpenAppSettings = ::openAppSettings,
         autoCopy = AutoCopyActions(

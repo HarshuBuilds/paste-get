@@ -32,9 +32,9 @@ class ForgetTest {
     private fun showAndTapForget() {
         compose.setContent {
             MaterialTheme {
-                HomeScreen(
-                    HomeFixtures.state(computers = listOf(HomeFixtures.hp, HomeFixtures.arch), connected = setOf("a1")),
-                    HomeActions(onForget = { forgotten += it.deviceId }),
+                DevicesScreen(
+                    AppFixtures.state(computers = listOf(AppFixtures.hp, AppFixtures.arch), connected = setOf("a1")),
+                    AppActions(onForget = { forgotten += it.deviceId }),
                 )
             }
         }

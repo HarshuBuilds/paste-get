@@ -31,14 +31,14 @@ class HomeScreenTest {
 
     private val app: Application = RuntimeEnvironment.getApplication()
 
-    private fun show(state: HomeState, actions: HomeActions = HomeActions()) {
+    private fun show(state: AppState, actions: AppActions = AppActions()) {
         compose.setContent { MaterialTheme { HomeScreen(state, actions) } }
     }
 
     @Test
     fun withNoComputerItAsksToPairOne() {
         var pairs = 0
-        show(HomeFixtures.state(), HomeActions(onPair = { pairs++ }))
+        show(AppFixtures.state(), AppActions(onPair = { pairs++ }))
 
         compose.onNodeWithText(app.getString(R.string.status_no_computer)).assertIsDisplayed()
         compose.onNodeWithText(app.getString(R.string.pair_button)).performClick()
@@ -47,18 +47,8 @@ class HomeScreenTest {
     }
 
     @Test
-    fun pairedComputersAreListedWithTheirConnection() {
-        show(HomeFixtures.state(computers = listOf(HomeFixtures.hp, HomeFixtures.arch), connected = setOf("a1")))
-
-        compose.onNodeWithText(app.resources.getQuantityString(R.plurals.notification_connected, 1, 1)).assertIsDisplayed()
-        compose.onNodeWithText("HP-AIO").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("Arch-PC").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText(app.getString(R.string.offline)).performScrollTo().assertIsDisplayed()
-    }
-
-    @Test
     fun theMessageIsShown() {
-        show(HomeFixtures.state(message = "Paired with HP-AIO"))
+        show(AppFixtures.state(message = "Paired with HP-AIO"))
 
         compose.onNodeWithText("Paired with HP-AIO").assertIsDisplayed()
     }
@@ -66,7 +56,7 @@ class HomeScreenTest {
     @Test
     fun theClipboardCanBeSentWhileTheComputersAreAway() {
         var sends = 0
-        show(HomeFixtures.state(computers = listOf(HomeFixtures.hp)), HomeActions(onSendClipboard = { sends++ }))
+        show(AppFixtures.state(computers = listOf(AppFixtures.hp)), AppActions(onSendClipboard = { sends++ }))
 
         compose.onNodeWithText(app.getString(R.string.send_clipboard_button)).assertIsEnabled().performClick()
         assertEquals(1, sends)
@@ -80,7 +70,7 @@ class HomeScreenTest {
         log.delivered("b2", "image/png", 1_200_000, millis = 140, accepted = false)
         log.sent(ActivityKind.TEXT, 12, sentTo = 0, automatic = false)
         log.received("text/plain", 30, sensitive = false, onClipboard = true)
-        show(HomeFixtures.state(computers = listOf(HomeFixtures.hp, HomeFixtures.arch), activity = log.entries.value))
+        show(AppFixtures.state(computers = listOf(AppFixtures.hp, AppFixtures.arch), activity = log.entries.value))
 
         compose.onNodeWithText(app.getString(R.string.recent_title)).performScrollTo().assertIsDisplayed()
         val delivered = app.getString(R.string.activity_delivered, "HP-AIO", 91) + ", " +
@@ -92,14 +82,14 @@ class HomeScreenTest {
 
     @Test
     fun withNothingSentThereIsNoRecentList() {
-        show(HomeFixtures.state(computers = listOf(HomeFixtures.hp)))
+        show(AppFixtures.state(computers = listOf(AppFixtures.hp)))
 
         compose.onNodeWithText(app.getString(R.string.recent_title)).assertDoesNotExist()
     }
 
     @Test
     fun withNothingPairedThereIsNoOneToSendTo() {
-        show(HomeFixtures.state())
+        show(AppFixtures.state())
 
         compose.onNodeWithText(app.getString(R.string.send_clipboard_button)).assertIsNotEnabled()
     }

@@ -17,6 +17,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -24,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -42,13 +44,41 @@ import kotlinx.coroutines.launch
 import uniffi.pasteget_ffi.PairedComputer
 
 /**
+ * Where pairing stands, over whichever screen is open: a scan or a link can start it anywhere.
+ * [computers] tells a code for a computer the phone knows already.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PairingFlow(pairing: PairingState, computers: List<PairedComputer>, onConfirm: () -> Unit, onCancel: () -> Unit) {
+    when (pairing) {
+        PairingState.Idle -> {}
+        is PairingState.Confirm -> PairingSheet(
+            confirm = pairing,
+            known = computers.firstOrNull { it.deviceId == pairing.invite.deviceId },
+            onConfirm = onConfirm,
+            onCancel = onCancel,
+        )
+        PairingState.Busy, is PairingState.Failed -> {
+            // Pairing can't be stopped halfway: the sheet stays until it's done.
+            val busy by rememberUpdatedState(pairing == PairingState.Busy)
+            val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { it != SheetValue.Hidden || !busy })
+            ModalBottomSheet(onDismissRequest = onCancel, sheetState = sheet) {
+                Column(modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 24.dp)) {
+                    if (pairing is PairingState.Failed) PairingErrorCard(pairing.error, onCancel) else PairingProgress()
+                }
+            }
+        }
+    }
+}
+
+/**
  * "Pair with this computer?": what the code says (none of it checked), and the one question that
  * matters, since a link from a web page or a message opens this too: is this code on the
  * computer's screen right now? [known] is the paired computer the code is for, if any.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PairingSheet(
+private fun PairingSheet(
     confirm: PairingState.Confirm,
     known: PairedComputer?,
     onConfirm: () -> Unit,
@@ -114,7 +144,7 @@ fun PairingSheet(
 
 /** While pairing runs: it can take ten seconds or more for each address of the code. */
 @Composable
-fun PairingProgress() {
+private fun PairingProgress() {
     Column(
         modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -126,7 +156,7 @@ fun PairingProgress() {
 
 /** What went wrong, what to try, and the technical message behind "Details" for a bug report. */
 @Composable
-fun PairingErrorCard(error: PairingError, onDismiss: () -> Unit) {
+private fun PairingErrorCard(error: PairingError, onDismiss: () -> Unit) {
     var showDetails by rememberSaveable { mutableStateOf(false) }
     Card(
         modifier = Modifier.fillMaxWidth(),

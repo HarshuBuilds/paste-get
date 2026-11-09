@@ -5,6 +5,8 @@ import javax.inject.Inject
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    // @Serializable screen keys, so the back stack survives the process being stopped.
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -104,9 +106,15 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel)
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.material3)
+    // Bottom bar on phones, rail on wide screens (Apache-2.0).
+    implementation(libs.compose.material3.navigation.suite)
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.kotlinx.coroutines.android)
+    // The screens' back stack, a plain list, with predictive back (Apache-2.0).
+    implementation(libs.navigation3.runtime)
+    implementation(libs.navigation3.ui)
+    implementation(libs.kotlinx.serialization.core)
     implementation(libs.zxing.embedded)
     // Shizuku (MIT): runs ShellClipboardService as the shell user, for the automatic copy.
     implementation(libs.shizuku.api)

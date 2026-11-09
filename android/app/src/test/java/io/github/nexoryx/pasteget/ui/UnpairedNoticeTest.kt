@@ -20,10 +20,10 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 class UnpairedNoticeTest {
     private val app = RuntimeEnvironment.getApplication() as PasteGetApp
-    private val hp = HomeFixtures.hp
-    private val arch = HomeFixtures.arch
+    private val hp = AppFixtures.hp
+    private val arch = AppFixtures.arch
 
-    private fun model(computers: FakeComputers) = HomeViewModel(app, computers, Dispatchers.Unconfined)
+    private fun model(computers: FakeComputers) = AppViewModel(app, computers, Dispatchers.Unconfined)
 
     @Test
     fun theNoticeIsShownOnceThenCleared() {
