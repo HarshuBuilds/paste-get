@@ -166,11 +166,19 @@ class AppViewModel(
         }
     }
 
-    /** First run only: a phone paired before the guide existed never sees it. */
+    /**
+     * First run only: a phone paired before the guide existed never sees it. Once shown, it
+     * comes back until finished or skipped, also when the user paired, then closed the app.
+     */
     private fun decideOnboarding(computers: List<PairedComputer>) {
         val done = Preferences.onboardingDone(app)
-        if (!done && computers.isNotEmpty()) Preferences.setOnboardingDone(app)
-        onboarding = !done && computers.isEmpty()
+        val show = !done && (Preferences.onboardingStarted(app) || computers.isEmpty())
+        if (show) {
+            Preferences.setOnboardingStarted(app)
+        } else if (!done) {
+            Preferences.setOnboardingDone(app)
+        }
+        onboarding = show
     }
 
     /** The guide was finished or skipped: the tabs, from now on. */

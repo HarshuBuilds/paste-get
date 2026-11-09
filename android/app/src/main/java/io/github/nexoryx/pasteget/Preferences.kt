@@ -17,6 +17,7 @@ object Preferences {
     private const val AUTOSTART_TICKED = "autostart_ticked"
     private const val BATTERY_SAVER_TICKED = "battery_saver_ticked"
     private const val ONBOARDING_DONE = "onboarding_done"
+    private const val ONBOARDING_STARTED = "onboarding_started"
 
     /** Off until the user turns it on and grants photo access. */
     fun sendScreenshots(context: Context): Boolean =
@@ -82,6 +83,14 @@ object Preferences {
 
     fun setOnboardingDone(context: Context) {
         context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit { putBoolean(ONBOARDING_DONE, true) }
+    }
+
+    /** The first-run guide showed: it comes back until finished or skipped, paired or not. */
+    fun onboardingStarted(context: Context): Boolean =
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).getBoolean(ONBOARDING_STARTED, false)
+
+    fun setOnboardingStarted(context: Context) {
+        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit { putBoolean(ONBOARDING_STARTED, true) }
     }
 
     /** The user said they set Xiaomi's own battery saver to No restrictions, which no API reads. */

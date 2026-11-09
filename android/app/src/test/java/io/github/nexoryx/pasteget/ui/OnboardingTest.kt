@@ -79,6 +79,20 @@ class OnboardingTest {
     }
 
     @Test
+    fun closingTheAppAfterPairingDoesntEndItEither() {
+        val fake = FakeComputers()
+        AppViewModel(app, fake, Dispatchers.Unconfined).also { it.refresh() }
+
+        // Paired on the guide's page, then swiped away from recent apps: a new start.
+        fake.computers = listOf(AppFixtures.hp)
+        val again = AppViewModel(app, fake, Dispatchers.Unconfined).also { it.refresh() }
+        assertEquals(true, again.onboarding)
+
+        again.finishOnboarding()
+        assertEquals(false, AppViewModel(app, fake, Dispatchers.Unconfined).also { it.refresh() }.onboarding)
+    }
+
+    @Test
     fun itGoesPageByPageAndTurnsOnWhatWasChosen() {
         val copies = mutableListOf<Boolean>()
         var finished = 0
