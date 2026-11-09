@@ -3,8 +3,9 @@
 //! The local clipboard: a [`ClipboardBackend`] owned by a dedicated thread that polls for changes
 //! and applies clips received from peers.
 //!
-//! Change detection is polling for now. Windows has a cheap sequence number to skip unchanged
-//! polls; native change events for Wayland, X11 and macOS are on the roadmap.
+//! Each poll first asks the backend whether anything may have changed, which is cheap: Windows
+//! has a sequence number, Wayland compositors with data-control send change events
+//! ([`events`]). Elsewhere (X11, GNOME, macOS) every poll reads the clipboard.
 
 use std::borrow::Cow;
 use std::fmt;
@@ -23,6 +24,15 @@ use image::{
 };
 use pasteget_core::clip::mime;
 use tokio::sync::mpsc as async_mpsc;
+
+#[cfg(any(
+    test,
+    all(
+        unix,
+        not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+    )
+))]
+mod events;
 
 /// Widest or tallest image accepted from a peer, in pixels.
 pub const MAX_IMAGE_DIMENSION: u32 = 16_384;
@@ -182,6 +192,12 @@ pub struct SystemClipboard {
     inner: arboard::Clipboard,
     #[cfg(windows)]
     last_sequence: u32,
+    /// Wayland change events, when the compositor has them.
+    #[cfg(all(
+        unix,
+        not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+    ))]
+    events: Option<events::ChangeEvents>,
 }
 
 impl SystemClipboard {
@@ -190,7 +206,44 @@ impl SystemClipboard {
             inner: arboard::Clipboard::new().context("could not open the clipboard")?,
             #[cfg(windows)]
             last_sequence: 0,
+            #[cfg(all(
+                unix,
+                not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+            ))]
+            events: wayland_change_events(),
         })
+    }
+}
+
+/// Starts watching Wayland's clipboard change events. `None` on X11, or when the compositor
+/// lacks the data-control protocols (GNOME): every poll then reads the clipboard.
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+))]
+fn wayland_change_events() -> Option<events::ChangeEvents> {
+    use wl_clipboard_rs::{paste::Seat, watch};
+
+    // The same test as arboard's: without it, arboard uses X11.
+    std::env::var_os("WAYLAND_DISPLAY")?;
+    let started = events::ChangeEvents::start(|| {
+        let mut watcher = watch::Watcher::new(watch::ClipboardType::Regular, Seat::Unspecified)
+            .context("could not watch the Wayland clipboard")?;
+        let cancel = watcher.cancel_handle();
+        // Only the fact that something changed: the clipboard thread reads the content.
+        let next_change: events::NextChange = Box::new(move || Ok(watcher.next_event()?.is_some()));
+        let stop: events::Stop = Box::new(move || cancel.cancel());
+        Ok((next_change, stop))
+    });
+    match started {
+        Ok(events) => {
+            tracing::info!("watching Wayland clipboard change events");
+            Some(events)
+        }
+        Err(e) => {
+            tracing::info!(error = %format!("{e:#}"), "no Wayland clipboard change events: checking the clipboard at every poll");
+            None
+        }
     }
 }
 
@@ -242,6 +295,16 @@ impl ClipboardBackend for SystemClipboard {
         let changed = sequence != self.last_sequence;
         self.last_sequence = sequence;
         changed
+    }
+
+    #[cfg(all(
+        unix,
+        not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))
+    ))]
+    fn may_have_changed(&mut self) -> bool {
+        self.events
+            .as_ref()
+            .is_none_or(events::ChangeEvents::take_change)
     }
 }
 
@@ -575,6 +638,50 @@ mod tests {
         assert!(next_change(&mut changes).await.is_none());
 
         clipboard.set(Raw::Text("new".into()));
+        let change = next_change(&mut changes).await.unwrap();
+        assert_eq!(change.data, b"new");
+    }
+
+    /// A clipboard that says when it may have changed, as change events do.
+    struct Evented {
+        clipboard: MemoryClipboard,
+        changed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl ClipboardBackend for Evented {
+        fn read(&mut self) -> Result<Option<Raw>> {
+            self.clipboard.read()
+        }
+
+        fn write(&mut self, raw: &Raw, sensitive: bool) -> Result<()> {
+            self.clipboard.write(raw, sensitive)
+        }
+
+        fn may_have_changed(&mut self) -> bool {
+            self.changed
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[tokio::test]
+    async fn polls_only_read_after_a_change_event() {
+        let clipboard = MemoryClipboard::default();
+        let changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let backend = Evented {
+            clipboard: clipboard.clone(),
+            changed: Arc::clone(&changed),
+        };
+        let (tx, mut changes) = async_mpsc::channel(8);
+        let _watcher = ClipboardWatcher::spawn(backend, POLL, tx).unwrap();
+        assert!(next_change(&mut changes).await.is_none());
+
+        clipboard.set(Raw::Text("new".into()));
+        assert!(
+            next_change(&mut changes).await.is_none(),
+            "read without an event"
+        );
+
+        changed.store(true, std::sync::atomic::Ordering::SeqCst);
         let change = next_change(&mut changes).await.unwrap();
         assert_eq!(change.data, b"new");
     }

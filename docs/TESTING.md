@@ -66,6 +66,10 @@ pasteget --profile phone daemon --memory-clipboard --port 47291
 
 Windows asks whether to allow `pasteget.exe` on the network: allow **private networks**.
 
+On KDE Plasma and Hyprland, terminal 1 logs `watching Wayland clipboard change events` when it
+starts. Without that line it reads the clipboard at every poll: normal on X11, and on GNOME,
+which logs `no Wayland clipboard change events` with the reason.
+
 ```sh
 # Terminal 3: pair them
 pasteget pair
@@ -485,8 +489,10 @@ never wait: a code would be stale by then.
 - Only text copied on the phone is sent automatically, not images or files: share those.
 - Mode B takes focus for a moment on each copy, which may close the keyboard. On Android 13+, it
   needs paste-get opened once (and log access allowed) after each restart of the phone.
-- Changes on the PC are detected by polling every 0.5 s. On Linux this re-reads images while one sits on
-  the clipboard (row 6 measures the cost). Native change events are planned.
+- Changes on the PC are detected by polling every 0.5 s, so a copy can take that long to leave.
+  Each poll is cheap on Windows (a sequence number) and on KDE Plasma and Hyprland (Wayland change
+  events): the clipboard is only read after a change. On X11 and GNOME every poll reads it, images
+  included (row 6 measures the cost).
 - IPv4 only.
 - The identity key is a file readable only by your user, not yet in the OS keystore.
 - The tray's *Recent* list is in memory only, holds the last 10 clips, and forgets them when the
